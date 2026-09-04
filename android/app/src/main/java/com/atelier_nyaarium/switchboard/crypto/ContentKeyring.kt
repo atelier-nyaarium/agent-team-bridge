@@ -89,11 +89,16 @@ class ContentKeyring(private val recipientBoxPrivB64: String = "", private val s
 
 	fun epochs(): List<Int> = keys.keys.sorted()
 
-	fun wrapAllFor(recipientBoxPub: String, senderSignPub: String, senderSignPriv: String): List<KeyEnvelope> =
+	fun wrapAllFor(
+		recipientBoxPub: String,
+		senderSignPub: String,
+		senderSignPriv: String,
+		maxEpochs: Int? = null,
+	): List<KeyEnvelope> =
 		check(load !is ContentKeysLoad.Corrupt) { "content key slot is corrupt" }.let {
-		keys.keys.sorted().map { epoch ->
-			Crypto.wrapContentKey(keys.getValue(epoch), epoch, recipientBoxPub, senderSignPub, senderSignPriv)
-		}
+			keys.keys.sorted().takeLast(maxEpochs ?: Int.MAX_VALUE).map { epoch ->
+				Crypto.wrapContentKey(keys.getValue(epoch), epoch, recipientBoxPub, senderSignPub, senderSignPriv)
+			}
 		}
 
 	fun wrapFor(epochs: List<Int>, recipientBoxPub: String, senderSignPub: String, senderSignPriv: String): List<KeyEnvelope> =

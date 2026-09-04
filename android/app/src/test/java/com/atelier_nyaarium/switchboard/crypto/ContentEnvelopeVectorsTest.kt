@@ -195,6 +195,20 @@ class ContentEnvelopeVectorsTest {
 	}
 
 	@Test
+	fun keyEnvelopePlaintextPreimageMatchesNode() {
+		val value = vectors()["keyEnvelopePreimage"]!!.jsonObject
+		assertEquals(
+			value["plaintextB64"]!!.jsonPrimitive.content,
+			Base64.getEncoder().encodeToString(
+				Crypto.keyEnvelopePreimage(
+					value["epoch"]!!.jsonPrimitive.int,
+					bytes(value["keyB64"]!!.jsonPrimitive.content),
+				),
+			),
+		)
+	}
+
+	@Test
 	fun keyEnvelopeUnwrapsAndAadKindBindsCiphertext() {
 		val root = vectors()
 		val value = root["keyEnvelope"]!!.jsonObject

@@ -208,5 +208,10 @@
 			}
 		}
 	},
+	"keyEnvelopePreimage": {
+		"epoch": 7,
+		"keyB64": "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA=",
+		"plaintextB64": "S0VZRU5WRUxPUEVfVjEKNwoBAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4fIA=="
+	},
 	"refusedCiphertext": "7u4O0CvYuabbbynnIRqYpYZbyg9cOS0qMQ01HWl37a5159U "
 }

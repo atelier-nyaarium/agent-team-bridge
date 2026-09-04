@@ -12,6 +12,7 @@ import {
 	contentAad,
 	deriveContentKey,
 	inboxBodyAadKind,
+	keyEnvelopePreimage,
 	openContent,
 	opPayloadAadKind,
 	opResultAadKind,
@@ -69,6 +70,7 @@ type Fixture = {
 		envelope: Parameters<typeof unwrapContentKey>[0];
 		relabeledEpoch: Parameters<typeof unwrapContentKey>[0];
 	};
+	keyEnvelopePreimage: { epoch: number; keyB64: string; plaintextB64: string };
 	refusedNonces: string[];
 	refusedCiphertext: string;
 	acceptedCiphertextB64: string;
@@ -79,6 +81,12 @@ const fixture = JSON.parse(
 ) as Fixture;
 
 describe("content envelope", () => {
+	it("matches the KEYENVELOPE plaintext preimage vector", () => {
+		const vector = fixture.keyEnvelopePreimage;
+		expect(keyEnvelopePreimage(vector.epoch, Buffer.from(vector.keyB64, "base64")).toString("base64")).toBe(
+			vector.plaintextB64,
+		);
+	});
 	it("pins every named AAD kind vector", () => {
 		const actual = {
 			boardTitleAad: boardTextAadKind(fixture.boardTitleAad.kind, fixture.boardTitleAad.entryId),

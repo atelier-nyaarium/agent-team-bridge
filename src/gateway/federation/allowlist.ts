@@ -22,6 +22,7 @@ import { renameFileSync, writeFileAtomic } from "../../shared/atomic-write.js";
 const AllowlistFileSchema = z.object({
 	// The Domain root: the owner key everything verifies under. Null until enrolled.
 	ownerSignPub: z.string().nullable(),
+	domainId: z.string().min(1).max(64).optional(),
 	admissions: z.array(SignedAdmissionSchema),
 	revocations: z.array(SignedRevocationSchema),
 });
@@ -86,6 +87,10 @@ export class Allowlist {
 		return this.state.ownerSignPub;
 	}
 
+	get domainId(): string | null {
+		return this.state.domainId ?? null;
+	}
+
 	/** The current owner-rooted snapshot, or null before rooting. Mirrors the Router's
 	 * canonical keyring (the Console syncs it through its route Gateway's poll reply). */
 	getSnapshot(): DomainSnapshot | null {
@@ -113,6 +118,11 @@ export class Allowlist {
 			throw new Error("allowlist already rooted at a different owner key");
 		}
 		this.state.ownerSignPub = ownerSignPubB64;
+		this.persist();
+	}
+
+	setDomainId(domainId: string): void {
+		this.state.domainId = domainId;
 		this.persist();
 	}
 

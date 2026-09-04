@@ -145,7 +145,15 @@ export async function startGateway(): Promise<void> {
 	let cachedIdentity: Identity | null = null;
 	const identity = () => (cachedIdentity ??= loadOrCreateIdentity(federationDir));
 	const contentKeyStore = new ContentKeyStore(federationDir, () => identity().box.priv);
-	let localDomainId = resolveLocalDomainId(federationDir);
+	// The allowlist record carries the Domain id; the legacy domain-id file and the env are fallbacks.
+	const allowlistDomainId = (): string | null => {
+		try {
+			return new Allowlist(federationDir).domainId;
+		} catch {
+			return null;
+		}
+	};
+	let localDomainId = resolveLocalDomainId(federationDir, allowlistDomainId());
 	console.log(`[gateway] Domain id: ${localDomainId ?? "(none - not yet enrolled)"}`);
 
 	let boot: BootState = { phase: "standalone" };
@@ -859,10 +867,18 @@ export async function startGateway(): Promise<void> {
 			enrollTlsServer = null;
 			if (enrollTimer) clearTimeout(enrollTimer);
 			const installedTransport = loadRouterTransport(federationDir);
-			const installedDomainId = resolveLocalDomainId(federationDir);
+			const installedDomainId = resolveLocalDomainId(federationDir, allowlistDomainId());
 			if (installedTransport && installedDomainId) {
 				try {
-					enterFederationActive(installedTransport, installedDomainId);
+					const oldestDeliveredEpoch = Math.min(
+						...(bundle.contentKeys ?? []).map((envelope) => envelope.epoch),
+					);
+					const missingBootstrapEpochs = Number.isFinite(oldestDeliveredEpoch)
+						? Array.from({ length: oldestDeliveredEpoch - 1 }, (_, index) => index + 1).filter(
+								(epoch) => contentKeyStore.keyFor(epoch) === null,
+							)
+						: [];
+					enterFederationActive(installedTransport, installedDomainId, missingBootstrapEpochs);
 					console.log(
 						`[enroll] installed credentials for Gateway "${localGatewayId}"; connecting to the Router.`,
 					);
@@ -1253,7 +1269,7 @@ export async function startGateway(): Promise<void> {
 		shareSweepTimer.unref?.();
 	}
 
-	function enterFederationActive(transport: RouterTransport, domainId: string): void {
+	function enterFederationActive(transport: RouterTransport, domainId: string, bootstrapEpochs: number[] = []): void {
 		if (boot.phase === "federationActive") return;
 		localDomainId = domainId;
 		const federation = buildFederationSlice(transport, domainId);
@@ -1261,6 +1277,7 @@ export async function startGateway(): Promise<void> {
 		routes = buildRoutes();
 		federation.handlers = buildRouterHandlers(federation);
 		startShareSweep(federation);
+		for (const epoch of bootstrapEpochs) keyRequester?.request(epoch);
 	}
 	if (bootDecision === "activate" && routerTransport && localDomainId) {
 		enterFederationActive(routerTransport, localDomainId);

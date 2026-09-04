@@ -17,7 +17,7 @@ import { ALLOWLIST_FILE, Allowlist, AllowlistCorruptError } from "./allowlist.js
 import { CONTENT_KEYS_FILE, ContentKeyStore } from "./contentKeyStore.js";
 
 const STAGING_DIR = "staging";
-const ARTIFACTS = [ALLOWLIST_FILE, "domain-id", CONTENT_KEYS_FILE, "transport.json"] as const;
+const ARTIFACTS = [ALLOWLIST_FILE, CONTENT_KEYS_FILE, "transport.json"] as const;
 
 ////////////////////////////////
 //  Functions & Helpers
@@ -84,15 +84,11 @@ export function stageBootstrap(
 		}
 		Allowlist.writeFile(path.join(stagingDir, ALLOWLIST_FILE), {
 			ownerSignPub: bundle.domain.ownerSignPub,
+			domainId: bundle.domainId ?? liveAllowlist.domainId ?? undefined,
 			admissions,
 			revocations,
 		});
 		writeFileAtomic(path.join(stagingDir, "transport.json"), JSON.stringify(bundle.transport), {
-			mode: 0o600,
-			fsyncFile: true,
-			fsyncDirectory: true,
-		});
-		writeFileAtomic(path.join(stagingDir, "domain-id"), bundle.domainId ?? "", {
 			mode: 0o600,
 			fsyncFile: true,
 			fsyncDirectory: true,

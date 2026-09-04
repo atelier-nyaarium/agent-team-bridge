@@ -82,7 +82,16 @@ internal class GatewayEnrollment(private val repo: ChatRepository) {
 		)
 		val frame = repo.federation.sealBundle(nonce, transport, signed, scanned.boxPub, prov.pendingTenant?.domainId)
 		val frameJson = wireJson.encodeToString(GatewayBootstrapFrame.serializer(), frame)
-		deliver(scanned.gatewayId, frameJson, scanned.lanHost, scanned.lanPort, scanned.certFp)
+		val pasteFrame = repo.federation.sealBundle(
+			nonce,
+			transport,
+			signed,
+			scanned.boxPub,
+			prov.pendingTenant?.domainId,
+			maxContentEpochs = 3,
+		)
+		val pasteFrameJson = wireJson.encodeToString(GatewayBootstrapFrame.serializer(), pasteFrame)
+		return@withContext deliver(scanned.gatewayId, frameJson, pasteFrameJson, scanned.lanHost, scanned.lanPort, scanned.certFp)
 	}
 
 	/** Re-deliver a bundle whose first attempt never landed, without a re-scan. The saved bundle is
@@ -91,7 +100,7 @@ internal class GatewayEnrollment(private val repo: ChatRepository) {
 	suspend fun resumeEnroll(gatewayId: String): EnrollDelivery = withContext(Dispatchers.IO) {
 		val p = pendingEnrolls()[gatewayId]
 			?: return@withContext EnrollDelivery(true, "Nothing left to finish for this Gateway.", null)
-		deliver(p.gatewayId, p.bundle, p.lanHost, p.lanPort, p.certFp)
+		return@withContext deliver(p.gatewayId, p.bundle, p.bundle, p.lanHost, p.lanPort, p.certFp)
 	}
 
 	/** Gateways admitted whose bundle was never confirmed delivered, keyed by gateway id. */
@@ -118,6 +127,7 @@ internal class GatewayEnrollment(private val repo: ChatRepository) {
 	private fun deliver(
 		gatewayId: String,
 		frameJson: String,
+		pasteFrameJson: String,
 		lanHost: String?,
 		lanPort: Int?,
 		certFp: String?,
@@ -125,9 +135,12 @@ internal class GatewayEnrollment(private val repo: ChatRepository) {
 		// A non-LAN address is dropped here rather than dialled: isPrivateLanHost is what stops a
 		// tampered QR redirecting the bundle off the local network, so it gates the RECORD too.
 		val usable = lanHost != null && lanPort != null && certFp != null && isPrivateLanHost(lanHost)
+		// The record keeps the bounded frame: a resume may end up pasted, and the Gateway requests the
+		// epochs a bounded bundle leaves out.
+		val fallback = pasteFrameJson
 		val pending = PendingEnroll(
 			gatewayId = gatewayId,
-			bundle = frameJson,
+			bundle = fallback,
 			lanHost = if (usable) lanHost else null,
 			lanPort = if (usable) lanPort else null,
 			certFp = if (usable) certFp else null,
@@ -135,7 +148,7 @@ internal class GatewayEnrollment(private val repo: ChatRepository) {
 		)
 		notePending(pending)
 		if (!usable) {
-			return EnrollDelivery(true, "Added. Copy the bundle to the Gateway's enrollment prompt.", frameJson)
+			return EnrollDelivery(true, "Added. Copy the bundle to the Gateway's enrollment prompt.", fallback)
 		}
 		val target = "$lanHost:$lanPort"
 		return when (val r = postBundle(lanHost, lanPort, certFp, frameJson)) {
@@ -157,13 +170,13 @@ internal class GatewayEnrollment(private val repo: ChatRepository) {
 					"The Gateway rejected the bundle (HTTP ${r.code}). Paste it into the Gateway's terminal instead."
 				}
 				notePending(pending.copy(lastError = msg))
-				EnrollDelivery(true, msg, if (stale) null else frameJson)
+				EnrollDelivery(true, msg, if (stale) null else fallback)
 			}
 			is BundlePost.Unreachable -> {
 				DebugLog.log("Enroll", "LAN delivery unreachable $target cause=${r.cause}")
 				val msg = "Couldn't reach the Gateway over the LAN. Paste the bundle into its terminal instead."
 				notePending(pending.copy(lastError = msg))
-				EnrollDelivery(true, msg, frameJson)
+				EnrollDelivery(true, msg, fallback)
 			}
 		}
 	}

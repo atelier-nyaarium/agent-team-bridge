@@ -102,29 +102,29 @@ function enrollLive(
 }
 
 function liveBytes(dir: string): Buffer[] {
-	return ["federation-allowlist.json", "transport.json", "domain-id", "content-keys.json"].map((file) =>
+	return ["federation-allowlist.json", "transport.json", "content-keys.json"].map((file) =>
 		fs.readFileSync(path.join(dir, file)),
 	);
 }
 
 describe("staged bootstrap install", () => {
 	it("rolls back a marker with a missing artifact", () => {
-		for (const artifact of ["federation-allowlist.json", "transport.json", "domain-id", "content-keys.json"]) {
+		for (const artifact of ["federation-allowlist.json", "transport.json", "content-keys.json"]) {
 			const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bootstrap-stage-"));
 			const staging = path.join(dir, "staging");
 			fs.mkdirSync(staging);
-			for (const present of ["federation-allowlist.json", "transport.json", "domain-id", "content-keys.json"])
+			for (const present of ["federation-allowlist.json", "transport.json", "content-keys.json"])
 				if (present !== artifact) fs.writeFileSync(path.join(staging, present), "partial");
 			fs.writeFileSync(path.join(staging, "INSTALLED"), "");
 			recoverStaging(dir);
-			for (const present of ["federation-allowlist.json", "transport.json", "domain-id", "content-keys.json"])
+			for (const present of ["federation-allowlist.json", "transport.json", "content-keys.json"])
 				expect(fs.existsSync(path.join(dir, present))).toBe(false);
 			expect(fs.existsSync(staging)).toBe(false);
 		}
 	});
 
 	it("rolls back marker-less interruptions after any artifact", () => {
-		const artifacts = ["federation-allowlist.json", "domain-id", "content-keys.json", "transport.json"];
+		const artifacts = ["federation-allowlist.json", "content-keys.json", "transport.json"];
 		for (let count = 0; count <= artifacts.length; count++) {
 			const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bootstrap-stage-"));
 			const staging = path.join(dir, "staging");
@@ -142,7 +142,7 @@ describe("staged bootstrap install", () => {
 		stageBootstrap(dir, initial.bundle, initial.gateway, new ContentKeyStore(dir, initial.gateway.box.priv));
 		expect(fs.existsSync(path.join(dir, "staging", "INSTALLED"))).toBe(true);
 		recoverStaging(dir);
-		for (const artifact of ["federation-allowlist.json", "transport.json", "domain-id", "content-keys.json"])
+		for (const artifact of ["federation-allowlist.json", "transport.json", "content-keys.json"])
 			expect(fs.existsSync(path.join(dir, artifact))).toBe(true);
 		recoverStaging(dir);
 		activateStaged(dir);
@@ -235,13 +235,13 @@ describe("staged bootstrap install", () => {
 
 		expect(new Allowlist(dir).ownerSignPub).toBe(owner.sign.pub);
 		expect(JSON.parse(fs.readFileSync(path.join(dir, "transport.json"), "utf8"))).toEqual(base.transport);
-		expect(fs.readFileSync(path.join(dir, "domain-id"), "utf8")).toBe("domain");
+		expect(new Allowlist(dir).domainId).toBe("domain");
 		store.reload();
 		expect(store.epochs()).toEqual([1]);
 	});
 
 	it("resumes activation after each copied artifact", () => {
-		const artifacts = ["federation-allowlist.json", "domain-id", "content-keys.json", "transport.json"];
+		const artifacts = ["federation-allowlist.json", "content-keys.json", "transport.json"];
 		for (let count = 1; count <= artifacts.length; count++) {
 			const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bootstrap-stage-"));
 			const { bundle: base, owner, gateway } = bundle();
@@ -509,7 +509,7 @@ describe("staged bootstrap install", () => {
 			new ContentKeyStore(foreignDir, foreign.gateway.box.priv),
 		);
 		fs.mkdirSync(path.join(dir, "staging"));
-		for (const artifact of ["federation-allowlist.json", "domain-id", "content-keys.json", "transport.json"])
+		for (const artifact of ["federation-allowlist.json", "content-keys.json", "transport.json"])
 			fs.copyFileSync(path.join(foreignDir, "staging", artifact), path.join(dir, "staging", artifact));
 		fs.writeFileSync(path.join(dir, "staging", "INSTALLED"), "");
 		recoverStaging(dir);

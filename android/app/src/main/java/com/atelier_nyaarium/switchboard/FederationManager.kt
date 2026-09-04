@@ -263,6 +263,7 @@ class FederationManager(private val store: AppStateStore) {
 		admission: SignedAdmission,
 		recipientBoxPub: String,
 		domainId: String?,
+		maxContentEpochs: Int? = null,
 	): GatewayBootstrapFrame {
 		val console = consoleIdentity()
 		val keyring = keyring()
@@ -282,7 +283,12 @@ class FederationManager(private val store: AppStateStore) {
 				displayName = ring.displayName,
 			),
 			domainId = domainId,
-			contentKeys = ContentKeyring(store = store).wrapAllFor(recipientBoxPub, console.sign.pub, console.sign.priv),
+			contentKeys = ContentKeyring(store = store).wrapAllFor(
+				recipientBoxPub,
+				console.sign.pub,
+				console.sign.priv,
+				maxContentEpochs,
+			),
 		)
 		val plain = json.encodeToString(GatewayBootstrapBundle.serializer(), bundle).toByteArray(Charsets.UTF_8)
 		val sealed = Crypto.seal(plain, recipientBoxPub, console.sign.priv)

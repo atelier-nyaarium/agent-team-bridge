@@ -36,7 +36,6 @@ describe("shared preimage tags", () => {
 			ADMISSION_V1: "Admission vectors predate the shared corpus",
 			DEVICE_JOIN_V1: "Device join vectors predate the shared corpus",
 			INBOXROW_V1: "Inbox rows have no cross-runtime corpus",
-			KEYENVELOPE_V1: "No vectors file under tests/fixtures carries it",
 			REGISTER_V1: "Gateway registration is gateway-only",
 			REVOCATION_V1: "Revocation vectors predate the shared corpus",
 		};

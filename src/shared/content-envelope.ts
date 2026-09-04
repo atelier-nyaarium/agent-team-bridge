@@ -140,14 +140,21 @@ export function wrapContentKey(
 ): KeyEnvelope {
 	if (key.length !== 32) throw new Error("content key must be 32 bytes");
 	assertContentEpoch(epoch);
-	const body = Buffer.concat([Buffer.from(`KEYENVELOPE_V1\n${epoch}\n`, "utf8"), key]);
+	const body = keyEnvelopePreimage(epoch, key);
 	return { epoch, signerSignPub: senderSignPubB64, sealed: seal(body, recipientBoxPubB64, senderSignPrivB64) };
+}
+
+export function keyEnvelopePreimage(epoch: number, key: Buffer): Buffer {
+	assertContentEpoch(epoch);
+	if (key.length !== 32) throw new Error("content key must be 32 bytes");
+	return Buffer.concat([Buffer.from(`KEYENVELOPE_V1\n${epoch}\n`, "utf8"), key]);
 }
 
 export function unwrapContentKey(env: KeyEnvelope, recipientBoxPrivB64: string): { epoch: number; key: Buffer } {
 	assertContentEpoch(env.epoch);
 	const body = unseal(env.sealed, recipientBoxPrivB64, env.signerSignPub);
-	const prefix = Buffer.from(`KEYENVELOPE_V1\n${env.epoch}\n`, "utf8");
+	const preimage = keyEnvelopePreimage(env.epoch, Buffer.alloc(32));
+	const prefix = preimage.subarray(0, preimage.length - 32);
 	if (!body.subarray(0, prefix.length).equals(prefix)) throw new Error("key envelope prefix is invalid");
 	const key = body.subarray(prefix.length);
 	if (key.length !== 32) throw new Error("content key must be 32 bytes");

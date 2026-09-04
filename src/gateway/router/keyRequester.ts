@@ -4,6 +4,7 @@ import type { KeyReceipt, KeyRequest } from "../../shared/schemasContentKey.js";
 
 const RETRY_MS = 10 * 60 * 1000;
 const LIFETIME_MS = 24 * 60 * 60 * 1000;
+const MAX_EPOCHS_PER_REQUEST = 64;
 
 export interface KeyRequesterDeps {
 	domainId: string;
@@ -66,13 +67,14 @@ export function createKeyRequester(deps: KeyRequesterDeps) {
 				}
 			}
 		}
-		if (epochs.length > 0) {
+		for (let offset = 0; offset < epochs.length; offset += MAX_EPOCHS_PER_REQUEST) {
+			const batch = epochs.slice(offset, offset + MAX_EPOCHS_PER_REQUEST);
 			const request: KeyRequest = signKeyRequest(
 				{
 					v: 1,
 					domainId: deps.domainId,
 					requesterSignPub: deps.gatewaySignPub,
-					epochs,
+					epochs: batch,
 					at,
 					nonce: randomBytes(18).toString("base64"),
 					signature: "",
@@ -81,9 +83,9 @@ export function createKeyRequester(deps: KeyRequesterDeps) {
 			);
 			try {
 				await deps.send("key_request", { request });
-				console.log(`[key-requester] requested epochs ${epochs.join(",")}`);
+				console.log(`[key-requester] requested epochs ${batch.join(",")}`);
 			} catch {
-				console.warn(`[key-requester] request send failed for epochs ${epochs.join(",")}`);
+				console.warn(`[key-requester] request send failed for epochs ${batch.join(",")}`);
 			}
 		}
 		sending = false;

@@ -197,13 +197,19 @@ object Crypto {
 	): KeyEnvelope {
 		require(key.size == 32) { "content key must be 32 bytes" }
 		require(epoch >= 1) { "content epoch must be an integer from 1" }
-		val body = "KEYENVELOPE_V1\n$epoch\n".toByteArray(Charsets.UTF_8) + key
+		val body = keyEnvelopePreimage(epoch, key)
 		val sealed = seal(body, recipientBoxPubB64, senderSignPrivB64)
 		return KeyEnvelope(
 			epoch.toLong(),
 			senderSignPubB64,
 			ProtoSealedEnvelope(sealed.ephemeralPub, sealed.nonce, sealed.ciphertext, sealed.signature),
 		)
+	}
+
+	fun keyEnvelopePreimage(epoch: Int, key: ByteArray): ByteArray {
+		require(epoch >= 1) { "content epoch must be an integer from 1" }
+		require(key.size == 32) { "content key must be 32 bytes" }
+		return "KEYENVELOPE_V1\n$epoch\n".toByteArray(Charsets.UTF_8) + key
 	}
 
 	fun unwrapContentKey(env: KeyEnvelope, recipientBoxPrivB64: String): Pair<Int, ByteArray> {
@@ -214,7 +220,8 @@ object Crypto {
 			recipientBoxPrivB64,
 			env.signerSignPub,
 		)
-		val bodyPrefix = "KEYENVELOPE_V1\n${env.epoch}\n".toByteArray(Charsets.UTF_8)
+		val preimage = keyEnvelopePreimage(env.epoch.toInt(), ByteArray(32))
+		val bodyPrefix = preimage.copyOfRange(0, preimage.size - 32)
 		if (key.size != bodyPrefix.size + 32 || !key.copyOfRange(0, bodyPrefix.size).contentEquals(bodyPrefix)) {
 			throw IllegalArgumentException("content key envelope body is invalid")
 		}
