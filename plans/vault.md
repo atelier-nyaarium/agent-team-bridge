@@ -267,8 +267,121 @@ device revocation with it. Which vault actions prompt?
 - B) Every approval prompts.
 - C) Nothing beyond the app's existing lock.
 
-(pending)
+A: Configurable, in Security settings. Default C. Values: Off, Every approval, and a 30-minute
+unlock where one prompt covers vault prompts for 30 minutes. The setting governs approvals and
+reveal alike; a typed value never prompts.
+
+> "Configurable. Default C. Might choose every, or lock 30 min."
+
+### Assumption A7 - Vault is an app plugin on the phone
+
+Registered under `plugins/vault/` like Designer: claims the `vault:request` plugin action, an
+account wipe handler, and a thread forget handler. Placement of its screen is Question 6.
+
+## Question 6 - Where does the vault live on the phone?
+
+Q: The main screen has the Sessions tab, a Backlog tab that appears when the board is enabled, and
+a Settings button. Where do entries get listed, searched, added, and edited?
+
+- A) A Vault tab beside Sessions and Backlog, present when the capability is enabled, the way
+  Backlog is. Pending requests badge the tab.
+- B) A Settings leaf screen. Out of the way; requests reach the owner through the notification
+  and the session thread only.
+- C) No list screen. Entries surface only as request cards in the session thread, managed from a
+  sheet. Notes have no home.
+
+A: A. A Vault tab, conditional on the capability like Backlog, badged by pending requests.
+
+> "tab"
+
+Recommendation reason: notes need a home, and Backlog already shows the conditional-tab pattern.
+
+## Question 7 - Which injection shapes ship first?
+
+Q: Five shapes plus the PTY supervisor were listed. Which are in the first release?
+
+- A) env, stdin, file, and the askpass helper. No argv template, no PTY supervisor.
+- B) A plus the argv template, flagged weakest in the tool description.
+- C) Everything, PTY supervisor included.
+
+A: A. env, stdin, file, and the askpass helper. No argv template, no PTY supervisor.
+
+> "A"
+
+Recommendation reason: nearly every program takes a secret by env, stdin, or file. The argv
+template lands the value in `ps` and shell history; the PTY supervisor does not generalize.
 
 # Plan
 
-(written after the questionaire)
+Rough, from the questionaire. Deploy order per AGENTS.md: Router first (it answers new frames),
+then gateway, then phone, then plugin. Every wire addition optional and tolerated by both peers.
+
+## Phase 1 - Wire truth and the Router vault service
+
+- `src/shared/schemasVault.ts`: `VaultEntry` clear envelope (id, revision, tombstone, `createdBy`
+  phone or gateway), sealed field envelopes, request and answer payloads. `.meta({id})` for the
+  Kotlin codegen.
+- AAD kinds in `content-envelope.ts`: one builder per field, each binding the entry id like
+  `boardTextAadKind`. Kotlin twin in `ContentAadKinds.kt`. One vector each in the
+  `aad-kinds-residue` fixture corpus.
+- `src/federation-server/vault/`: owner-state service through `ownerServiceHooks.ts`. CAS on
+  revision. Authority on the clear envelope: a signed console OwnerOp may create, update, and
+  delete; a gateway frame may create only (Q3). Router blind to every field.
+- OwnerOps `vault_list`, `vault_put`, `vault_delete`. Gateway frames `vault_read` and
+  `vault_create`.
+- `vault_answer` and `vault_grants` and `vault_revoke` added to `VALUE_OP_KINDS`. Additive, no
+  `CONSOLE_PROTOCOL_VERSION` bump.
+- Fixtures under `tests/fixtures/protocol/` for the request row, the answer, and a bare invalid
+  row, opened by `protocol-fixtures.test.ts` and `ProtocolFixturesTest.kt`.
+
+## Phase 2 - Gateway: vault client, decisions, request road
+
+- `src/gateway/router/vaultClient.ts`: sole sealer and opener of vault fields, sole local-key
+  mapper. Opens with `ContentKeyStore`. A `vault-door-residue` test pins it as the only door.
+- `src/gateway/vault/decisions.ts`: grants under `DATA_DIR/vault-decisions.json`, named in
+  `DATA_DIR_ENTRIES`. Once is consumed on use. 30 minutes keys on program plus target, secret,
+  session. Whole session keys on secret and session, ends with the session or the settings cap.
+- `src/gateway/vault/requests.ts`: a request (id, operation text, shape, entry id or typed,
+  session, 9-minute deadline) delivered as a `plugin_action` row `vault:request` through
+  `deliverToOwner`. The `vault_answer` value op lands in `consoleHandler.ts` and resolves the
+  request. Deny and timeout answer the same refusal.
+- Loopback routes for the MCP server and the helper: search (public fields only), run-begin,
+  collect, capture, askpass. Helper token minted at install, verified per call (A6).
+- The value leaves the gateway only in a loopback answer to an approved request.
+
+## Phase 3 - Phone: Vault tab, editor, request sheet
+
+- `plugins/vault/`: `VaultPlugin.kt` claims `vault:request`, wipe, and forget (A7).
+- `VaultSealing.kt` twin of the AAD kinds. `VaultManager` holds Router-held entries through the
+  OwnerOps, sealed with `ContentKeyring`.
+- Vault tab in `MainTabsScreen.kt`, conditional on the capability like Backlog, badged by pending
+  requests. List, search, add, edit, delete, reveal. A captured entry opens editable (Q3).
+- Request sheet: the brief names the operation and the shape; buttons Once, 30 minutes, Whole
+  session (YOLO), Deny; a typed-value field with Save as entry (Q4). Notification through
+  `ServiceNotifications` with the delete intent as deny.
+- Security setting: vault biometrics Off, Every approval, 30-minute unlock (Q5).
+- Session card: YOLO badge and active grants with revoke, read through `vault_grants`.
+- Capability toggle reported through `capabilities_report`; Kotlin gate and a debug APK.
+
+## Phase 4 - Askpass helper
+
+- `src/main-vault-askpass.ts`, compiled by the build into `dist/`. Reads `/proc/<ppid>/cmdline`,
+  opens `/dev/tty` when it can, races the tty against the phone, holds only with no tty (R3, R5).
+  Prints the value to stdout and nothing else.
+- Installer script: mints the token through the gateway, writes the binary and the 0600 token
+  under the owner's home, prints the three profile exports. Documents that `force` is optional
+  and that sudo needs `-A`.
+
+## Phase 5 - MCP tools
+
+- Capability id `vault` in `GATED_CAPABILITY_IDS`; guidance in `src/shared/capabilities.ts`.
+- `src/mcp/vault/`: `vault_search`, `vault_run` with env, stdin, and file shapes, a collect call,
+  and a capture mode that creates an entry (Q3, Q7). Bounded by `AGENT_WAIT_BUDGET_MS`.
+- The MCP server spawns the child, scrubs stdout and stderr for the raw bytes, holds output for
+  collect, deletes a file shape on exit.
+
+## Phase 6 - Docs, residue, audit
+
+- `docs/vault.md`; AGENTS.md map entries; `docs/console.md` OwnerOps; `docs/environment.md`.
+- Residue tests: vault door, `DATA_DIR_ENTRIES`, AAD vectors, no tool answers a value.
+- Luna audit of each phase before its push.
