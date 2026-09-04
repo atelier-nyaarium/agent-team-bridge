@@ -1,4 +1,5 @@
-import { fenced, MIGRATING } from "./migration-fence.js";
+import { DurableOutbox } from "./durable-outbox.js";
+import { MIGRATING } from "./migration-fence.js";
 import type { ChannelFile, RidingAwareness } from "./types.js";
 
 /** Queued message with delivery state. */
@@ -36,105 +37,75 @@ export const MAX_PENDING_DELIVERIES = 2_000;
 
 export class PendingDeliveryStore {
 	// Rows remain until acknowledgement.
-	private readonly byTeam = new Map<string, PendingDelivery[]>();
-	private readonly ids = new Set<string>();
+	private readonly outbox: DurableOutbox<PendingDelivery>;
 
 	constructor(
-		private readonly durable?: DeliverySnapshotSink,
+		durable?: DeliverySnapshotSink,
 		private readonly ttlMs: number = PENDING_DELIVERY_TTL_MS,
 		private readonly maxPerTeam: number = MAX_PENDING_DELIVERIES_PER_TEAM,
-		private readonly maxTotal: number = MAX_PENDING_DELIVERIES,
+		maxTotal: number = MAX_PENDING_DELIVERIES,
 		private readonly now: () => number = Date.now,
 	) {
-		this.restore();
+		this.outbox = new DurableOutbox({
+			durable,
+			restore: (raw) => {
+				if (!raw || typeof raw !== "object") return [];
+				const rows = (raw as Snapshot).deliveries;
+				if (!Array.isArray(rows)) return [];
+				const ids = new Set<string>();
+				return rows.filter((row): row is PendingDelivery => {
+					if (!isDelivery(row) || ids.has(row.deliveryId)) return false;
+					ids.add(row.deliveryId);
+					return true;
+				});
+			},
+			serialize: (items) => ({ deliveries: [...this.groupByTeam(items)] }),
+			keyOf: (item) => item.deliveryId,
+			maxSize: maxTotal,
+		});
 	}
 
 	get size(): number {
-		return this.ids.size;
+		return this.outbox.size;
 	}
 
 	/** Refuses when full. */
 	enqueue(delivery: PendingDelivery): EnqueueOutcome {
-		if (fenced()) return MIGRATING;
-		if (this.ids.has(delivery.deliveryId)) return "duplicate";
-		const queue = this.byTeam.get(delivery.team) ?? [];
-		if (queue.length >= this.maxPerTeam) return "refused";
-		if (this.ids.size >= this.maxTotal) return "refused";
-		queue.push(delivery);
-		this.byTeam.set(delivery.team, queue);
-		this.ids.add(delivery.deliveryId);
-		this.persist();
-		return "enqueued";
+		if (this.outbox.has(delivery.deliveryId)) return "duplicate";
+		if (this.listForTeam(delivery.team).length >= this.maxPerTeam) return "refused";
+		const result = this.outbox.enqueue(delivery);
+		return result === "enqueued" ? result : result === MIGRATING ? MIGRATING : "refused";
 	}
 
 	listForTeam(team: string): readonly PendingDelivery[] {
-		return this.byTeam.get(team) ?? [];
+		return this.outbox.values().filter((delivery) => delivery.team === team);
 	}
 
 	acknowledge(deliveryId: string): boolean | typeof MIGRATING {
-		if (fenced()) return MIGRATING;
-		if (!this.ids.delete(deliveryId)) return false;
-		for (const [team, queue] of this.byTeam) {
-			const at = queue.findIndex((d) => d.deliveryId === deliveryId);
-			if (at < 0) continue;
-			queue.splice(at, 1);
-			if (queue.length === 0) this.byTeam.delete(team);
-			break;
-		}
-		this.persist();
-		return true;
+		return this.outbox.retire(deliveryId);
 	}
 
 	failTeam(team: string): PendingDelivery[] | typeof MIGRATING {
-		if (fenced()) return MIGRATING;
-		const queue = this.byTeam.get(team) ?? [];
-		if (queue.length === 0) return [];
-		this.byTeam.delete(team);
-		for (const d of queue) this.ids.delete(d.deliveryId);
-		this.persist();
-		return queue;
+		return this.outbox.retireWhere((delivery) => delivery.team === team);
 	}
 
 	sweep(): PendingDelivery[] | typeof MIGRATING {
-		if (fenced()) return MIGRATING;
 		const cutoff = this.now() - this.ttlMs;
-		const expired: PendingDelivery[] = [];
-		for (const [team, queue] of [...this.byTeam]) {
-			const kept = queue.filter((d) => {
-				if (d.enqueuedAt > cutoff) return true;
-				expired.push(d);
-				this.ids.delete(d.deliveryId);
-				return false;
-			});
-			if (kept.length === 0) this.byTeam.delete(team);
-			else this.byTeam.set(team, kept);
-		}
-		if (expired.length > 0) this.persist();
-		return expired;
+		return this.outbox.retireWhere((delivery) => delivery.enqueuedAt <= cutoff);
 	}
 
 	snapshot(): Snapshot {
-		return { deliveries: [...this.byTeam.values()].flat() };
+		return { deliveries: [...this.groupByTeam(this.outbox.values())] };
 	}
 
-	private persist(): void {
-		// Persistence failure must reach the caller.
-		this.durable?.saveChecked(this.snapshot());
-	}
-
-	private restore(): void {
-		const raw = this.durable?.load();
-		if (!raw || typeof raw !== "object") return;
-		const rows = (raw as Snapshot).deliveries;
-		if (!Array.isArray(rows)) return;
-		for (const row of rows) {
-			if (!isDelivery(row)) continue;
-			if (this.ids.has(row.deliveryId)) continue;
-			const queue = this.byTeam.get(row.team) ?? [];
-			queue.push(row);
-			this.byTeam.set(row.team, queue);
-			this.ids.add(row.deliveryId);
+	private groupByTeam(items: readonly PendingDelivery[]): PendingDelivery[] {
+		const teams = new Map<string, PendingDelivery[]>();
+		for (const delivery of items) {
+			const queue = teams.get(delivery.team) ?? [];
+			queue.push(delivery);
+			teams.set(delivery.team, queue);
 		}
+		return [...teams.values()].flat();
 	}
 }
 

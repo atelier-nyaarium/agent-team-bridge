@@ -97,6 +97,13 @@ describe("PendingDeliveryStore", () => {
 		expect(second.enqueue(delivery("d1"))).toBe("duplicate");
 	});
 
+	it("restores the pre-refactor snapshot shape", () => {
+		const legacy = { deliveries: [delivery("legacy")] };
+		const d = fakeDurable(legacy);
+		const restored = new PendingDeliveryStore(d.store);
+		expect(restored.snapshot()).toEqual(legacy);
+	});
+
 	it("persists on acknowledgement, so a restart cannot resurrect a delivered message", () => {
 		const d = fakeDurable();
 		const first = new PendingDeliveryStore(d.store);

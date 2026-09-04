@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { z } from "zod";
 import { canonicalJson, sha256Hex } from "../shared/canonical-json.js";
 import { inboxBodyAadKind } from "../shared/content-envelope.js";
+import { DurableOutbox } from "../shared/durable-outbox.js";
 import { DurableStore } from "../shared/durable-store.js";
 import { type ConsolePushEntry, ConsolePushEntrySchema } from "../shared/federation-protocol.js";
 import { fenced, MIGRATING } from "../shared/migration-fence.js";
@@ -63,38 +64,31 @@ export function createConsolePushOps({
 	refuseImpersonation,
 }: ConsolePushOpsDeps) {
 	const outboxStore = new DurableStore(process.env.DATA_DIR || "/app/data", "owner-row-outbox");
-	const restored = outboxStore.load();
-	const restoredOutbox = z
-		.array(
-			z.object({
-				entry: ConsolePushEntrySchema,
-				opId: z.string().min(1),
-				label: z.string().min(1),
-			}),
-		)
-		.safeParse(restored);
-	const outbox: OwnerRowOutboxItem[] = restored === null ? [] : restoredOutbox.success ? restoredOutbox.data : [];
-	if (restored !== null && !restoredOutbox.success) {
-		console.warn("[owner-row-outbox] invalid stored value, starting empty");
-	}
-	let draining = false;
-
-	const opKeyFor = (entry: ConsolePushEntry, opId: string) => ({
-		conversationId: sha256Hex(entry.session_id ?? ""),
-		opId,
+	const opKeyOf = (item: OwnerRowOutboxItem) => JSON.stringify([sha256Hex(item.entry.session_id ?? ""), item.opId]);
+	const OutboxItemsSchema = z.array(
+		z.object({
+			entry: ConsolePushEntrySchema,
+			opId: z.string().min(1),
+			label: z.string().min(1),
+		}),
+	);
+	let storedInvalid = false;
+	const outbox = new DurableOutbox<OwnerRowOutboxItem>({
+		durable: outboxStore,
+		restore: (raw) => {
+			if (raw === null) return [];
+			const parsed = OutboxItemsSchema.safeParse(raw);
+			if (parsed.success) return parsed.data;
+			storedInvalid = true;
+			return [];
+		},
+		keyOf: opKeyOf,
 	});
-
+	if (storedInvalid) console.warn("[owner-row-outbox] invalid stored value, starting empty");
 	function queueOutbox(item: OwnerRowOutboxItem): boolean {
-		const opKey = opKeyFor(item.entry, item.opId);
-		const index = outbox.findIndex(
-			(existing) =>
-				existing.opId === opKey.opId && sha256Hex(existing.entry.session_id ?? "") === opKey.conversationId,
-		);
-		if (index >= 0) outbox[index] = item;
-		else outbox.push(item);
 		try {
-			outboxStore.saveChecked(outbox);
-			return true;
+			const result = outbox.enqueue(item);
+			return result === "enqueued" || result === "replaced";
 		} catch (err) {
 			console.warn(
 				`[${item.label}] owner row outbox save failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -136,69 +130,61 @@ export function createConsolePushOps({
 
 	let lastWait = "";
 	function waiting(reason: string): void {
-		const line = `${reason} (depth ${outbox.length})`;
+		const line = `${reason} (depth ${outbox.size})`;
 		if (line === lastWait) return;
 		lastWait = line;
 		console.log(`[owner-outbox] waiting: ${line}`);
 	}
 
 	async function drainOutbox(): Promise<void> {
-		if (draining) return;
 		if (
 			!routerClient ||
 			typeof routerClient.isConnected !== "function" ||
 			!routerClient.isConnected() ||
 			(routerClient.isRegistered && !routerClient.isRegistered())
 		) {
-			if (outbox.length > 0) waiting("router link down");
+			if (outbox.size > 0) waiting("router link down");
 			return;
 		}
-		draining = true;
-		try {
-			while (outbox.length > 0) {
-				const item = outbox[0];
-				const sealed = sealOwnerRow(item.entry, item.opId);
-				if (!sealed) {
-					waiting("no content key");
-					break;
-				}
-				let result: Awaited<ReturnType<NonNullable<typeof routerClient>["callInboxTool"]>>;
-				try {
-					result = await routerClient.callInboxTool("inbox_append", {
-						...sealed.payload,
-						opKey: sealed.opKey,
-					});
-				} catch (err) {
-					console.warn(
-						`[${item.label}] owner inbox append failed: ${err instanceof Error ? err.message : String(err)}`,
-					);
-					break;
-				}
-				const parsed = result.error ? null : OpResultEnvelopeSchema.safeParse(result.result).data;
-				if (!parsed || !["accepted", "conflict", "refused"].includes(parsed.outcome)) {
-					const raw = result.result as { error?: unknown } | undefined;
-					waiting(
-						`answer ${parsed?.outcome ?? result.error ?? `unparsed error=${String(raw?.error ?? "")} keys=${Object.keys(raw ?? {}).join(",")}`}`,
-					);
-					break;
-				}
-				if (parsed.outcome === "refused") {
-					console.warn(`[${item.label}] owner row ${item.opId} refused: ${parsed.reason ?? "refused"}`);
-				}
-				try {
-					outboxStore.saveChecked(outbox.slice(1));
-				} catch (err) {
-					console.warn(
-						`[${item.label}] owner row outbox save failed: ${err instanceof Error ? err.message : String(err)}`,
-					);
-					break;
-				}
-				outbox.shift();
-				lastWait = "";
+		await outbox.drain(async (item) => {
+			const sealed = sealOwnerRow(item.entry, item.opId);
+			if (!sealed) {
+				waiting("no content key");
+				return;
 			}
-		} finally {
-			draining = false;
-		}
+			let result: Awaited<ReturnType<NonNullable<typeof routerClient>["callInboxTool"]>>;
+			try {
+				result = await routerClient.callInboxTool("inbox_append", {
+					...sealed.payload,
+					opKey: sealed.opKey,
+				});
+			} catch (err) {
+				console.warn(
+					`[${item.label}] owner inbox append failed: ${err instanceof Error ? err.message : String(err)}`,
+				);
+				return;
+			}
+			const parsed = result.error ? null : OpResultEnvelopeSchema.safeParse(result.result).data;
+			if (!parsed || !["accepted", "conflict", "refused"].includes(parsed.outcome)) {
+				const raw = result.result as { error?: unknown } | undefined;
+				waiting(
+					`answer ${parsed?.outcome ?? result.error ?? `unparsed error=${String(raw?.error ?? "")} keys=${Object.keys(raw ?? {}).join(",")}`}`,
+				);
+				return;
+			}
+			if (parsed.outcome === "refused") {
+				console.warn(`[${item.label}] owner row ${item.opId} refused: ${parsed.reason ?? "refused"}`);
+			}
+			try {
+				if (outbox.retire(opKeyOf(item)) === MIGRATING) return;
+			} catch (err) {
+				console.warn(
+					`[${item.label}] owner row outbox save failed: ${err instanceof Error ? err.message : String(err)}`,
+				);
+				return;
+			}
+			lastWait = "";
+		});
 	}
 
 	setInterval(() => void drainOutbox(), 1000).unref?.();

@@ -91,6 +91,18 @@ describe.sequential("OwnerRowOutbox", () => {
 		expect(router.calls).toHaveLength(1);
 	});
 
+	it("restores the pre-refactor snapshot shape", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "owner-row-outbox-"));
+		roots.push(root);
+		fs.writeFileSync(
+			path.join(root, "owner-row-outbox.json"),
+			JSON.stringify([{ entry: entry("legacy"), opId: "legacy-op", label: "legacy" }]),
+		);
+		const router = { connected: true, results: [], calls: [] as Array<Record<string, unknown>> };
+		await makePush(root, router).drainOutbox();
+		expect((router.calls[0]?.opKey as { opId: string }).opId).toBe("legacy-op");
+	});
+
 	it("persists a row before calling the Router", async () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "owner-row-outbox-"));
 		roots.push(root);

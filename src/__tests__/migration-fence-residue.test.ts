@@ -31,6 +31,7 @@ const delivery = (deliveryId: string) => ({
 const STORE_FILES = [
 	"src/gateway/console/durableOpStore.ts",
 	"src/gateway/federation/crossDomainShareState.ts",
+	"src/shared/durable-outbox.ts",
 	"src/shared/pending-delivery-store.ts",
 ];
 
@@ -110,7 +111,6 @@ describe("migration fence residue", () => {
 	it("every named writer calls the guard in its own body", () => {
 		const floor = [
 			{ file: "src/gateway/consolePushOps.ts", symbol: "deliverToOwner" },
-			{ file: "src/shared/pending-delivery-store.ts", symbol: "enqueue" },
 			{ file: "src/gateway/readAnchors.ts", symbol: "report" },
 			{ file: "src/gateway/federation/gatewayRelay.ts", symbol: "handleOp" },
 		];
