@@ -161,8 +161,8 @@ export const BlobFetchReplyParamsSchema = z.object({
 	incarnation: z.number().int().positive(),
 });
 
+// The call carries the name; a `type` field here would refuse every gateway answer.
 export const ValueResultParamsSchema = z.object({
-	type: z.literal("value_result"),
 	opId: z.string().min(1),
 	conversationId: z.string().min(1),
 	result: z.unknown(),

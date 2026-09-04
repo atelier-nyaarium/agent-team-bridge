@@ -42,7 +42,13 @@ const fakeInbox = (overrides: Record<string, unknown> = {}) =>
 		...overrides,
 	}) as never;
 
-async function registered(inbox: never, hasLinkEdge = false, blobCache?: never, referenceHeld?: ReferenceHeldStore) {
+async function registered(
+	inbox: never,
+	hasLinkEdge = false,
+	blobCache?: never,
+	referenceHeld?: ReferenceHeldStore,
+	protocolVersion = 1,
+) {
 	const owner = generateIdentity();
 	const gateway = generateIdentity();
 	const admission = signAdmission(
@@ -75,7 +81,7 @@ async function registered(inbox: never, hasLinkEdge = false, blobCache?: never, 
 	const reply = await bridge.handleCall("c1", "gateway_register", {
 		domainId: "domain",
 		gatewayId: "gateway",
-		protocolVersion: 1,
+		protocolVersion,
 		signPub: gateway.sign.pub,
 		boxPub: gateway.box.pub,
 		admission: JSON.stringify(admission),
@@ -105,6 +111,30 @@ describe("GatewayBridge inbox", () => {
 				value: { kind: "list_dirs", path: "/" },
 			}),
 		).resolves.toEqual({ outcome: "unsupported" });
+	});
+
+	it("settles a forwarded value with the gateway's answer, which carries no type of its own", async () => {
+		const { bridge, ws } = await registered(fakeInbox(), false, undefined, undefined, 2);
+		const forwarded = bridge.forwardGatewayValue("domain", {
+			opId: "op",
+			conversationId: "conversation",
+			signerSignPub: "owner",
+			device: "phone",
+			gatewayId: "gateway",
+			value: { kind: "list_dirs", path: "/" },
+		});
+		const pushed = ws.sent.find((frame) => frame.type === "value_op") as { incarnation: number } | undefined;
+		expect(pushed).toMatchObject({ opId: "op", conversationId: "conversation" });
+
+		const answer = await bridge.handleCall("c1", "value_result", {
+			opId: "op",
+			conversationId: "conversation",
+			result: { entries: [] },
+			incarnation: pushed!.incarnation,
+		});
+
+		expect(answer).toEqual({ settled: true });
+		await expect(forwarded).resolves.toEqual({ entries: [] });
 	});
 
 	it("refuses a held blob begin for a missing record", async () => {

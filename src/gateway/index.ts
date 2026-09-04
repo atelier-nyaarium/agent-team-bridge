@@ -1178,12 +1178,15 @@ export async function startGateway(): Promise<void> {
 					result =
 						sealed.kind === "ok" ? sealed.envelope : { kind: "refusal", reason: "content key unavailable" };
 				}
-				await federation.routerClient.callTool("value_result", {
+				const settled = await federation.routerClient.callTool("value_result", {
 					opId: frame.data.opId,
 					conversationId: frame.data.conversationId,
 					result,
 					incarnation,
 				});
+				// An unsettled answer is a Router that will time the console out; say so.
+				if ((settled as { result?: { settled?: boolean } })?.result?.settled === false)
+					console.warn(`[value-op] Router did not settle value_result for ${frame.data.opId}`);
 			})().catch(() => undefined);
 		};
 
