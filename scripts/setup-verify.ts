@@ -200,6 +200,8 @@ async function dialConsole(url: string, expectedFingerprint: string): Promise<vo
 	const parsed = new URL(url);
 	const pin = pinnedDial(parsed.hostname, Number(parsed.port) || ROUTER_PORT, expectedFingerprint);
 	const WebSocket = realWebSocket();
+	// Only the Router host's .env carries the app token; a Gateway-only host cannot present it.
+	const token = process.env.CONSOLE_BRIDGE_TOKEN;
 	await new Promise<void>((resolve, reject) => {
 		let ws: WebSocket | null = null;
 		const timeout = setTimeout(() => {
@@ -209,7 +211,7 @@ async function dialConsole(url: string, expectedFingerprint: string): Promise<vo
 		ws = new WebSocket(url, {
 			// Match the WebSocket adapter.
 			createConnection: pin.createConnection as WebSocket.ClientOptions["createConnection"],
-			headers: { "X-Console-Bridge-Token": `Bearer ${process.env.CONSOLE_BRIDGE_TOKEN ?? ""}` },
+			headers: token ? { "X-Console-Bridge-Token": `Bearer ${token}` } : {},
 		});
 		ws.once("open", () => {
 			clearTimeout(timeout);
@@ -223,6 +225,11 @@ async function dialConsole(url: string, expectedFingerprint: string): Promise<vo
 		});
 		ws.once("error", (error) => {
 			clearTimeout(timeout);
+			// Without the token, a 401 past a matched pin still proves the pinned path reached the console surface.
+			if (!token && /\b401\b/.test(error.message) && pin.verdict() === "match") {
+				resolve();
+				return;
+			}
 			reject(error);
 		});
 	});
