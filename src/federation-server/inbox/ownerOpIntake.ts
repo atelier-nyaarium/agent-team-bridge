@@ -53,7 +53,7 @@ export class OwnerOpRefused extends Error {
 }
 
 export class OwnerOpIntake {
-	private readonly nonces = new Map<string, { at: number; result?: unknown }>();
+	private readonly nonces = new Map<string, { at: number; answer: Promise<unknown> }>();
 	private readonly handlers = new Map<string, OwnerOpHandler>();
 	private readonly now: () => number;
 	private gatewayProtocol: ((domainId: string, gatewayId: string) => number | null) | undefined;
@@ -92,13 +92,24 @@ export class OwnerOpIntake {
 		if (Math.abs(this.now() - op.at) > REGISTER_MAX_SKEW_MS) return refused("stale");
 		for (const [nonce, entry] of this.nonces)
 			if (this.now() - entry.at > REGISTER_MAX_SKEW_MS) this.nonces.delete(nonce);
-		const replay = this.nonces.get(`${op.signerSignPub}/${op.nonce}`);
-		if (replay) return replay.result ?? refused("replay");
 		const nonceKey = `${op.signerSignPub}/${op.nonce}`;
+		// One signed op gets one answer. The console re-posts the same op on reach failover, so a
+		// second copy, in flight or settled, reads the first answer instead of running or being refused.
+		const replay = this.nonces.get(nonceKey);
+		if (replay) return replay.answer;
 		const nonceStore = this.params.inbox as InboxService & Partial<DurableNonceStore>;
-		const durable = nonceStore.ownerOpNonce?.(op.domainId, op.signerSignPub, op.nonce);
-		if (durable) return refused("replay");
-		this.nonces.set(nonceKey, { at: op.at });
+		if (nonceStore.ownerOpNonce?.(op.domainId, op.signerSignPub, op.nonce)) return refused("replay");
+		const answer = this.settle(op, nonceKey, nonceStore, refused);
+		this.nonces.set(nonceKey, { at: op.at, answer });
+		return answer;
+	}
+
+	private async settle(
+		op: OwnerOp,
+		nonceKey: string,
+		nonceStore: Partial<DurableNonceStore>,
+		refused: (reason: string) => OpResultEnvelope,
+	): Promise<unknown> {
 		try {
 			const result = await this.dispatch(op, refused);
 			if (result && typeof result === "object" && (result as Record<string, unknown>).reason === "migrating") {
@@ -111,10 +122,6 @@ export class OwnerOpIntake {
 				!nonceStore.acceptOwnerOpNonce(op.domainId, op.signerSignPub, op.nonce, op.at)
 			)
 				return { opKey: { conversationId: op.conversationId, opId: op.opId }, outcome: "durability_uncertain" };
-			this.nonces.set(nonceKey, {
-				at: op.at,
-				...(op.op.kind === "key_request" || op.op.kind === "key_receipt" ? { result } : {}),
-			});
 			return result;
 		} catch (error) {
 			if (error instanceof OwnerQuarantined)

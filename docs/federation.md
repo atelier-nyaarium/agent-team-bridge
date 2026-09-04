@@ -28,7 +28,8 @@ over per reconnect, advancing only when a socket never opened.
 - `reach.json` stays beside `transport.json`; delivered transport bytes remain stable while learned
   reach data changes.
 - Reach is not exposed on `/health`.
-- Failover follows thrown `IOException`, not HTTP status.
+- Failover follows thrown `IOException`, not HTTP status. It re-posts the same signed op, so the
+  Router answers a repeated nonce with the first answer, in flight or settled, within the skew window.
 - Debug ingest uses the transport's current base after reach changes.
 
 ## Pinning the Router

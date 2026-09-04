@@ -89,19 +89,35 @@ describe("OwnerOpIntake", () => {
 		).toEqual({ outcome: "ok" });
 	});
 
-	it("refuses unauthorized, replayed, stale, mismatched, and unsupported operations", async () => {
+	it("answers a re-posted in-flight op with that op's one answer, running it once", async () => {
+		const fixture = setup();
+		let runs = 0;
+		let release: ((value: unknown) => void) | undefined;
+		fixture.intake.register("slow", () => {
+			runs++;
+			return new Promise((resolve) => {
+				release = resolve;
+			});
+		});
+		const first = fixture.intake.handle(op(fixture, "slow", "same"));
+		const second = fixture.intake.handle(op(fixture, "slow", "same"));
+		release?.({ answered: true });
+
+		expect(await first).toEqual({ answered: true });
+		expect(await second).toEqual({ answered: true });
+		expect(runs).toBe(1);
+	});
+
+	it("refuses unauthorized, stale, mismatched, and unsupported operations, and answers a replay with its first result", async () => {
 		const fixture = setup();
 		expect(
 			await fixture.intake.handle(
 				op(fixture, "consumer_register", "gateway", { signer: fixture.gateway.sign.pub }),
 			),
 		).toMatchObject({ outcome: "refused" });
-		expect(await fixture.intake.handle(op(fixture, "consumer_register", "replay"))).toMatchObject({
-			cursorEpoch: 1,
-		});
-		expect(await fixture.intake.handle(op(fixture, "consumer_register", "replay"))).toMatchObject({
-			outcome: "refused",
-		});
+		const registered = await fixture.intake.handle(op(fixture, "consumer_register", "replay"));
+		expect(registered).toMatchObject({ cursorEpoch: 1 });
+		expect(await fixture.intake.handle(op(fixture, "consumer_register", "replay"))).toEqual(registered);
 		expect(await fixture.intake.handle(op(fixture, "consumer_register", "stale", { at: 1 }))).toMatchObject({
 			outcome: "refused",
 		});
