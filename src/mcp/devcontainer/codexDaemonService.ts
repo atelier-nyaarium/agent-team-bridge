@@ -38,6 +38,8 @@ const HELD_TERMINAL_MS = 10_000;
 
 /** How long an active turn may go without progress before the watchdog asks App Server about it. */
 const NO_PROGRESS_MS = 120_000;
+/** A frame this long after the last one is logged, since it is the silence the watchdog acts on. */
+const FRAME_GAP_LOG_MS = 60_000;
 
 /** How often the watchdog and the reaper look. */
 const SWEEP_MS = 30_000;
@@ -361,6 +363,7 @@ export class CodexDaemonService {
 			threadId: command.threadId,
 			turnId: command.turnId,
 		};
+		console.error(`[codex-daemon] interrupt requested for turn ${command.turnId} by ${command.agentId}`);
 		try {
 			await session.client.interruptTurn(command.threadId, command.turnId);
 		} catch (error) {
@@ -517,8 +520,22 @@ export class CodexDaemonService {
 
 	/** The thread id parks the thread whether a binding is held or not; `onTerminal` reaches the gateway. */
 	private onServerEvent(session: TargetSession, message: { method: string; params?: unknown }): void {
+		// A long gap is what the watchdog measures, so it is worth a line when it happens.
+		const gap = this.now() - session.usedAt;
+		if (gap > FRAME_GAP_LOG_MS) {
+			const named = framedTurn(message);
+			console.error(
+				`[codex-daemon] ${session.targetId} frame after ${Math.round(gap / 1000)}s: ${message.method} turn=${named?.turnId ?? "-"}`,
+			);
+		}
 		session.usedAt = this.now();
 		const outcome = session.tracker.accept(message);
+		// Named, so an interruption nobody here asked for is visible as such.
+		if (outcome?.status === "interrupted") {
+			console.error(
+				`[codex-daemon] ${session.targetId} turn ${outcome.turnId} interrupted (${message.method}, generation ${session.generation})`,
+			);
+		}
 		if (outcome) {
 			this.dropDeadline(session, outcome.turnId);
 			this.settle(session, outcome.threadId, outcome.turnId, terminalOf(outcome));
@@ -611,6 +628,9 @@ export class CodexDaemonService {
 			}
 			if (!warned) {
 				session.turns.warn(turnId);
+				console.error(
+					`[codex-daemon] ${session.targetId} interrupting turn ${turnId}: no frame from ${binding.threadId} in ${NO_PROGRESS_MS / 1000}s`,
+				);
 				void this.lease(() => session.client.interruptTurn(binding.threadId, turnId)).catch(() => undefined);
 				continue;
 			}
