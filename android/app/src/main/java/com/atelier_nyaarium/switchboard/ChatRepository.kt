@@ -552,6 +552,12 @@ class ChatRepository(
 	/** Poll loop and mailbox drain. */
 	internal val drain = PollDrain(this)
 
+	// The held roster, before the first poll or welcome. Without it a restart shows nothing until the
+	// Router's presence version moves, and an unchanged version is skipped as stale.
+	init {
+		repoScope.launch(Dispatchers.IO) { presence.restoreLastProjection() }
+	}
+
 	/** Armed session goals. */
 	internal val goals = GoalOps(this)
 

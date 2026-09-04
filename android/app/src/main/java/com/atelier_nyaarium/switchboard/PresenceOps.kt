@@ -105,14 +105,19 @@ internal class PresenceOps(private val host: PresenceHost) : ClearsOnReprovision
 			}
 	}
 
-	/** Restore the last Router projection. */
+	/** Land the last Router projection at startup, so the roster shows before the Router's version
+	 * moves. Only while nothing has landed: a live projection always outranks the held one. */
 	suspend fun restoreLastProjection() {
 		val slot = runCatching { host.loadRouterState("presence") }.getOrNull() ?: return
 		val projection = runCatching {
 			wireJson.decodeFromJsonElement(OwnerPresenceProjection.serializer(), slot.payload)
 		}.getOrNull() ?: return
-		// Restore without freshness gating.
-		host.withDrainMutex { projectionMutex.withLock { landProjection(projection, bypassFreshness = true) } }
+		host.withDrainMutex {
+			projectionMutex.withLock {
+				if (lastRawTeams != null) return@withLock
+				landProjection(projection, bypassFreshness = true)
+			}
+		}
 	}
 
 	/** Apply the Router's owner projection. */

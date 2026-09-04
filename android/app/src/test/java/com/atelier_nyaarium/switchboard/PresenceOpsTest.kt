@@ -67,6 +67,16 @@ class PresenceOpsTest {
 	}
 
 	@Test
+	fun restoreLastProjectionYieldsToARosterAlreadyLanded() = runBlocking {
+		val host = FakeHost()
+		val ops = PresenceOps(host)
+		ops.applyOwnerProjection(projection(2, "host.new"))
+		host.slot = RouterStateSlot(1, 1, wireJson.encodeToJsonElement(OwnerPresenceProjection.serializer(), projection(1, "host.old")))
+		ops.restoreLastProjection()
+		assertEquals("local.local.host.new", host.state.value.teams.single().name)
+	}
+
+	@Test
 	fun newerOwnerProjectionAppliesAndPersistsTheSlot() = runBlocking {
 		val host = FakeHost()
 		PresenceOps(host).applyOwnerProjection(projection(2))
