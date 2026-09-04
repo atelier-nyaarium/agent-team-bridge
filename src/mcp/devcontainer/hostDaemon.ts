@@ -483,7 +483,8 @@ const hostOpRunner = createHostOpRunner({
 	killSession,
 	// A windows session browses WINDOWS, through PowerShell. Browsing /mnt from this side would offer
 	// Linux directories the launch then refuses, and would miss every network drive.
-	listDirs: async (p, spawn) => (spawn === WINDOWS_SPAWN ? listWindowsDirs(p) : listHostDirs(p)),
+	listDirs: async (p, spawn) =>
+		spawn === WINDOWS_SPAWN ? listWindowsDirs(p, windowsAvailability().userProfile) : listHostDirs(p),
 });
 
 ////////////////////////////////

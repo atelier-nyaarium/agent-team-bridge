@@ -20,7 +20,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 
 object Protocol {
-	const val CONSOLE_PROTOCOL_VERSION: Int = 2
+	const val CONSOLE_PROTOCOL_VERSION: Int = 3
 
 	/** Address and store separator. */
 	const val ADDRESS_SEP: String = "."
@@ -498,6 +498,7 @@ data class ConsoleRenameSessionResult(
 data class ConsoleListDirsResult(
 	val entries: List<String>,
 	val truncated: Boolean? = null,
+	val path: String? = null,
 )
 
 @Serializable

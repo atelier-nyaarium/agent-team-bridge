@@ -252,13 +252,18 @@ export function createConsoleDispatcher({
 
 			case "list_dirs": {
 				if (!relayToHost) throw new Error("terminal view unavailable on this Gateway");
-				if (!isSpawnWorkdirPath(op.spawn, op.path)) {
+				// Blank names the spawn point's own default directory, which the machine spells back.
+				if (op.path.length > 0 && !isSpawnWorkdirPath(op.spawn, op.path)) {
 					throw new Error("invalid path: must be absolute, ~-rooted, or a Windows drive path");
 				}
 				const r = await relayToHost({ kind: "listDirs", path: op.path, spawn: op.spawn });
 				if (!r.ok) throw new Error(r.error ?? "list failed");
 				const listed = r.result as HostListDirsResult;
-				return { entries: listed.entries, ...(listed.truncated ? { truncated: true } : {}) };
+				return {
+					entries: listed.entries,
+					...(listed.truncated ? { truncated: true } : {}),
+					...(listed.path ? { path: listed.path } : {}),
+				};
 			}
 
 			case "blob_stat":

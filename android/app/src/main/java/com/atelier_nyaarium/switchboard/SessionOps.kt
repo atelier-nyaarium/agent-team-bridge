@@ -160,7 +160,10 @@ internal class SessionOps(private val repo: ChatRepository) {
 		// Canned listings exist only when seedSandbox installed them (emulator build), keeping the
 		// picker inspectable with no gateway behind it.
 		repo.sandboxDirs?.let { return@withContext DirListing(it[path].orEmpty()) }
-		runCatchingCancellable { DirListing(repo.client().listDirs(path, hostTarget, spawn).entries) }
+		runCatchingCancellable {
+			val listed = repo.client().listDirs(path, hostTarget, spawn)
+			DirListing(listed.entries, path = listed.path)
+		}
 			.getOrElse { DirListing(emptyList(), error = dirListError(it)) }
 	}
 

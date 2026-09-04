@@ -9,39 +9,38 @@ import org.junit.Test
  * What the directory picker browses for a given field text.
  *
  * The defect this pins: a Windows field had no implied directory, so an empty one listed nothing and
- * tapping it did nothing at all. The drives stand in for home there.
+ * tapping it did nothing at all. A blank parent now asks the machine for its own default.
  */
 class DirBrowseTest {
 	@Test
-	fun `an empty Windows field browses the drives`() {
+	fun `an empty Windows field asks for the machine's default directory`() {
 		val b = dirBrowse("", isWindows = true)
 		assertTrue(b.listable)
-		assertEquals("/", b.listPath)
 		assertEquals("", b.parent)
 		assertEquals("", b.fragment)
 	}
 
 	@Test
-	fun `a bare Windows fragment filters the drive list`() {
-		val b = dirBrowse("C", isWindows = true)
+	fun `a bare Windows fragment still asks for the default and filters it`() {
+		val b = dirBrowse("Doc", isWindows = true)
 		assertTrue(b.listable)
-		assertEquals("/", b.listPath)
-		assertEquals("C", b.fragment)
-	}
-
-	@Test
-	fun `tapping a drive row yields a rooted path the launch accepts`() {
-		val b = dirBrowse("", isWindows = true)
-		// The row builds parent + entry + "/".
-		assertEquals("C:/", "${b.parent}C:/")
+		assertEquals("", b.parent)
+		assertEquals("Doc", b.fragment)
 	}
 
 	@Test
 	fun `a rooted Windows path lists that directory`() {
 		val b = dirBrowse("C:/Users/", isWindows = true)
 		assertTrue(b.listable)
-		assertEquals("C:/Users/", b.listPath)
+		assertEquals("C:/Users/", b.parent)
 		assertEquals("", b.fragment)
+	}
+
+	@Test
+	fun `a rooted Windows path splits at its last separator`() {
+		val b = dirBrowse("C:/Users/nyaa", isWindows = true)
+		assertEquals("C:/Users/", b.parent)
+		assertEquals("nyaa", b.fragment)
 	}
 
 	@Test
@@ -53,7 +52,7 @@ class DirBrowseTest {
 	fun `an empty host field implies home`() {
 		val b = dirBrowse("", isWindows = false)
 		assertTrue(b.listable)
-		assertEquals("~/", b.listPath)
+		assertEquals("~/", b.parent)
 		assertEquals("", b.fragment)
 	}
 

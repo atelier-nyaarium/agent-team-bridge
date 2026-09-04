@@ -7,7 +7,7 @@
 // Every rule here is measured on a WSL box, not reasoned.
 
 import { execFileSync } from "node:child_process";
-import { isSpawnWorkdirPath } from "../../shared/host-op.js";
+import { type HostListDirsResult, isSpawnWorkdirPath } from "../../shared/host-op.js";
 import { isUncPath, WINDOWS_SPAWN } from "../../shared/host-spawn.js";
 
 ////////////////////////////////
@@ -145,37 +145,23 @@ function isPathShaped(hint: string): boolean {
  * the reason.
  */
 /**
- * The wire spelling for "list this machine's drives".
+ * The Windows home, spelled with forward slashes like every other path on this wire.
  *
- * A Windows session has no home the picker can imply, so an EMPTY field browses the drives and every
- * listing below one is drive-rooted, which is the only shape `resolveWindowsWorkdir` accepts. The
- * op's path cannot be empty, and no real path names the drive list, so `/` carries it: on the windows
- * spawn it is already a POSIX shape that would otherwise list whichever drive happens to be current.
+ * A blank listing is the one request that cannot name its own directory: the picker asks for this
+ * spawn point's default without knowing where that is, and only Windows can say. Answering the
+ * resolved path along with the names is what lets a tap build an absolute path rather than a
+ * relative one no launch accepts.
  */
-export const WINDOWS_DRIVE_ROOT = "/";
-
-/** Drive letters as `C:`, so the tap that appends "/" yields a rooted `C:/`. */
-export function parseWindowsDriveNames(out: string): string[] {
-	return out
-		.split("\n")
-		.map((line) => line.replace(/\r$/, "").trim())
-		.filter((line) => /^[A-Za-z]$/.test(line))
-		.map((line) => `${line.toUpperCase()}:`)
-		.sort();
+export function windowsHome(userProfile: string): string {
+	return userProfile.replace(/\\/g, "/").replace(/\/+$/, "");
 }
 
-function listWindowsDrives(): { entries: string[] } {
-	const out = run("powershell.exe", [
-		"-NoLogo",
-		"-NoProfile",
-		"-Command",
-		"Get-PSDrive -PSProvider FileSystem | ForEach-Object { $_.Name }",
-	]);
-	return { entries: out == null ? [] : parseWindowsDriveNames(out) };
-}
-
-export function listWindowsDirs(rawPath: string): { entries: string[]; truncated?: boolean } {
-	if (rawPath === WINDOWS_DRIVE_ROOT) return listWindowsDrives();
+export function listWindowsDirs(rawPath: string, userProfile?: string): HostListDirsResult {
+	if (rawPath.length === 0) {
+		if (!userProfile) return { entries: [] };
+		const home = windowsHome(userProfile);
+		return { ...listWindowsDirs(home), path: home };
+	}
 	// The daemon re-guards with the SAME rule the gateway boundary applied, rather than a narrower
 	// hand-rolled quote check: the convention here is that a path is gateway-validated and the daemon
 	// re-guards, and two different rules for one question is what this whole change spent the day

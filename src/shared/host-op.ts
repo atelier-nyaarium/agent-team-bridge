@@ -167,10 +167,15 @@ export type HostOp =
 
 /** A listDirs result: immediate subdirectory names (dirs and dir symlinks), sorted. Empty for a
  * missing or unreadable path - autocomplete has no use for the reason. `truncated` marks the wire
- * sanity bound (MAX_DIR_ENTRIES at the daemon), never a UX cap. */
+ * sanity bound (MAX_DIR_ENTRIES at the daemon), never a UX cap.
+ *
+ * `path` answers WHICH directory those names sit in, which only a blank request needs: the caller
+ * asked for this spawn point's default directory without knowing its spelling, and the names alone
+ * would build a relative path no launch accepts. Absolute, and spelled the way the launch takes it. */
 export interface HostListDirsResult {
 	entries: string[];
 	truncated?: boolean;
+	path?: string;
 }
 
 /** A captured tmux pane plus a short content hash, so the console can skip an unchanged frame. The

@@ -85,7 +85,9 @@ export const ConsoleOpSchema = z
 		}),
 		z.object({
 			kind: z.literal("list_dirs"),
-			path: z.string().min(1).max(512),
+			// Blank names the spawn point's OWN default directory, which only the machine can spell.
+			// The answer carries the path it resolved to.
+			path: z.string().max(512),
 			spawn: z.string().min(1).max(64).optional(),
 		}),
 		BlobStatOpSchema,

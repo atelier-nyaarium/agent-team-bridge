@@ -11,7 +11,7 @@ package com.atelier_nyaarium.switchboard
  * broken feature rather than an unreachable machine. Every caller that shows a listing shows this
  * reason too.
  */
-data class DirListing(val dirs: List<String>, val error: String? = null)
+data class DirListing(val dirs: List<String>, val error: String? = null, val path: String? = null)
 
 ////////////////////////////////
 //  Functions & Helpers

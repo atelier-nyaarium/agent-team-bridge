@@ -275,6 +275,10 @@ export const ConsoleListDirsResultSchema = z
 		// True when the daemon's wire sanity bound cut the listing (never a UX cap; the console
 		// filters locally, so a hit only means the fragment filter may be incomplete).
 		truncated: z.boolean().optional(),
+		// Which directory those names sit in, answered only for a BLANK request: the caller asked for
+		// the spawn point's default without knowing its spelling, and the names alone would build a
+		// relative path no launch accepts.
+		path: z.string().max(512).optional(),
 	})
 	.meta({ id: "ConsoleListDirsResult" });
 

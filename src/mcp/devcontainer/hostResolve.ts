@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { resolveWorkdir, type WorkdirContext, workdirOrFallback } from "../../shared/agent-workdir.js";
-import { isReservedHostSession, isTmuxName, type TmuxTarget } from "../../shared/host-op.js";
+import { type HostListDirsResult, isReservedHostSession, isTmuxName, type TmuxTarget } from "../../shared/host-op.js";
 import { buildHostLaunch, isHostSpawn } from "../../shared/host-spawn.js";
 import { composeSessionName, parseSessionName } from "../../shared/session-id.js";
 
@@ -93,10 +93,15 @@ export function resolveHostWorkdir(
 const MAX_DIR_ENTRIES = 5000;
 
 /** Immediate subdirectories, sorted case-insensitively. Empty rather than erroring: this feeds an
- * autocomplete, which has no use for the reason. */
-export function listHostDirs(rawPath: string, home: string = HOME): { entries: string[]; truncated?: boolean } {
-	const resolved = expandWorkdirPath(rawPath, home);
+ * autocomplete, which has no use for the reason.
+ *
+ * A blank path is this machine's home, and the answer says so: the caller asked for the default
+ * directory without knowing its spelling, so the names alone would not tell it where they sit. */
+export function listHostDirs(rawPath: string, home: string = HOME): HostListDirsResult {
+	const blank = rawPath.length === 0;
+	const resolved = blank ? home : expandWorkdirPath(rawPath, home);
 	if (resolved == null) return { entries: [] };
+	const where = blank ? { path: resolved } : {};
 	let dirents: fs.Dirent[];
 	try {
 		dirents = fs.readdirSync(resolved, { withFileTypes: true });
@@ -116,8 +121,10 @@ export function listHostDirs(rawPath: string, home: string = HOME): { entries: s
 		if (isDir) entries.push(d.name);
 	}
 	entries.sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()) || a.localeCompare(b));
-	if (entries.length > MAX_DIR_ENTRIES) return { entries: entries.slice(0, MAX_DIR_ENTRIES), truncated: true };
-	return { entries };
+	if (entries.length > MAX_DIR_ENTRIES) {
+		return { entries: entries.slice(0, MAX_DIR_ENTRIES), truncated: true, ...where };
+	}
+	return { entries, ...where };
 }
 
 ////////////////////////////////

@@ -359,18 +359,16 @@ private val WINDOWS_ROOTED = Regex("^[A-Za-z]:/")
 private fun isRootedFor(project: String, text: String): Boolean =
 	if (project == "windows") WINDOWS_ROOTED.containsMatchIn(text) || isRootedWorkdir(text) else isRootedWorkdir(text)
 
-/** The wire spelling for the Windows drive list. Twin of `WINDOWS_DRIVE_ROOT` in `windowsSpawn.ts`. */
-private const val WINDOWS_DRIVE_ROOT = "/"
-
 /**
- * What one field's text says to browse: the directory to list, the fragment filtering it, the path
- * the op carries, and whether there is anything to list at all.
+ * What one field's text says to browse: the directory to list, the fragment filtering it, and
+ * whether there is anything to list at all.
  *
- * Windows has no home to imply, so an empty field browses the DRIVES rather than nothing. That is
- * what makes the field answer a tap at all, and every listing below a drive is rooted the only way
- * the launch accepts. Elsewhere home is the implied directory, as it always was.
+ * Windows has no home this side can spell, so an empty field asks for the spawn point's OWN default
+ * directory with a blank path, and the machine answers which directory that was. Elsewhere home is
+ * `~/` and always was. A blank parent is the request, never a directory: nothing is ever listed
+ * relative to it, because the answer replaces it with the absolute path it resolved.
  */
-internal data class DirBrowse(val parent: String, val fragment: String, val listPath: String, val listable: Boolean)
+internal data class DirBrowse(val parent: String, val fragment: String, val listable: Boolean)
 
 internal fun dirBrowse(text: String, isWindows: Boolean): DirBrowse {
 	val cut = text.lastIndexOf('/')
@@ -379,12 +377,7 @@ internal fun dirBrowse(text: String, isWindows: Boolean): DirBrowse {
 	val listable =
 		if (isWindows) parent.isEmpty() || WINDOWS_ROOTED.containsMatchIn(parent)
 		else parent.startsWith("/") || parent.startsWith("~/")
-	return DirBrowse(
-		parent = parent,
-		fragment = fragment,
-		listPath = if (parent.isEmpty()) WINDOWS_DRIVE_ROOT else parent,
-		listable = listable,
-	)
+	return DirBrowse(parent = parent, fragment = fragment, listable = listable)
 }
 
 ////////////////////////////////
@@ -429,13 +422,23 @@ fun DirectoryField(
 	// again) and a bare fragment, neither of which would otherwise have anything to list. On Windows
 	// the drives stand in for home. See `dirBrowse`.
 	val isWindows = spawn == "windows"
-	val (parent, fragment, listPath, listable) = dirBrowse(text, isWindows)
+	val (parent, fragment, listable) = dirBrowse(text, isWindows)
 	// Retries a failed directory whenever these keys change again (a refocus, or moving away and back),
 	// which is the recovery path once the machine is reachable. Unchanged keys do not re-run it, so a
 	// machine that stays down is asked once per attempt rather than continuously.
 	LaunchedEffect(parent, listable, focused) {
 		if (!listable || !(focused || text.isNotEmpty()) || parent in cache) return@LaunchedEffect
-		val listing = onListDirs(listPath, spawn)
+		val listing = onListDirs(parent, spawn)
+		// A blank request asked for the machine's default directory, so the answer names it. Writing it
+		// into the field is what turns the listing into a path the owner can see, edit and launch; the
+		// guard keeps a slow answer from overwriting what they typed while it was in flight.
+		val resolved = listing.path
+		if (listing.error == null && parent.isEmpty() && !resolved.isNullOrEmpty() && value.text.isEmpty()) {
+			val rooted = "$resolved/"
+			cache[rooted] = listing.dirs
+			onValueChange(TextFieldValue(rooted, selection = TextRange(rooted.length)))
+			return@LaunchedEffect
+		}
 		if (listing.error == null) {
 			cache[parent] = listing.dirs
 			failures.remove(parent)
