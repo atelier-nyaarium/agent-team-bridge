@@ -203,6 +203,22 @@ The sibling **evie-bot** repo must be checked inside its devcontainer:
 bun run lint && bun run test
 ```
 
+### Debug APK to the phone
+
+The phone runs the CI build, signed with the stable key kept in `~/android-dev/secrets/`. `env.sh`
+exports that key as the `ANDROID_KEYSTORE_*` variables the Gradle signing config reads, so a local
+debug build installs straight over it. Without those exports the build signs with the default debug
+key and the phone refuses the install. The version code must exceed the installed one.
+
+```bash
+source ~/android-dev/env.sh
+INSTALLED=$(adb shell dumpsys package com.atelier_nyaarium.switchboard | grep -o 'versionCode=[0-9]*' | cut -d= -f2)
+cd android && ANDROID_VERSION_CODE=$((INSTALLED + 1)) ./gradlew :app:assembleDebug
+adb install -r app/build/outputs/apk/debug/switchboard-debug.apk
+```
+
+The phone stays on wireless adb; `adb devices` lists it. No push or CI round trip is needed.
+
 ### Emulator build
 
 Use the `emulator` variant for visual inspection without onboarding or a real Gateway:
