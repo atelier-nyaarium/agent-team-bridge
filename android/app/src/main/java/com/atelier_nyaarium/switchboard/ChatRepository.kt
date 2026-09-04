@@ -2,7 +2,6 @@ package com.atelier_nyaarium.switchboard
 
 import android.content.ContentResolver
 import com.atelier_nyaarium.switchboard.board.BoardRouterWriter
-import com.atelier_nyaarium.switchboard.board.BoardSealing
 import com.atelier_nyaarium.switchboard.crypto.openSealedBlobRange
 import com.atelier_nyaarium.switchboard.crypto.opResultAadKind
 import com.atelier_nyaarium.switchboard.crypto.scheduledBodyAadKind
@@ -81,7 +80,7 @@ class ChatRepository(
 		}
 	}
 
-	@Volatile internal var sandboxDirs: Map<String, List<String>>? = null
+	internal val sandboxDirs: Map<String, List<String>>? get() = sandboxSeeder.sandboxDirs
 	private val loadedThreadsAtStartup: Map<String, List<Message>> = persistence.loadPersistedThreads()
 	private val loadedReadAnchorsAtStartup: Map<String, ReadAnchor> = persistence.loadPersistedReadAnchors(loadedThreadsAtStartup)
 
@@ -109,7 +108,7 @@ class ChatRepository(
 	// Address helpers.
 
 	/** Local Domain id for address parsing. */
-	internal fun localDomain(): String = confirmedDomainId() ?: ""
+	internal fun localDomain(): String = provisioningHost.localDomain()
 
 	/** Canonicalize a target address. */
 	internal fun canonicalTarget(team: String): String =
@@ -125,7 +124,10 @@ class ChatRepository(
 			Address.local(localDomain(), homeGatewayId, ownerKeyId(federation.ownerSignPub()), Protocol.DEFAULT_SESSION)
 		}.getOrNull()
 
-	@Volatile internal var client: ConsoleClient? = null
+	internal val provisioningHost: RepositoryProvisioningHost = ChatRepositoryProvisioningHost(this)
+	internal var client: ConsoleClient?
+		get() = provisioningHost.client
+		set(value) { provisioningHost.client = value }
 	internal val mailboxSync = MailboxSync(store)
 	val pushback = IdlePushbackManager(store, System.currentTimeMillis()) { ZoneId.systemDefault() }
 
@@ -146,12 +148,7 @@ class ChatRepository(
 	)
 
 	/** Board sealing context. */
-	fun boardSealing(): BoardSealing? {
-		val domain = ownerOps.domainId() ?: return null
-		return BoardSealing(federation.contentKeyring(), domain, federation.ownerSignPub()) { epoch ->
-			repoScope.launch(Dispatchers.IO) { keyDelivery.requestMissing(epoch) }
-		}
-	}
+	fun boardSealing() = provisioningHost.boardSealing()
 
 	init {
 		board.sealing = { boardSealing() }
@@ -437,24 +434,11 @@ class ChatRepository(
 	internal val federation = FederationManager(store)
 
 	/** Apply the keyring snapshot. */
-	internal fun applyDomainSync(snapshot: com.atelier_nyaarium.switchboard.proto.DomainSnapshot, version: String) {
-		federation.applyDomainSync(snapshot, version)
-		refreshAdmittedGateways()
-	}
+	internal fun applyDomainSync(snapshot: com.atelier_nyaarium.switchboard.proto.DomainSnapshot, version: String) =
+		provisioningHost.applyDomainSync(snapshot, version)
 
 	/** Refresh admitted Gateways. */
-	internal fun refreshAdmittedGateways() {
-		val ids = sessions.keyringGateways()
-		val nextHome = homeGatewayId.takeIf { it in ids } ?: ids.firstOrNull().orEmpty()
-		if (nextHome != homeGatewayId) {
-			homeGatewayId = nextHome
-			store.saveGatewayId(nextHome)
-		}
-		if (ids != _state.value.admittedGateways || nextHome != _state.value.homeGatewayId)
-			_state.update { it.copy(admittedGateways = ids, homeGatewayId = nextHome) }
-		// Remove revoked Gateway columns.
-		board.retainGateways(ids)
-	}
+	internal fun refreshAdmittedGateways() = provisioningHost.refreshAdmittedGateways()
 	internal val ownerFacts = OwnerFacts(this)
 	internal val gatewayEnroll = GatewayEnrollment(this)
 	internal val ceremony = EnrollCeremonyOps(this)
@@ -536,18 +520,17 @@ class ChatRepository(
 		enrollInvites.clear()
 	}
 
-	@Volatile private var visible = false
-	val isVisible: Boolean get() = visible
+	internal val focusHost: RepositoryFocusHost = ChatRepositoryFocusHost(this)
+	internal val sandboxSeeder = ChatRepositorySandboxSeeder(this)
+	val isVisible: Boolean get() = focusHost.visible
 	// Tombstones mask stale team snapshots.
 	internal val forgottenUntil = java.util.concurrent.ConcurrentHashMap<String, Long>()
 	// Rows reconciled once per process.
 	internal val reconciled = java.util.Collections.synchronizedSet(mutableSetOf<String>())
 
-	// Current poll focus.
-	@Volatile internal var currentFocus: FocusIntent = FocusIntent(screen = "background")
-
-	// Last visible focus.
-	@Volatile private var lastVisibleFocus: FocusIntent = FocusIntent(screen = "board")
+	internal var currentFocus: FocusIntent
+		get() = focusHost.currentFocus
+		set(value) { focusHost.currentFocus = value }
 
 	/** Poll loop and mailbox drain. */
 	internal val drain = PollDrain(this)
@@ -565,50 +548,16 @@ class ChatRepository(
 	var onInbound: ((team: String, messages: List<Message>) -> Unit)? = null
 
 	/** Enter foreground polling. */
-	fun onForeground() {
-		visible = true
-		drain.onForegroundResume()
-		_state.update { it.copy(error = null, pollFailStreak = 0, enrollingSince = 0L, foreground = true) }
-		declareFocus(lastVisibleFocus)
-		drain.kickPoll()
-		// Polling remains the fallback.
-		if (ownerOps.domainId() != null) runCatching { socket.connect() }
-	}
+	fun onForeground() = focusHost.onForeground()
 
-	fun onBackground() {
-		visible = false
-		socket.onBackground()
-		pushback.onBackground(System.currentTimeMillis())
-		declareFocus(FocusIntent(screen = "background"))
-		_state.update { it.copy(foreground = false) }
-	}
+	fun onBackground() = focusHost.onBackground()
 
-	fun kickPoll() {
-		drain.kickPoll()
-	}
+	fun kickPoll() = focusHost.kickPoll()
 
 	/** Declare current UI focus. */
-	internal fun declareFocus(focus: FocusIntent) {
-		val prior = currentFocus
-		currentFocus = focus
-		if (focus.screen != "background") lastVisibleFocus = focus
-		if (prior != focus) drain.kickPoll()
-	}
+	internal fun declareFocus(focus: FocusIntent) = focusHost.declareFocus(focus)
 
-	internal fun client(): ConsoleClient {
-		client?.let { return it }
-		val blob = store.load() ?: error("not provisioned")
-		return ConsoleClient(
-			Provisioning.parse(blob, store),
-			store,
-			coordinator = transportCoordinator,
-			signOwnerOp = { op, opId -> ownerOps.sign(op, opId) },
-				domainId = { confirmedDomainId() },
-				ownerSignPub = { federation.ownerSignPub() },
-			homeGatewayId = { homeGatewayId },
-				contentKeyring = { federation.contentKeyring() },
-		).also { client = it }
-	}
+	internal fun client(): ConsoleClient = provisioningHost.client()
 
 	/** Capabilities reported at register. */
 	@Volatile var enabledPlugins: (() -> List<com.atelier_nyaarium.switchboard.proto.EnabledPlugin>)? = null
@@ -625,11 +574,6 @@ class ChatRepository(
 
 	internal fun List<Team>.withoutTombstoned(): List<Team> = filterTombstoned(this, forgottenUntil, System.currentTimeMillis())
 
-	/** Sandbox provisioning blob. */
-	private val SANDBOX_PROVISIONING =
-		"""{"transport":"direct","routerUrl":"https://router.sandbox.invalid:20001",""" +
-			""""routerCertFp":"${"11".repeat(32)}","appToken":"sandbox","conversationId":"sandbox"}"""
-
 	/** Seed emulator state only. */
 	fun seedSandbox(
 		teams: List<Team>,
@@ -638,28 +582,7 @@ class ChatRepository(
 		drafts: Map<String, Draft> = emptyMap(),
 		goals: Map<String, PendingGoal> = emptyMap(),
 		admittedGateways: List<String> = emptyList(),
-	) {
-		if (BuildConfig.BUILD_TYPE != "emulator") return
-		teams.firstOrNull()?.name?.split(".")?.getOrNull(1)?.let { homeGatewayId = it }
-		if (store.load() == null) store.save(SANDBOX_PROVISIONING)
-		sandboxDirs = dirs
-		_state.update { s ->
-			s.copy(
-				teams = teams,
-				threads = threads,
-				openTabs = threads.keys.toList(),
-				unread = threads.mapValues { (team, msgs) -> unreadCount(msgs, s.readAnchors[team]) },
-				connected = true,
-				provisioned = true,
-				status = "",
-				error = null,
-				drafts = drafts,
-				goals = goals,
-				admittedGateways = admittedGateways,
-				homeGatewayId = homeGatewayId,
-			)
-		}
-	}
+	) = sandboxSeeder.seedSandbox(teams, threads, dirs, drafts, goals, admittedGateways)
 
 	fun setBiometricLock(enabled: Boolean) {
 		store.biometricLock = enabled
