@@ -210,12 +210,50 @@ describe("inbox delivery pump", () => {
 		}
 		expect(dispatched).toBe(0);
 		expect(sealedResults).toEqual([
-			{ outcome: "failed", reason: "target_mismatch" },
-			{ outcome: "failed", reason: "target_mismatch" },
+			{ ok: false, error: "target_mismatch" },
+			{ ok: false, error: "target_mismatch" },
 		]);
 		expect(setupResult.calls).toHaveLength(4);
 		expect(setupResult.calls.filter((call) => call.action === "inbox_ack")).toHaveLength(2);
 		expect(setupResult.calls.at(-1)).toMatchObject({ params: { outcome: "delivered" } });
+	});
+
+	it("dispatches a console op that names its session by the canonical dotted address", async () => {
+		const setupResult = setup();
+		const identity = generateIdentity();
+		let dispatched = 0;
+		const sealedResults: unknown[] = [];
+		const delivery = setupResult.pump({
+			gatewayId: "gateway",
+			routerClient: {
+				callInboxTool: async (action: string, params: Record<string, unknown>) => {
+					setupResult.calls.push({ action, params });
+					return { result: { outcome: action === "inbox_append" ? "accepted" : "delivered" } };
+				},
+			},
+			producerSignPriv: identity.sign.priv,
+			consoleDispatch: async () => {
+				dispatched++;
+				return { hash: "h1", kind: "tmux", ansi: "" };
+			},
+			contentKeyStore: {
+				open: () => ({
+					kind: "ok",
+					plaintext: Buffer.from('{"kind":"peek","target":"domain.gateway.session"}'),
+				}),
+				seal: (plaintext: Buffer) => {
+					sealedResults.push(JSON.parse(plaintext.toString("utf8")));
+					return { kind: "ok", envelope: row().body };
+				},
+			} as never,
+		});
+		await delivery.onFrame({
+			address: "session:domain/gateway/session",
+			rows: [{ ...row(), envelope: { ...envelope(1), kind: "console_op" } }],
+			deliveryEpoch: 1,
+		});
+		expect(dispatched).toBe(1);
+		expect(sealedResults).toEqual([{ ok: true, result: { hash: "h1", kind: "tmux", ansi: "" } }]);
 	});
 
 	it("requests a missing console-op epoch and retries after the key grant", async () => {
@@ -359,7 +397,7 @@ describe("inbox delivery pump", () => {
 		});
 		expect(dispatched).toBe(0);
 		expect(second.calls.map((call) => call.action)).toEqual(["inbox_append", "inbox_ack"]);
-		expect(sealedBodies.at(-1)).toEqual({ outcome: "failed", reason: "lost" });
+		expect(sealedBodies.at(-1)).toEqual({ ok: false, error: "lost" });
 		expect(second.calls[0]).toMatchObject({ action: "inbox_append" });
 	});
 

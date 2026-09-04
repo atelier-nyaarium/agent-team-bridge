@@ -112,7 +112,7 @@ export function createInboxDeliveryPump(deps: InboxDeliveryPumpDeps) {
 					parseInboxAddress(address) as Extract<InboxAddress, { kind: "session" }>,
 					row,
 					deliveryEpoch,
-					{ outcome: "failed", reason: "lost" },
+					{ ok: false, error: "lost" },
 				);
 			return ack(address, row.seq, deliveryEpoch, claim.outcome);
 		}
@@ -205,6 +205,8 @@ export function createInboxDeliveryPump(deps: InboxDeliveryPumpDeps) {
 					: (op.data as { target: string }).target;
 		const targetMatches = new Set([
 			parsed.sessionId,
+			// The console names sessions by their canonical dotted address.
+			`${parsed.domainId}.${parsed.gatewayId}.${parsed.sessionId}`,
 			`${parsed.gatewayId}.${parsed.sessionId}`,
 			`${parsed.gatewayId}/${parsed.sessionId}`,
 			`gateway/${parsed.gatewayId}/${parsed.sessionId}`,
@@ -214,10 +216,7 @@ export function createInboxDeliveryPump(deps: InboxDeliveryPumpDeps) {
 			console.log(
 				`[console-op] ${op.data.kind} target=${target} -> target_mismatch (${parsed.domainId}/${parsed.gatewayId}/${parsed.sessionId})`,
 			);
-			return appendConsoleResult(address, parsed, row, deliveryEpoch, {
-				outcome: "failed",
-				reason: "target_mismatch",
-			});
+			return appendConsoleResult(address, parsed, row, deliveryEpoch, { ok: false, error: "target_mismatch" });
 		}
 		try {
 			const result = await deps.consoleDispatch(
