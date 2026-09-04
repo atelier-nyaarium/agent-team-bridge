@@ -100,6 +100,16 @@ class ConsoleClientOwnerOpsTest {
 		assertEquals("session:domain/gateway/spawn.session", ownerOps[4].op["address"]?.jsonPrimitive?.content)
 	}
 
+	// A session op addressed at a spawn-point has no inbox address to ride; refuse before posting.
+	@Test
+	fun aSessionOpOnASpawnPointIsRefusedBeforePosting() = runBlocking {
+		val failure = runCatching { client.wake("domain.gateway.spawn", opId = "wake-op") }.exceptionOrNull()
+
+		assertNotNull(failure)
+		assertTrue(failure!!.message!!.contains("spawn-point"))
+		assertTrue(sent.isEmpty())
+	}
+
 	// A read with no side effect costs no durable row.
 	@Test
 	fun peekRidesTheValuePath() = runBlocking {

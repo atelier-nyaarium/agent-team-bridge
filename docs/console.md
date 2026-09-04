@@ -42,6 +42,9 @@ single-flight, cadence and concurrency limits, and mutating-op deduplication.
 - `peekWithFallback` returns Docker logs before a pane exists. The result uses flat optional `kind`
   and `text`; a discriminated union does not work with the Kotlin wire model.
 - A wake with no capturable pane is reported as failed, so `/send` fails instead of waiting forever.
+- The **Wake** button sends the `wake` delivery op to the session's own address. The gateway resolves
+  it to the local `spawn.session`, bounds the launch like `create_session`, and answers `pending` past
+  the bound.
 - The reserved `host` slot requires `HOST_WS_TOKEN`.
 
 ## Armed goals

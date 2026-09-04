@@ -447,9 +447,33 @@ export function createConsoleDispatcher({
 				const applied = sessionStore?.rename(name, op.sessionLabel) ?? null;
 				return { renamed: applied !== null, sessionLabel: applied ?? undefined };
 			}
-			case "wake":
+			case "wake": {
 				if (!tryWakeTeam) throw new Error("wake is unavailable");
-				return tryWakeTeam(op.target);
+				const { name } = targets.requireLocalComposite(op.target, "wake");
+				// Bounded like create_session: a slow launch answers pending and finishes on its own.
+				let boundTimer: ReturnType<typeof setTimeout> | undefined;
+				const bound = new Promise<null>((resolve) => {
+					boundTimer = setTimeout(() => resolve(null), createSessionBoundMs);
+				});
+				const wake = tryWakeTeam(name);
+				const winner = await Promise.race([wake, bound]);
+				clearTimeout(boundTimer);
+				if (winner === null) {
+					void wake.catch(() => {});
+					return { ok: true, status: "pending" as const };
+				}
+				if (!winner.ok) {
+					const reason =
+						winner.error ??
+						(winner.errorKind === "disconnected"
+							? "the host is not connected"
+							: winner.errorKind === "timeout"
+								? "it did not come online in time"
+								: "unknown error");
+					throw new Error(`failed to wake "${name}": ${reason}`);
+				}
+				return winner;
+			}
 
 			case "cross_domain_listen": {
 				if (!crossDomain) throw new Error("cross-Domain linking is not available on this Gateway");

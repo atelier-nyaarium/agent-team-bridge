@@ -203,7 +203,8 @@ class ConsoleClient internal constructor(
 		?: error("No home Gateway admitted yet")
 
 	internal fun sessionAddressOf(target: String): String {
-		val parsed = parseTarget(target, "", defaultGatewayId()) as com.atelier_nyaarium.switchboard.proto.Address
+		val parsed = parseTarget(target, "", defaultGatewayId()) as? com.atelier_nyaarium.switchboard.proto.Address
+			?: error("\"$target\" names a spawn-point, not a session")
 		return "session:${parsed.domain}/${parsed.gateway}/${parsed.spawn}.${parsed.session}"
 	}
 

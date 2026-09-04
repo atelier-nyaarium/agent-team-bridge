@@ -216,29 +216,32 @@ internal class SessionOps(private val repo: ChatRepository) {
 		receipts.remove(team)
 	}
 
-	/** Wake an asleep session (the terminal-view Wake button): reattach its record and bring its
-	 * container/tmux back up. Reuses create_session's reattach-and-wake path keyed on the session's
-	 * own spawn + leaf, so an existing record resumes rather than a duplicate being minted.
-	 * Best-effort; a failure surfaces as a transient message. */
+	/** Wake an asleep session (the terminal-view Wake button): the session's own Gateway reattaches
+	 * its record and brings its container/tmux back up, so an existing record resumes rather than a
+	 * duplicate being minted. Best-effort; a failure surfaces as a transient message. */
 	fun wakeSession(team: String) {
 		val t = runCatching { parseTarget(team, repo.localDomain(), repo._state.value.homeGatewayId) }.getOrNull()
 		if (t !is Address) return
-		// The QUALIFIED spawn point, so the create routes to the session's own Gateway. Rebuilding a
-		val target = SpawnPoint.of(t.domain, t.gateway, t.spawn).canonical
+		// The QUALIFIED session address, so the op routes to the session's own Gateway.
+		val target = t.canonical
 		val opId = UUID.randomUUID().toString()
 		noteReceipt(team, ActionReceipt(opId, System.currentTimeMillis()))
 		// Republish immediately so the terminal's gate sees the receipt on THIS frame rather than on
-		// the next poll, and pull the session's own Gateway so the roster catches up in about a
+		// the next poll.
 		repo.drain.scope?.launch(Dispatchers.IO) { repo.presence.reapplyCachedTeams() }
 		repo.drain.scope?.launch(Dispatchers.IO) {
-			runCatchingCancellable {
-				repo.client().wake(target, opId)
-		}
+			// #region Hypothesis A: wake target address
+			DebugLog.log("Wake", "wake $team -> op target $target")
+			// #endregion
+			runCatchingCancellable { repo.client().wake(target, opId) }
 				.onSuccess {
 					settleReceipt(team, opId, ActionReceipt.Outcome.ACCEPTED)
 					repo.drain.scope?.launch(Dispatchers.IO) { repo.presence.refreshAfterAction() }
 				}
 				.onFailure { e ->
+					// #region Hypothesis A: wake target address
+					DebugLog.log("Wake", "wake $team failed: ${e.javaClass.simpleName}: ${e.message?.take(160)}")
+					// #endregion
 					// FAILED retires the receipt rather than letting it run out its TTL: the surface
 					// must stop saying "waking" the moment we know nothing is coming, and the reason
 					// is already on its way to the user as a transient message.
