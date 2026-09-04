@@ -121,10 +121,10 @@ class WireFixtureGenerator {
 		val ownerOp = wireJson.decodeFromJsonElement<OwnerOp>(ownerBody.jsonObject.getValue("ownerOp"))
 		return listOf(
 			transportCase("postOwnerOp", "ConsoleRouterTransport.buildOwnerOpRequest", client.transport.buildOwnerOpRequest("https://router.test", ownerOp), expect = "{\"outcome\":\"complete\"}"),
-			transportCase("apiReachable", "ConsoleClient.apiReachableRequest", client.apiReachableRequest("https://router.test"), expect = "{\"ok\":true,\"protocolVersion\":2}"),
-			transportCase("connectedGateways", "ConsoleClient.connectedGatewaysRequest", client.connectedGatewaysRequest("https://router.test"), expect = "{\"gateways\":[{\"gatewayId\":\"laptop\"}]}"),
-			transportCase("reach", "ConsoleClient.reachRequest", client.reachRequest("https://router.test"), expect = "{\"domainId\":\"fixture-domain\"}"),
-			transportCase("socketUpgrade", "ConsoleSocketClient.socketRequest", socketRequest("https://router.test", tokens.getValue("console").jsonPrimitive.content), "router.upgrade"),
+			transportCase("apiReachable", "ConsoleClient.buildHealthRequest", client.buildHealthRequest("https://router.test"), expect = "{\"ok\":true,\"protocolVersion\":2}"),
+			transportCase("connectedGateways", "ConsoleClient.buildConnectedGatewaysRequest", client.buildConnectedGatewaysRequest("https://router.test"), expect = "{\"gateways\":[{\"gatewayId\":\"laptop\"}]}"),
+			transportCase("reach", "ConsoleClient.buildReachRequest", client.buildReachRequest("https://router.test"), expect = "{\"domainId\":\"fixture-domain\"}"),
+			transportCase("socketUpgrade", "ConsoleSocketClient.buildSocketRequest", buildSocketRequest("https://router.test", tokens.getValue("console").jsonPrimitive.content), "router.upgrade"),
 		)
 	}
 

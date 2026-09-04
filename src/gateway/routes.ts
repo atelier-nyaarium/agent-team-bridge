@@ -203,7 +203,7 @@ export function createRoutesCarryOver(): RoutesCarryOver {
 
 export function createRoutes({
 	dataDir = process.env.DATA_DIR || "/app/data",
-	now,
+	now = () => Date.now(),
 	newId,
 	registry,
 	conversationRegistry,
@@ -994,7 +994,7 @@ export function createRoutes({
 						...(hasFiles ? { files, messageId } : {}),
 						...(riding ? { awareness: riding } : {}),
 						...(disposition ? { disposition } : {}),
-						enqueuedAt: Date.now(),
+						enqueuedAt: now(),
 					});
 					if (outcome === "refused") {
 						return jsonResponse(

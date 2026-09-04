@@ -36,7 +36,11 @@ export class CrossDomainShareState {
 	private state: CrossDomainShareFile;
 	private readonly onChange?: (reason: ShareChangeReason) => void;
 
-	constructor(dataDir: string, onChange?: (reason: ShareChangeReason) => void) {
+	constructor(
+		dataDir: string,
+		onChange?: (reason: ShareChangeReason) => void,
+		private readonly now: () => number = () => Date.now(),
+	) {
 		this.file = path.join(dataDir, XDOMAIN_SHARE_FILE);
 		this.state = this.read();
 		this.onChange = onChange;
@@ -59,7 +63,7 @@ export class CrossDomainShareState {
 
 	share(sessionTarget: string, target: CrossDomainShareTarget): void {
 		if (fenced()) return;
-		this.state = shareRule(this.state, sessionTarget, target, Date.now());
+		this.state = shareRule(this.state, sessionTarget, target, this.now());
 		this.persist();
 		this.onChange?.(target.kind === "domain" ? { kind: "domain", domainId: target.domainId } : { kind: "sweep" });
 	}
@@ -89,7 +93,7 @@ export class CrossDomainShareState {
 	touch(sessionTarget: string): void {
 		if (fenced()) return;
 		const before = this.state.shares;
-		this.state = touchShares(this.state, sessionTarget, Date.now());
+		this.state = touchShares(this.state, sessionTarget, this.now());
 		const changed = this.state.shares.some((s, i) => s.lastSeenAt !== before[i]?.lastSeenAt);
 		if (changed) this.persist();
 	}

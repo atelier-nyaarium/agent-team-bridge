@@ -598,11 +598,15 @@ export function composeGateway(deps: GatewayDeps): GatewayGraph {
 			},
 			restoredPlanes?.["linked-peers"],
 		);
-		const shareState = new CrossDomainShareState(federationDir, (reason) => {
-			if (reason.kind === "domain") slice.handlers?.presenceSource.recomputeDomain(reason.domainId);
-			else slice.handlers?.presenceSource.recomputeAll();
-			shareAttestor?.attest();
-		});
+		const shareState = new CrossDomainShareState(
+			federationDir,
+			(reason) => {
+				if (reason.kind === "domain") slice.handlers?.presenceSource.recomputeDomain(reason.domainId);
+				else slice.handlers?.presenceSource.recomputeAll();
+				shareAttestor?.attest();
+			},
+			now,
+		);
 		const federationIdentity = identity();
 		if (!deps.allowFixtureIdentity) refuseFixtureIdentity(federationIdentity.sign.pub, "gateway");
 		const replayDurable = new DurableStore(DATA_DIR, "replay-guard");
@@ -1312,7 +1316,7 @@ export function composeGateway(deps: GatewayDeps): GatewayGraph {
 			valueOp,
 			crossDomainHandshake,
 			presenceSource,
-			stop: presencePusher.stop,
+			stopPresencePushes: presencePusher.stop,
 		};
 	}
 
@@ -1446,7 +1450,7 @@ export function composeGateway(deps: GatewayDeps): GatewayGraph {
 		presenceReporter?.stop();
 		keyRequester?.stop();
 		sessionReporter.detach();
-		fed()?.handlers?.stop();
+		fed()?.handlers?.stopPresencePushes();
 		fed()?.routerClient.stop();
 	}
 

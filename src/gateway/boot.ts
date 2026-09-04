@@ -34,8 +34,7 @@ export interface RouterHandlers {
 	valueOp: (frame: unknown) => void;
 	crossDomainHandshake: (frame: unknown) => void;
 	presenceSource: CrossDomainPresenceSource;
-	/** Drops pending presence pushes and their retries. */
-	stop: () => void;
+	stopPresencePushes: () => void;
 }
 
 /** Everything FederationActive owns. Only domainMeta (the Router's first register reply) and

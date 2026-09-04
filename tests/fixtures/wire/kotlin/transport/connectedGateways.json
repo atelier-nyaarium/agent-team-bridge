@@ -1,6 +1,6 @@
 {
 	"producer": "kotlin",
-	"composer": "ConsoleClient.connectedGatewaysRequest",
+	"composer": "ConsoleClient.buildConnectedGatewaysRequest",
 	"case": "connectedGateways",
 	"clock": 1757000000000,
 	"inputs": {},

@@ -1,4 +1,5 @@
 // The entry points under Bun: Router, gateway, one console op through a fake host.
+// Ports and readiness come from the children's log lines.
 
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";

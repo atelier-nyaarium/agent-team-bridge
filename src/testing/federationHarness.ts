@@ -1,4 +1,4 @@
-// Real Router, real gateway graph, real pinned client; fakes only at the sockets.
+// Real Router, real gateway graph, real pinned client; the host and the sessions are fake sockets.
 
 import fs from "node:fs";
 import os from "node:os";

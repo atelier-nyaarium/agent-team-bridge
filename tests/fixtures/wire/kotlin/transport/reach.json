@@ -1,6 +1,6 @@
 {
 	"producer": "kotlin",
-	"composer": "ConsoleClient.reachRequest",
+	"composer": "ConsoleClient.buildReachRequest",
 	"case": "reach",
 	"clock": 1757000000000,
 	"inputs": {},

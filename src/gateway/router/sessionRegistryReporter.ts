@@ -12,7 +12,7 @@ export function createSessionRegistryReporter(deps: SessionRegistryReporterDeps)
 	const pendingTombstones = new Set<string>();
 	const sessionIdOf = (record: SessionRecord) => `${record.spawn}.${record.id}`;
 
-	function report(record: SessionRecord): void {
+	function upsert(record: SessionRecord): void {
 		const sessionId = sessionIdOf(record);
 		pendingTombstones.delete(sessionId);
 		known.add(sessionId);
@@ -67,7 +67,7 @@ export function createSessionRegistryReporter(deps: SessionRegistryReporterDeps)
 		};
 		store.create = (id, opts) => {
 			const record = create.call(deps.sessionStore, id, opts);
-			report(record);
+			upsert(record);
 			return record;
 		};
 		store.forget = (team) => {
@@ -99,7 +99,7 @@ export function createSessionRegistryReporter(deps: SessionRegistryReporterDeps)
 		for (const record of deps.sessionStore.list()) {
 			const sessionId = sessionIdOf(record);
 			current.add(sessionId);
-			report(record);
+			upsert(record);
 		}
 		const incarnation = deps.incarnation();
 		if (incarnation !== null) {
@@ -113,5 +113,5 @@ export function createSessionRegistryReporter(deps: SessionRegistryReporterDeps)
 		for (const sessionId of current) known.add(sessionId);
 	}
 
-	return { attach, detach, report, reconcile };
+	return { attach, detach, upsert, reconcile };
 }

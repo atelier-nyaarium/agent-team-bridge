@@ -513,86 +513,90 @@ here before the next lap starts.
 
 The wire is tested by the code that composes it.
 
-### Slices
+### Slices, as shipped (`1e0c7857`)
 
-1. **Compose seam.** Extract `composeGateway(deps)` from `startGateway`, construction order
-   preserved, returning `{ router, wsHandlers, close }`. `deps`: env-derived config (port, data
-   and federation dirs, tokens, gateway id, wake timeout), the host slot (`relayToHost`, host
-   socket), `now`, `newNonce`, `newId`. `close()` retains the reconciler and share-sweep interval
-   handles, clears the four retained ones, stops `routerClient`, `shareAttestor`, `awareness`, and
-   `PendingJobStore`, gives `createPresenceReporter` and `createKeyRequester` a stop, detaches
-   `sessionReporter`, and owns no process handlers; the adapter registers those.
-   `createConsolePushOps` takes its directory; `routerBootstrapOverride` takes its two values.
-   `startGateway` becomes: read env, `composeGateway`, signal handlers, the `Bun.serve` block
-   verbatim, keep the server handle, log the bound port.
-2. **Router seam.** `RouterServerParams.now` threaded into every constructor that already accepts
-   one; `verifyRegistrationClaim` and `GatewayBridgeParams` gain `now`; the three `RouterServer`
-   sites use it. Public `handle(request: Request): Promise<Response>` split from the private
-   `route` and `resolve` (health, per-path body caps, token check, dispatch, 404); `serve()` stays
-   the sole `IncomingMessage` adapter; the upgrade stays in `start()`. `main-federation` logs the
-   bound port.
-3. **Identity set.** One file, `tests/fixtures/identity/set.json`: `router.identity`,
-   `domain.{id, owner, isAdminDomain}`, `gateway.{id, identity, admission}`,
-   `console.{device, conversationId, identity, admission}`, `transport`, `content.{epoch, key}`.
-   Minted once by a generator; both admissions by `signAdmission`; epoch 1 by
-   `deriveContentKey`. Seeders: Router through `FileSecretStore`'s `SecretIO` with the identity
-   present before `init()`, then `saveDomain` and `flushDomain`; gateway through the five
-   federation files; phone through `Provisioning` and the `AppStateStore` keys. The harness and
-   both fixture generators read this one file.
-4. **Harness.** `startFederationHarness()` in the test helpers: temp dirs; real `RouterServer` on
-   port 0 seeded with the set; real gateway graph via `composeGateway` seeded with the set; real
-   `startRouterClient` over loopback with the Router's own `certFp`; `FakeHostDaemon` as an
-   injected `relayToHost` plus a fake host socket that registers `team: "host"`, answers
-   `host_op` by `reqId`, answers `wake` with `wake_result`, and sends a `catalog`; fake session
-   sockets through `createMockWs` with a `WsRegisterSchema` frame and the handshake answered
-   through `/respond`; a TS phone driver on `router.handle` signing with the console identity
-   from the set; `close()` in reverse order behind an awaited barrier. The harness ticks the
-   retained boot timers itself; sockets stay on real timers.
-5. **Scenarios.** The ten from Q7, plus replay-all and driver-equivalence. Each asserts the
-   phone-observable result and the durable effect (outbox, mailbox row, session store), never a
-   fake's call. The restart scenario recomposes over a retained data dir.
-6. **Minted fixtures, TS.** `scripts/gen-wire-fixtures.ts` drives the real TS composers with the
-   identity set and fixed clock, nonces, and ids (`ownerRowBody` and `sealOwnerRow`, the
-   `presenceReporter` frames, `boardClient` mutate, `sessionRegistryReporter`, `keyRequester`,
-   the `value_result` settlement, `registerGateway`) and writes
-   `tests/fixtures/wire/ts/<composer>/<case>.json` as `{producer, composer, case, clock, inputs,
-   frame or request, expect}`. `check:fixtures` regenerates into a temp tree and diffs.
-   `ProtocolFixturesTest` decodes every TS-minted answer.
-7. **Minted fixtures, Kotlin.** `OwnerOps` gains `now`, `newNonce`, `newOpId` (defaults kept,
-   remove-by Phase 4). A Gradle `generateWireFixtures` task on the test classpath drives the eight
-   deterministic composers plus `OwnerOps` with the identity set and writes
-   `tests/fixtures/wire/kotlin/...`; `kotlin-gate.sh` runs it and diffs before the unit tests.
-   Vitest feeds every Kotlin-minted request to `router.handle` with `now` pinned to the fixture
-   clock and asserts the declared verdict; `board_write` cases seed `board.meta` at their
-   `expectedRevision`. A transport family records `{method, path, headers, body}` for
-   `postOwnerOp`, `fetchReach`, `fetchConnectedGateways`, `apiReachable`, and the socket upgrade;
-   Kotlin asserts its built `Request` through `buildOwnerOpRequest` and the `openSocket` seam;
-   TS feeds the same record to `router.handle`. The generator instantiates the composer named in
-   each fixture and refuses hand-built JSON.
-8. **Wire vocabulary.** A `wire-vocabulary` module in `src/shared` is the sole TS declaration of
-   the Router paths, the console header and Bearer prefix, the dispatch-only owner-op kinds, the
-   signing tags, the federation floor and version, and the nonce lengths. `codegen-kotlin` emits
-   `Protocol.Wire` from it and from the Zod literals (`ConsoleOp` kinds, socket frame kinds, key
-   op kinds, `gateway_value`, `planes_read`). `ConsoleRouterTransport`, `ConsoleClient`,
-   `ConsoleSocketClient`, `ConsoleHttp`, and `DebugLog` read `Protocol.Wire`. A residue test on
-   the `aad-kinds` pattern rejects the literals anywhere else on both runtimes.
-9. **Bun boot smoke.** `scripts/check-boot-runtime.ts` under bun: temp dirs; Router on port 0;
-   read `/health` for port and fingerprint; seed both from the identity set; gateway on port 0;
-   poll `/health`; fake host over real `ws` to `/bridge`; wait for registration; post the
-   console-signed `list_dirs`; assert the host's reply; SIGTERM gateway then Router; bounded
-   kill. `check:boot` in `package.json`, documented beside `check:pinning`.
+1. **Compose seam.** `composeGateway(deps)` holds the whole graph and returns `{ router,
+   wsHandlers, close }` plus the stores and clients the harness reads (`GatewayGraph`).
+   `GatewayDeps` is `{ config, now, randomBytes, openEnrollTls, allowFixtureIdentity }`; ids and
+   nonces derive from `randomBytes`. `close()` flushes, clears every retained timer, stops the
+   reporters, the attestor, the awareness bank, the presence pusher, the key requester, the routes,
+   and the Router client, and detaches `sessionReporter`. `startGateway` reads the environment,
+   composes, registers the signal handlers, and keeps the `Bun.serve` handle to log the bound
+   port. `routerBootstrapOverride(host, port)` is pure. `routes.ts` keeps an environment fallback
+   for `dataDir` until Phase 2 kills its bare callers.
+2. **Router seam.** `RouterServerParams.now` reaches every time-aware constructor,
+   `GatewayBridge`, and `verifyRegistrationClaim`. Public `handle(request: Request)` shares
+   `preflight` and `dispatch` with the `IncomingMessage` adapter; `serve()` and the upgrade stay in
+   `start()`. `main-federation` logs the bound port and refuses the fixture identity unless
+   `ALLOW_FIXTURE_IDENTITY=1`.
+3. **Identity set.** `tests/fixtures/identity/set.json`, minted by `scripts/gen-identity-set.ts`:
+   `router.identity`, `domain.{id, owner, isAdminDomain}`, `gateway.{id, identity, admission}`,
+   `console.{device, conversationId, identity, admission}`, `tokens.{console, federation, host}`,
+   `content.{epoch, key}`. The Router URL and certificate fingerprint are runtime values.
+   Seeders in `src/testing/identitySet.ts`: `seedRouter` through `FileSecretStore`, `seedGateway`
+   through the federation files. Kotlin reads the same file as a test resource and builds its
+   `Provisioning` and identities from it. `src/shared/fixture-identity.ts` names the four fixture
+   signing keys; the shipping entry points refuse them.
+4. **Harness.** `startFederationHarness()`: temp dirs, a real `RouterServer` on port 0, a real
+   gateway graph over loopback with the Router's own `certFp`, `attachFakeHost` and
+   `attachFakeSession` at the gateway's own WebSocket handlers, a console socket against the
+   Router's TLS listener, and a TS phone driver on `router.handle`. Real timers throughout;
+   scenarios poll with `waitFor`. `restartGateway` recomposes over the retained directories;
+   `close()` is host, gateway, Router in turn, and a failed start removes the temp root.
+5. **Scenarios.** Fourteen in `federation-harness.test.ts`, each self-contained through lazy
+   shared sessions: list_dirs through the host; an unknown path answers 404; send and reply; host
+   create_session and notify_human by poll; presence projection; devcontainer wake; phone
+   board_write into session awareness; session board_op; presence plane push over a socket;
+   empty keyring grant and retry; peek; presence row after a close; notify_human by socket;
+   restart with a pending reply. Presence baseline and delta frames are TS fixtures fed to the
+   real Router. `wire-fixtures-kotlin.test.ts` holds replay-all and driver-equivalence.
+6. **Minted fixtures, TS.** `scripts/gen-wire-fixtures.ts` drives `sealOwnerRow`, the presence
+   reporter, `createSessionRegistryReporter` over a real `SessionStore`, `createBoardClient`,
+   `createKeyRequester`, `composeValueResult`, and `registerFrame` with `buildRegisterAuth`,
+   under the set, the fixed clock, and a per-case draw counter. Files are
+   `tests/fixtures/wire/ts/<composer>/<case>.json` with `{producer, composer, case, clock, inputs,
+   frame, phone?, expect}`. `check:fixtures` regenerates into a temp tree and diffs.
+   `wire-fixtures-ts.test.ts` feeds every frame through the live pinned link and reads the owner
+   rows back; `WireFixturesDecodeTest.kt` decodes and opens every fixture with a `phone` block.
+7. **Minted fixtures, Kotlin.** `OwnerOps` takes `now`, `newNonce`, `newOpId` behind a dated
+   shim. `WireFixtureGenerator.kt` runs under `./gradlew :app:generateWireFixtures` and, in
+   ordinary test runs, asserts the committed files byte for byte. Corpus: `OwnerOps.sign`,
+   `KeyDeliveryOps.requestMissing` and `onKeyGrant`, `BoardRouterWriter.write` (through the
+   `BoardSealing` nonce seam), `CursorTranslationOps.onWelcome`, the four `PollDrain` ops through
+   `ConsoleClient`, and the transport family from `buildOwnerOpRequest`, `buildHealthRequest`,
+   `buildConnectedGatewaysRequest`, `buildReachRequest`, `buildSocketRequest`. The generator
+   drives the real composers; no request or op JSON is hand-built. `kotlin-gate.sh` regenerates
+   into a fresh directory and diffs. Vitest replays every request through `router.handle` at the
+   fixture clock, asserts the declared verdict, replays the socket upgrade against the real
+   listener, and reproduces every signed op through the TS driver: the same fields and the same
+   signature, which covers the canonical signing bytes.
+8. **Wire vocabulary.** `src/shared/wire-vocabulary.ts` declares the Router paths, the console
+   header and Bearer prefix, the owner-op kinds the Router dispatches, the signing tags, and the
+   nonce lengths; the federation floor and version stay in `router-protocol.ts`. `codegen-kotlin`
+   emits `Protocol.Wire` with `ConsoleOpKind`, `SocketFrame`, and `KeyOpKind` from the Zod
+   literals. Every Kotlin consumer reads the constants; `wire-vocabulary-residue.test.ts` scans
+   every main-source Kotlin file and every runtime TS file.
+9. **Bun boot smoke.** `scripts/check-boot-runtime.ts`: temp dirs; Router on port 0, port and
+   fingerprint from its log lines; seed both from the set; gateway on port 0; `/health`; fake host
+   over real `ws`; registration; the console-signed `list_dirs` over the gateway's `pinnedDial`;
+   SIGTERM both; bounded kill. `check:boot` beside `check:pinning`.
 
 ### Bug classes
 
 - Gateway-to-Router disagreement: every frame kind minted by its composer and parsed by the real
   peer; a `type` field the sender never writes is red before ship.
-- Composition residue: a dropped constructor line fails the first scenario; `close()` makes a
-  leaked timer a test failure.
+- Composition residue: a dropped constructor line fails the first scenario; `close()` lists
+  every retained timer in one place.
 - Phone decoding drift: Kotlin decodes what TS mints, not a hand-written sample.
 - The two Kotlin composer defects: a UUID nonce or a masked header is refused by the real intake
   in vitest.
 - Path and header drift: one declaration, generated twin, residue-fenced.
 - Classes 3 and 5 gain a bench; they close in Phase 4.
+- Clock defaults, patched three times in one lap (`routes.ts`, `CrossDomainShareState`,
+  `consoleSockets.ts`): a per-module optional `now` whose default captures `Date.now` by
+  reference defeats fake timers, and a module that takes `now` can still read the wall clock on
+  one path. The mechanism is the per-module default; the fix is Phase 5's ambient context and its
+  residue fence.
 
 ## Phase 3 - Phone repository seams
 

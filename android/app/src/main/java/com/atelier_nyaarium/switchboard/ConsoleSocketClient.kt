@@ -97,7 +97,7 @@ internal class ConsoleSocketClient(
 		val uri = java.net.URI(base)
 		check(uri.scheme.equals("https", ignoreCase = true)) { "console socket requires an https base" }
 		val ownerOp = signHello() ?: error("cannot sign console hello")
-		val request = socketRequest(base, transport.appToken)
+		val request = buildSocketRequest(base, transport.appToken)
 		socket = openSocket(transport.clientFor(base), request, object : WebSocketListener() {
 				override fun onOpen(webSocket: WebSocket, response: Response) {
 					lastPongAt = now()
@@ -205,7 +205,7 @@ internal class ConsoleSocketClient(
 	}
 }
 
-internal fun socketRequest(base: String, appToken: String): Request =
+internal fun buildSocketRequest(base: String, appToken: String): Request =
 	Request.Builder()
 		.url(base.trimEnd('/') + Protocol.Wire.ROUTER_PATH_CONSOLE)
 		.header(Protocol.Wire.CONSOLE_TOKEN_HEADER, Protocol.Wire.BEARER_PREFIX + appToken)

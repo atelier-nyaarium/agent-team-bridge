@@ -66,6 +66,7 @@ export interface ConsoleHelloAnswer {
 }
 
 export function createConsoleSockets(deps: ConsoleSocketsDeps) {
+	const now = deps.now ?? (() => Date.now());
 	const bound = new Map<ConsoleSocket, Bound>();
 	const pending = new Map<ConsoleSocket, ReturnType<typeof setTimeout>>();
 	// Distinguishes reconnects from replaced sockets.
@@ -165,11 +166,7 @@ export function createConsoleSockets(deps: ConsoleSocketsDeps) {
 		});
 		if (!planesOnly) drain(socket, at, consumer.cursor);
 		if (planesOnly) {
-			const rows = deps.readOwnerKeyRows(
-				identity.domainId,
-				identity.signerSignPub,
-				(deps.now?.() ?? Date.now()) - 24 * 60 * 60 * 1000,
-			);
+			const rows = deps.readOwnerKeyRows(identity.domainId, identity.signerSignPub, now() - 24 * 60 * 60 * 1000);
 			if (!Array.isArray(rows)) {
 				send(socket, { type: "refused", reason: "durability_uncertain" });
 				return;

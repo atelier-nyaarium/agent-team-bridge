@@ -269,7 +269,7 @@ internal suspend fun sendValueOp(gatewayId: String, op: ConsoleOp, opId: String 
 	suspend fun apiReachable(): String {
 		// Only the preflight may fail over.
 		val code = transport.withReachFailover { base ->
-			val req = apiReachableRequest(base)
+			val req = buildHealthRequest(base)
 			transport.clientFor(base).newCall(req).execute().use { resp ->
 				val text = resp.body?.string().orEmpty()
 				if (!resp.isSuccessful) error("HTTP ${resp.code}: ${text.take(300)}")
@@ -283,7 +283,7 @@ internal suspend fun sendValueOp(gatewayId: String, op: ConsoleOp, opId: String 
 
 	/** Connected Gateways, or unknown. */
 	fun fetchConnectedGateways(): List<String>? {
-		val req = connectedGatewaysRequest(transport.proxyBase)
+		val req = buildConnectedGatewaysRequest(transport.proxyBase)
 		transport.client.newCall(req).execute().use { resp ->
 			if (!resp.isSuccessful) return null
 			val body = resp.body?.string() ?: return null
@@ -296,7 +296,7 @@ internal suspend fun sendValueOp(gatewayId: String, op: ConsoleOp, opId: String 
 
 	/** Advertised Router addresses, and this console's Domain when the signer is known. */
 	private fun fetchReach(): RouterReach? {
-		val req = reachRequest(transport.proxyBase)
+		val req = buildReachRequest(transport.proxyBase)
 		transport.client.newCall(req).execute().use { resp ->
 			if (!resp.isSuccessful) return null
 			val reach = RouterReach.decode(resp.body?.string())
@@ -305,18 +305,18 @@ internal suspend fun sendValueOp(gatewayId: String, op: ConsoleOp, opId: String 
 		}
 	}
 
-	internal fun apiReachableRequest(base: String): Request = Request.Builder()
+	internal fun buildHealthRequest(base: String): Request = Request.Builder()
 		.url(base + Protocol.Wire.ROUTER_PATH_HEALTH)
 		.get()
 		.build()
 
-	internal fun connectedGatewaysRequest(base: String): Request = Request.Builder()
+	internal fun buildConnectedGatewaysRequest(base: String): Request = Request.Builder()
 		.url(base + Protocol.Wire.ROUTER_PATH_CONSOLE)
 		.header(Protocol.Wire.CONSOLE_TOKEN_HEADER, Protocol.Wire.BEARER_PREFIX + transport.prov.appToken)
 		.post("""{"gateways":{}}""".toRequestBody(ConsoleHttp.JSON))
 		.build()
 
-	internal fun reachRequest(base: String): Request {
+	internal fun buildReachRequest(base: String): Request {
 		val signer = (transport.store.loadIdentity() as? IdentityLoad.Loaded)?.identity?.sign?.pub
 		val body = buildJsonObject {
 			put("reach", buildJsonObject { if (signer != null) put("signerSignPub", signer) })

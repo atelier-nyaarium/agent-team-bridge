@@ -1,6 +1,6 @@
 {
 	"producer": "kotlin",
-	"composer": "ConsoleClient.apiReachableRequest",
+	"composer": "ConsoleClient.buildHealthRequest",
 	"case": "apiReachable",
 	"clock": 1757000000000,
 	"inputs": {},

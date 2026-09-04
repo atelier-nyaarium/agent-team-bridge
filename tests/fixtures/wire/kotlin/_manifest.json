@@ -63,25 +63,25 @@
 		},
 		{
 			"file": "transport/apiReachable.json",
-			"composer": "ConsoleClient.apiReachableRequest",
+			"composer": "ConsoleClient.buildHealthRequest",
 			"case": "apiReachable",
 			"peer": "router.handle"
 		},
 		{
 			"file": "transport/connectedGateways.json",
-			"composer": "ConsoleClient.connectedGatewaysRequest",
+			"composer": "ConsoleClient.buildConnectedGatewaysRequest",
 			"case": "connectedGateways",
 			"peer": "router.handle"
 		},
 		{
 			"file": "transport/reach.json",
-			"composer": "ConsoleClient.reachRequest",
+			"composer": "ConsoleClient.buildReachRequest",
 			"case": "reach",
 			"peer": "router.handle"
 		},
 		{
 			"file": "transport/socketUpgrade.json",
-			"composer": "ConsoleSocketClient.socketRequest",
+			"composer": "ConsoleSocketClient.buildSocketRequest",
 			"case": "socketUpgrade",
 			"peer": "router.upgrade"
 		}
