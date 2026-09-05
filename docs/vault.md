@@ -202,9 +202,10 @@ session holds a binding token. `vaultRun.ts` is the child run.
   past its deadline are dropped. A restart drops expired ones. The `vault:retract` action drops one
   by id.
 - **One notification per pending request:** swipe denies; tap opens the sheet, where every answer
-  lives. The sheet answers with `vault_answer` through the gateway value op, and Deny opens a
-  `Steer` field whose note rides the refusal. Save this for next time puts a typed value as a new
-  entry after the answer.
+  lives. The sheet answers with `vault_answer` through the gateway value op. The footer is Deny as
+  text and a split button: `Approve` answers once, and the arrow holds 30 min and This session; for
+  a typed value, `Send`, with Send and save for next time behind the arrow, which stores the value
+  under the shape as its title. Deny opens a `Steer` field whose note rides the refusal.
 - Vault approvals, under Settings and Security: Off, Every approval, 30-minute unlock.
   `ApprovalGate` is the one gate: it runs before an entry approval, a reveal, and a save that
   changes a stored value; a typed value never prompts. Tightening the policy is free, loosening it

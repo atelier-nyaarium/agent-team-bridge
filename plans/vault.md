@@ -582,7 +582,11 @@ Deny steers. Tapping Deny swaps the approve row for a `Steer` field and `Back` a
 second Deny sends the note, empty or not. The note is an optional field on `vault_answer` and on
 the refused answer, so it reaches the session in the `vault_run` result it was waiting on, and the
 helper prints it to stderr. The notification lost its Once, 30 min, and Deny buttons: a tap opens
-the sheet, where every answer lives, and a swipe still denies.
+the sheet, where every answer lives, and a swipe still denies. The four wrapping pills became one
+row: Deny as a text button, then a split button whose main half is `Approve` (once) or `Send`, and
+whose arrow holds 30 min and This session, or Send and save for next time. The save checkbox and
+its title field went with it; a saved typed value takes the shape as its title, which is what the
+helper matches.
 
 ### Deferred by the owner: the shape stops at the first metacharacter
 

@@ -1,18 +1,23 @@
 package com.atelier_nyaarium.switchboard.vault
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Checkbox
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -64,8 +69,6 @@ fun VaultRequestSheet(
 	val entry = remember(revision, request.entryId) { request.entryId?.let { repo.vaultOps.view(it) } }
 	var typed by remember(requestId) { mutableStateOf("") }
 	var shown by remember(requestId) { mutableStateOf(false) }
-	var saveAsEntry by remember(requestId) { mutableStateOf(false) }
-	var saveTitle by remember(requestId) { mutableStateOf(request.shape) }
 	// Deny opens the steering field; the second Deny sends it, empty or not.
 	var steering by remember(requestId) { mutableStateOf(false) }
 	var note by remember(requestId) { mutableStateOf("") }
@@ -85,7 +88,8 @@ fun VaultRequestSheet(
 	val expired = request.deadlineAt <= now
 	val expiry = expiresIn(request.deadlineAt, now)
 
-	fun answer(decision: String) {
+	/** A saved typed value takes the shape as its title, which is what the helper matches next time. */
+	fun answer(decision: String, save: Boolean = false) {
 		busy = true
 		scope.launch {
 			val approving = decision != VAULT_DECISION_DENY
@@ -96,10 +100,10 @@ fun VaultRequestSheet(
 			}
 			val value = if (approving && typedRequest) typed else null
 			val ok = repo.vaultOps.answer(request, decision, value, if (approving) null else note)
-			if (ok && approving && typedRequest && saveAsEntry && saveTitle.isNotBlank()) {
+			if (ok && approving && typedRequest && save) {
 				// The saved entry is scoped to the gateway that asked.
 				val gateway = runCatching { gatewayOf(request.team) }.getOrNull()
-				repo.vaultOps.save(VaultDraft(publicTitle = saveTitle, value = typed, gateways = listOfNotNull(gateway)))
+				repo.vaultOps.save(VaultDraft(publicTitle = request.shape, value = typed, gateways = listOfNotNull(gateway)))
 			}
 			busy = false
 			if (ok) onClose()
@@ -142,8 +146,8 @@ fun VaultRequestSheet(
 						modifier = Modifier.fillMaxWidth().focusRequester(steerFocus),
 					)
 					LaunchedEffect(Unit) { steerFocus.requestFocus() }
-					Row(modifier = Modifier.fillMaxWidth()) {
-						OutlinedButton(onClick = hapticClick { steering = false }, enabled = !busy) { Text("Back") }
+					Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+						TextButton(onClick = hapticClick { steering = false }, enabled = !busy) { Text("Back") }
 						Spacer(Modifier.weight(1f))
 						Button(
 							onClick = hapticClick { answer(VAULT_DECISION_DENY) },
@@ -167,36 +171,58 @@ fun VaultRequestSheet(
 						trailingIcon = { TextButton(onClick = { shown = !shown }) { Text(if (shown) "Hide" else "Show") } },
 						modifier = Modifier.fillMaxWidth(),
 					)
-					Row(verticalAlignment = Alignment.CenterVertically) {
-						Checkbox(checked = saveAsEntry, onCheckedChange = { saveAsEntry = it })
-						Text("Save this for next time", style = MaterialTheme.typography.bodyMedium)
-					}
-					if (saveAsEntry) {
-						OutlinedTextField(
-							value = saveTitle,
-							onValueChange = { saveTitle = it },
-							singleLine = true,
-							label = { Text("Title") },
-							modifier = Modifier.fillMaxWidth(),
+				}
+				Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+					TextButton(onClick = hapticClick { steering = true }, enabled = !busy) { Text("Deny") }
+					Spacer(Modifier.weight(1f))
+					if (typedRequest) {
+						SplitAnswer(
+							label = "Send",
+							enabled = !busy && !expired && typed.isNotEmpty(),
+							onMain = { answer(VAULT_DECISION_ONCE) },
+							more = listOf("Send and save for next time" to { answer(VAULT_DECISION_ONCE, save = true) }),
+						)
+					} else {
+						SplitAnswer(
+							label = "Approve",
+							enabled = !busy && !expired,
+							onMain = { answer(VAULT_DECISION_ONCE) },
+							more = listOf(
+								"30 min" to { answer(VAULT_DECISION_WINDOW) },
+								"This session" to { answer(VAULT_DECISION_SESSION) },
+							),
 						)
 					}
 				}
-				FlowRow(
-					horizontalArrangement = Arrangement.spacedBy(8.dp),
-					verticalArrangement = Arrangement.spacedBy(8.dp),
-					modifier = Modifier.fillMaxWidth(),
-				) {
-					val open = !busy && !expired
-					OutlinedButton(onClick = hapticClick { steering = true }, enabled = !busy) { Text("Deny") }
-					if (typedRequest) {
-						Button(onClick = hapticClick { answer(VAULT_DECISION_ONCE) }, enabled = open && typed.isNotEmpty()) {
-							Text("Send")
-						}
-					} else {
-						Button(onClick = hapticClick { answer(VAULT_DECISION_ONCE) }, enabled = open) { Text("Once") }
-						Button(onClick = hapticClick { answer(VAULT_DECISION_WINDOW) }, enabled = open) { Text("30 min") }
-						Button(onClick = hapticClick { answer(VAULT_DECISION_SESSION) }, enabled = open) { Text("This session") }
-					}
+			}
+		}
+	}
+}
+
+/** The usual answer as the button; the rest behind the arrow. */
+@Composable
+private fun SplitAnswer(label: String, enabled: Boolean, onMain: () -> Unit, more: List<Pair<String, () -> Unit>>) {
+	var open by remember { mutableStateOf(false) }
+	Row(verticalAlignment = Alignment.CenterVertically) {
+		Button(
+			onClick = hapticClick(onMain),
+			enabled = enabled,
+			shape = RoundedCornerShape(topStartPercent = 50, topEndPercent = 15, bottomEndPercent = 15, bottomStartPercent = 50),
+		) { Text(label) }
+		Spacer(Modifier.width(2.dp))
+		Box {
+			Button(
+				onClick = hapticClick { open = true },
+				enabled = enabled,
+				shape = RoundedCornerShape(topStartPercent = 15, topEndPercent = 50, bottomEndPercent = 50, bottomStartPercent = 15),
+				contentPadding = PaddingValues(horizontal = 10.dp),
+			) { Icon(Icons.Default.ArrowDropDown, contentDescription = "More") }
+			DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+				for ((text, act) in more) {
+					DropdownMenuItem(text = { Text(text) }, onClick = {
+						open = false
+						act()
+					})
 				}
 			}
 		}
