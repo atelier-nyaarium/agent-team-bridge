@@ -521,6 +521,8 @@ cover an askpass child.
   and a capture mode that creates an entry (Q3, Q7). Bounded by `AGENT_WAIT_BUDGET_MS`.
 - The MCP server spawns the child, scrubs stdout and stderr for the raw bytes, holds output for
   collect, deletes a file shape on exit.
+- A tool that gives up on a pending request withdraws it through `/vault/withdraw`, as the helper
+  does, so the phone's row is retracted with it.
 
 ## Phase 6 - Docs, residue, audit
 
@@ -588,3 +590,29 @@ Collected after Phase 3.
   the paths went absolute.
 - Plane versions are noted by the drain host through two roads (the socket push and the poll tick),
   so any rule about acknowledgement has to live in the repository's `applyPlane`, not the drain.
+
+Collected after Phase 4.
+
+- The owner outbox retires a row the Router refuses (inbox capacity), so a `retract` can be lost
+  and the phone keeps that request until its deadline. Pre-existing in `consolePushOps.ts`, shared
+  by every owner row.
+- The principal kind rides on a string prefix: `isHelperTarget` in `requests.ts`, and the phone's
+  `VaultState` and `VaultScreen` test the same `helper.` prefix. The routes hold a typed principal
+  and discard it when they mint the target. A `kind` field on the request and the grant would end
+  the prefix checks on both runtimes.
+- The helper classifies the prompt (`secretPrompt`) and never sends it; the phone sees only the
+  command line. A prompt kind on the askpass request and the request row would let the phone show
+  what was asked.
+- Grant ids and helper token ids both come from `ambient.newId()`, and `vault_revoke` tries grants
+  first; nothing namespaces them.
+- The installer copies `dist/main-vault-askpass.js`, which only a release build writes into the
+  tracked `dist/`. Verifying the helper before a release means bundling to a scratch directory and
+  placing the file by hand.
+- `VaultPlugin` decodes each action's payload with the same five lines per action type; the plugin
+  host could take a serializer beside the handler.
+- The installer's first wrapper quoted the bun home inside a `${:-}` expansion, which bash keeps
+  as literal quotes; the mistake surfaced only on the installed file, since no test renders the
+  wrapper.
+- `PlaybackOpsTest.enqueueOrderSurvivesPause` flaked once more in the Kotlin gate, clean on rerun.
+- `bun build` under `--target node` bundles `zod` into the helper for one schema parse; the helper
+  is 0.29 MB where a hand parse would be a few lines.
