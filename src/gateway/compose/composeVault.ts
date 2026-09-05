@@ -137,7 +137,7 @@ export function composeVault(deps: VaultStageDeps): VaultStage {
 	return {
 		routes,
 		console: {
-			answer: (requestId, decision, value) => requests.answer(requestId, decision, value),
+			answer: (requestId, decision, value, note) => requests.answer(requestId, decision, value, note),
 			grants: () => ({ grants: decisions.list(ambient.now()) }),
 			revoke: (grantId) => {
 				if (decisions.revoke(grantId)) return { revoked: true };

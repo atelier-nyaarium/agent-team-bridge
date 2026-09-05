@@ -60,8 +60,10 @@ describe("vault requests", () => {
 		});
 		const expired = requests.open({ kind: "typed", operation: "sudo apt install foo", sessionTarget: "helper.h1" });
 		if (denied.kind !== "opened" || expired.kind !== "opened") throw new Error("the requests did not open");
-		expect(requests.answer(denied.request.requestId, "deny")).toEqual({ ok: true });
-		await expect(denied.answer).resolves.toEqual({ kind: "refused" });
+		expect(requests.answer(denied.request.requestId, "deny", undefined, "use the deploy user")).toEqual({
+			ok: true,
+		});
+		await expect(denied.answer).resolves.toEqual({ kind: "refused", note: "use the deploy user" });
 
 		await ambient.advance(VAULT_REQUEST_DEADLINE_MS + 1);
 		await expect(expired.answer).resolves.toEqual({ kind: "refused" });

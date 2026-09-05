@@ -32,7 +32,7 @@ export interface AskpassPorts {
 
 export type AskpassOutcome =
 	| { kind: "value"; value: string; from: "phone" | "tty" }
-	| { kind: "refused" }
+	| { kind: "refused"; note?: string }
 	| { kind: "unreachable" }
 	| { kind: "no-answer" };
 
@@ -105,7 +105,8 @@ async function askPhone(
 		}
 		if (answer === null) return { kind: "unreachable" };
 		if (answer.outcome === "approved") return { kind: "value", value: answer.value, from: "phone" };
-		if (answer.outcome === "refused") return { kind: "refused" };
+		if (answer.outcome === "refused")
+			return answer.note ? { kind: "refused", note: answer.note } : { kind: "refused" };
 		pendingId = answer.requestId;
 		if (now() >= answer.deadlineAt || now() >= deadlineAt) return { kind: "no-answer" };
 		answer = await gateway.collect(answer.requestId, collectMs, signal);

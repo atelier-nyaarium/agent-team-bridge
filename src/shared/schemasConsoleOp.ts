@@ -125,12 +125,13 @@ export const ConsoleOpSchema = z
 			kind: z.literal("cross_domain_untrust"),
 			ownerSignPub: z.string().min(1).max(128),
 		}),
-		// Typed values bind request IDs.
+		// Typed values bind request IDs. A note on a deny steers the asker.
 		z.object({
 			kind: z.literal("vault_answer"),
 			requestId: z.string().min(1).max(128),
 			decision: VaultDecisionSchema,
 			value: ContentEnvelopeSchema.optional(),
+			note: z.string().max(2048).optional(),
 		}),
 		z.object({ kind: z.literal("vault_grants") }),
 		z.object({ kind: z.literal("vault_revoke"), grantId: z.string().min(1).max(128) }),

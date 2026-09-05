@@ -102,7 +102,12 @@ export interface ConsoleHandlerDeps {
 }
 
 export interface VaultConsoleHandlers {
-	answer: (requestId: string, decision: VaultDecision, value?: ContentEnvelope) => { ok: boolean; reason?: string };
+	answer: (
+		requestId: string,
+		decision: VaultDecision,
+		value?: ContentEnvelope,
+		note?: string,
+	) => { ok: boolean; reason?: string };
 	grants: () => { grants: VaultGrant[] };
 	revoke: (grantId: string) => { revoked: boolean };
 }

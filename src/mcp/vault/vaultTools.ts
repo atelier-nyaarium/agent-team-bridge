@@ -126,7 +126,7 @@ Answers:
 - \`ran\`: exit code or the signal that ended it, stdout, and stderr, with the value's bytes replaced by \`[vault]\`. Each stream is capped at ${OUTPUT_CAP_CHARS} characters; \`truncated\` says when.
 - \`pending\`: the owner has not answered yet. \`jobId\` is the request id. \`vault_collect\` waits again; \`vault_withdraw\` gives up.
 - \`running\`: the command outlived the wait. \`jobId\` names it in this process. \`vault_collect\` waits for it.
-- \`refused\`: the owner declined, the request expired, or this session may not use the entry.
+- \`refused\`: the owner declined, the request expired, or this session may not use the entry. A \`note\` is the owner steering you: do what it says instead.
 
 The wait is capped at ${WAIT_SECONDS} seconds per call. Jobs live in this process only; a lost answer is not recoverable, but a repeated \`vault_run\` with the same entry and command joins the request still open for it.
 
@@ -158,7 +158,11 @@ function refusalOf(error: unknown, action: string): VaultToolAnswer {
 		const parsed = JSON.parse(body) as unknown;
 		const answer = VaultValueAnswerSchema.safeParse(parsed);
 		if (answer.success && answer.data.outcome === "refused")
-			return { outcome: "refused", reason: answer.data.reason };
+			return {
+				outcome: "refused",
+				reason: answer.data.reason,
+				...(answer.data.note ? { note: answer.data.note } : {}),
+			};
 		const gateway = (parsed as { error?: unknown } | null)?.error;
 		if (typeof gateway === "string") return { outcome: "refused", reason: `${action}: ${gateway}` };
 	} catch {}
@@ -229,7 +233,11 @@ export function createVaultTools(deps: VaultToolDeps) {
 		}
 		if (parsed.data.outcome === "refused") {
 			jobs.delete(jobId);
-			return { outcome: "refused", reason: parsed.data.reason };
+			return {
+				outcome: "refused",
+				reason: parsed.data.reason,
+				...(parsed.data.note ? { note: parsed.data.note } : {}),
+			};
 		}
 		if (parsed.data.outcome === "pending") {
 			const requestId = parsed.data.requestId;

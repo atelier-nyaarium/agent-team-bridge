@@ -140,7 +140,9 @@ async function main(): Promise<number> {
 		},
 	);
 	if (outcome.kind !== "value") {
-		console.error(`[vault-askpass] no value: ${outcome.kind}`);
+		// The owner's note is steering; it goes where the caller's own output goes.
+		const note = outcome.kind === "refused" && outcome.note ? `: ${outcome.note}` : "";
+		console.error(`[vault-askpass] no value: ${outcome.kind}${note}`);
 		return 1;
 	}
 	process.stdout.write(`${outcome.value}\n`);

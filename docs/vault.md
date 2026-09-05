@@ -53,7 +53,9 @@ and the delta list are in `docs/federation.md` under Owner state.
   lived in the process that died.
 - The `vault_answer` value op carries the decision and, for a typed request, the value sealed to the
   request id. A typed answer settles as `once` whatever tier was named. Deny and the deadline refuse
-  alike. An unknown or settled request answers `request expired`.
+  alike. A deny may carry a `note`, the owner's steering, which rides the refused answer to the
+  session's tool result and to the helper's stderr. An unknown or settled request answers
+  `request expired`.
 - An approval on an entry request also records the grant. The answer waits for its collector until
   the deadline, and the first collector takes it.
 - A session's end refuses its open requests and drops its grants.

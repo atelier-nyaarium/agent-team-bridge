@@ -578,6 +578,11 @@ counts a repeat under the same asker as the same run, window or not, and says `W
 3.` for sudo and `Not accepted. Try 2.` otherwise; without an asker the command-and-window guess
 stays for an older helper.
 
+Deny steers. Tapping Deny swaps the approve row for a `Steer` field and `Back` and `Deny`; the
+second Deny sends the note, empty or not. The note is an optional field on `vault_answer` and on
+the refused answer, so it reaches the session in the `vault_run` result it was waiting on, and the
+helper prints it to stderr. The notification's Deny stays bare.
+
 ### Deferred by the owner: the shape stops at the first metacharacter
 
 `operationShape` takes the program and its first argument, so a shell pipeline collapses to its

@@ -185,7 +185,7 @@ export const VaultApprovedDecisionSchema = z.enum(["once", "window", "session"])
 /** What use, collect, and askpass answer: pending hands back the request; deny and timeout both refuse. */
 export const VaultValueAnswerSchema = z.discriminatedUnion("outcome", [
 	z.object({ outcome: z.literal("approved"), decision: VaultApprovedDecisionSchema, value: z.string() }),
-	z.object({ outcome: z.literal("refused"), reason: z.string() }),
+	z.object({ outcome: z.literal("refused"), reason: z.string(), note: z.string().max(2048).optional() }),
 	z.object({ outcome: z.literal("pending"), requestId, deadlineAt: z.number().int().nonnegative() }),
 ]);
 

@@ -276,7 +276,7 @@ export function createConsoleDispatcher({
 				return crossDomainOps.untrust(op);
 
 			case "vault_answer":
-				return requireVault().answer(op.requestId, op.decision, op.value);
+				return requireVault().answer(op.requestId, op.decision, op.value, op.note);
 
 			case "vault_grants":
 				return requireVault().grants();

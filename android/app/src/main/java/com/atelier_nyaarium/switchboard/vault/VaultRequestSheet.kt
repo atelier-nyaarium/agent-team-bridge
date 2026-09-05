@@ -4,10 +4,12 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -26,6 +28,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -62,6 +66,10 @@ fun VaultRequestSheet(
 	var shown by remember(requestId) { mutableStateOf(false) }
 	var saveAsEntry by remember(requestId) { mutableStateOf(false) }
 	var saveTitle by remember(requestId) { mutableStateOf(request.shape) }
+	// Deny opens the steering field; the second Deny sends it, empty or not.
+	var steering by remember(requestId) { mutableStateOf(false) }
+	var note by remember(requestId) { mutableStateOf("") }
+	val steerFocus = remember { FocusRequester() }
 	var busy by remember { mutableStateOf(false) }
 	var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
 	// The ticker also retires the request once its deadline passes.
@@ -87,7 +95,7 @@ fun VaultRequestSheet(
 				return@launch
 			}
 			val value = if (approving && typedRequest) typed else null
-			val ok = repo.vaultOps.answer(request, decision, value)
+			val ok = repo.vaultOps.answer(request, decision, value, if (approving) null else note)
 			if (ok && approving && typedRequest && saveAsEntry && saveTitle.isNotBlank()) {
 				// The saved entry is scoped to the gateway that asked.
 				val gateway = runCatching { gatewayOf(request.team) }.getOrNull()
@@ -125,6 +133,29 @@ fun VaultRequestSheet(
 				repeatNotice(request)?.let {
 					Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
 				}
+				if (steering) {
+					OutlinedTextField(
+						value = note,
+						onValueChange = { note = it },
+						minLines = 2,
+						label = { Text("Steer") },
+						modifier = Modifier.fillMaxWidth().focusRequester(steerFocus),
+					)
+					LaunchedEffect(Unit) { steerFocus.requestFocus() }
+					Row(modifier = Modifier.fillMaxWidth()) {
+						OutlinedButton(onClick = hapticClick { steering = false }, enabled = !busy) { Text("Back") }
+						Spacer(Modifier.weight(1f))
+						Button(
+							onClick = hapticClick { answer(VAULT_DECISION_DENY) },
+							enabled = !busy,
+							colors = ButtonDefaults.buttonColors(
+								containerColor = MaterialTheme.colorScheme.error,
+								contentColor = MaterialTheme.colorScheme.onError,
+							),
+						) { Text("Deny") }
+					}
+					return@Column
+				}
 				if (typedRequest) {
 					OutlinedTextField(
 						value = typed,
@@ -156,7 +187,7 @@ fun VaultRequestSheet(
 					modifier = Modifier.fillMaxWidth(),
 				) {
 					val open = !busy && !expired
-					OutlinedButton(onClick = hapticClick { answer(VAULT_DECISION_DENY) }, enabled = !busy) { Text("Deny") }
+					OutlinedButton(onClick = hapticClick { steering = true }, enabled = !busy) { Text("Deny") }
 					if (typedRequest) {
 						Button(onClick = hapticClick { answer(VAULT_DECISION_ONCE) }, enabled = open && typed.isNotEmpty()) {
 							Text("Send")

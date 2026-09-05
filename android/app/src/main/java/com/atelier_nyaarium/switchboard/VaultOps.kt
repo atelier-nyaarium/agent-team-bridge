@@ -136,8 +136,13 @@ internal class VaultOps(
 
 	suspend fun ownerPresent(activity: FragmentActivity?): Boolean = collaborators.gate.require(activity)
 
-	/** Answers one request; a typed value seals under the request id. */
-	suspend fun answer(pending: VaultPendingRequest, decision: String, typedValue: String? = null): Boolean {
+	/** Answers one request; a typed value seals under the request id, and a deny may carry a steering note. */
+	suspend fun answer(
+		pending: VaultPendingRequest,
+		decision: String,
+		typedValue: String? = null,
+		note: String? = null,
+	): Boolean {
 		val client = collaborators.client ?: return false.also { report("Vault: not connected") }
 		val value = typedValue?.let { text ->
 			collaborators.sealing()?.seal(text, VAULT_TYPED_KIND, pending.requestId)
@@ -147,7 +152,7 @@ internal class VaultOps(
 			?: return false.also { report("Vault: the request names no gateway") }
 		val result = runCatchingCancellable {
 			client.valueResult<ConsoleVaultAnswerResult>(
-				client.sendValueOp(gatewayId, ConsoleOp.VaultAnswer(pending.requestId, decision, value)),
+				client.sendValueOp(gatewayId, ConsoleOp.VaultAnswer(pending.requestId, decision, value, note?.trim()?.ifEmpty { null })),
 				"vault_answer",
 			)
 		}.onFailure { DebugLog.log("Vault", "answer failed: ${it.message?.take(80)}") }.getOrNull()

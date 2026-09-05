@@ -115,11 +115,11 @@ describe("the askpass helper's race", () => {
 	it("without a tty, a refusal, an unreachable gateway, and a passed deadline each end the helper", async () => {
 		expect(
 			await runAskpass(input, {
-				gateway: fakeGateway({ outcome: "refused", reason: "no" }).gateway,
+				gateway: fakeGateway({ outcome: "refused", reason: "no", note: "use the deploy user" }).gateway,
 				tty: null,
 				now,
 			}),
-		).toEqual({ kind: "refused" });
+		).toEqual({ kind: "refused", note: "use the deploy user" });
 		expect(await runAskpass(input, { gateway: fakeGateway(null).gateway, tty: null, now })).toEqual({
 			kind: "unreachable",
 		});

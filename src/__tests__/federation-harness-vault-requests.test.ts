@@ -145,11 +145,17 @@ describe("federation harness: vault requests", () => {
 		const again = await post(alice, "/vault/use", { entryId, operation: "ssh deploy@prod uptime", waitMs: 200 });
 		expect(again.json).toMatchObject({ outcome: "pending" });
 		const second = await nextRequest(seen + 1);
-		const denied = await h.phone.value({ kind: "vault_answer", requestId: second.requestId, decision: "deny" });
+		// A deny's note is the owner steering the session; it rides the refusal back.
+		const denied = await h.phone.value({
+			kind: "vault_answer",
+			requestId: second.requestId,
+			decision: "deny",
+			note: "use the deploy user",
+		});
 		expect(denied.result).toEqual({ ok: true });
 		const collected = await post(alice, "/vault/collect", { requestId: second.requestId, waitMs: 5_000 });
 		expect(collected.status).toBe(403);
-		expect(collected.json).toMatchObject({ outcome: "refused" });
+		expect(collected.json).toMatchObject({ outcome: "refused", note: "use the deploy user" });
 	});
 
 	it("a window covers its shape across a gateway restart, not another shape, until revoked", async () => {

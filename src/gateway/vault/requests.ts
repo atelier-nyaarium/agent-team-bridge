@@ -21,7 +21,7 @@ export type VaultRequestInput =
 
 export type VaultRequestAnswer =
 	| { kind: "approved"; decision: VaultApprovedDecision; typedValue?: string }
-	| { kind: "refused" };
+	| { kind: "refused"; note?: string };
 
 export type VaultRequestOpened =
 	| { kind: "opened"; request: VaultRequest; answer: Promise<VaultRequestAnswer> }
@@ -130,11 +130,12 @@ export function createVaultRequests(deps: VaultRequestsDeps) {
 		return undefined;
 	};
 
-	/** Answers are single-use. */
+	/** Answers are single-use. A deny's note steers the asker. */
 	const answer = (
 		requestId: string,
 		decision: VaultDecision,
 		value?: ContentEnvelope,
+		note?: string,
 	): { ok: true } | { ok: false; reason: string } => {
 		const entry = pending.get(requestId);
 		if (!entry || entry.settled) return { ok: false, reason: "request expired" };
@@ -144,7 +145,7 @@ export function createVaultRequests(deps: VaultRequestsDeps) {
 			return { ok: false, reason: "request expired" };
 		}
 		if (decision === "deny") {
-			entry.settle({ kind: "refused" });
+			entry.settle(note ? { kind: "refused", note } : { kind: "refused" });
 			return { ok: true };
 		}
 		if (entry.request.kind === "typed") {

@@ -45,8 +45,8 @@ type Handler = (req: Request, body: unknown) => Promise<Response>;
 /** Who asked: a bound session by its team, or the helper by its token. */
 type Principal = { kind: "session"; target: string } | { kind: "helper"; target: string };
 
-const refused = (reason: string, status = 403): Response =>
-	json({ outcome: "refused", reason } satisfies VaultValueAnswer, status);
+const refused = (reason: string, status = 403, note?: string): Response =>
+	json({ outcome: "refused", reason, ...(note ? { note } : {}) } satisfies VaultValueAnswer, status);
 
 /** Migration, an unreachable owner, and too many open requests each read differently. */
 const unopened = (reason: "migrating" | "unreachable" | "flooded"): Response => {
@@ -169,7 +169,7 @@ export function createVaultRoutes(deps: VaultRoutesDeps): Map<string, Handler> {
 				deadlineAt: request.deadlineAt,
 			} satisfies VaultValueAnswer);
 		const taken = deps.requests.forget(request.requestId);
-		if (answer.kind === "refused") return refused(REFUSAL);
+		if (answer.kind === "refused") return refused(REFUSAL, 403, answer.note);
 		if (!taken && answer.typedValue !== undefined) return refused(REFUSAL);
 		return approved(answer.decision, answer.typedValue ?? value());
 	}

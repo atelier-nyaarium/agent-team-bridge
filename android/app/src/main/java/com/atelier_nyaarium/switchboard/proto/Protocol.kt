@@ -443,6 +443,7 @@ sealed class ConsoleOp {
 		val requestId: String,
 		val decision: String,
 		val value: ContentEnvelope? = null,
+		val note: String? = null,
 	) : ConsoleOp()
 
 	@Serializable
