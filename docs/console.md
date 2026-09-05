@@ -86,7 +86,11 @@ single-flight, cadence and concurrency limits, and mutating-op deduplication.
 - The **Wake** button sends the `wake` delivery op to the session's own address. The gateway resolves
   it to the local `spawn.session`, bounds the launch like `create_session`, and answers `pending` past
   the bound. A session the gateway holds no record for is re-created under its own id, as
-  `create_session` does with a typed `sessionName`; a launch that never comes up forgets it again.
+  `create_session` does with a typed `sessionName`; a wake that adopted the record and never comes
+  up forgets it again.
+- **Create** keeps its record whatever the launch does. The console is the authority: a launch that
+  fails answers its error, the row lists as asleep, and only a forget removes it. A retry with the
+  same op reattaches to the record instead of minting a second one.
 - **Forget** journals the op under its opId in the phone's `MutationJournal` before the local drop,
   holds the row's tombstone until the Gateway confirms, then replays every unconfirmed forget at
   service start and after a failed send. The Gateway no-ops an absent session, so a replay is safe.

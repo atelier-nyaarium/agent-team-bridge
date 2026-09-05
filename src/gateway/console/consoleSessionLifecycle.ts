@@ -63,7 +63,6 @@ export function createSessionLifecycleHandlers({
 		let sessionId: string;
 		let label: string;
 		let adopted: { record: SessionRecord; created: boolean } | null | undefined;
-		let rollbackEligible = false;
 		if (op.sessionName) {
 			sessionId = op.sessionName;
 			label = op.displayLabel ?? sessionId;
@@ -74,7 +73,6 @@ export function createSessionLifecycleHandlers({
 				workdirPath: op.workdir,
 				mintedFrom: dedupKey,
 			});
-			rollbackEligible = adopted?.created === true || adopted?.record.mintedFrom === dedupKey;
 		} else {
 			label = op.displayLabel as string;
 			const minted = sessionStore?.mintOrReattach({
@@ -86,87 +84,69 @@ export function createSessionLifecycleHandlers({
 			});
 			sessionId = minted?.record.id ?? label;
 			adopted = minted ?? null;
-			rollbackEligible = adopted != null;
 		}
 		if (sessionStore && !adopted) {
 			throw new Error(`cannot create session "${sessionId}": the name is reserved or a project`);
 		}
-		const mayForget = () => {
-			if (!rollbackEligible || adopted == null) return false;
-			const current = sessionStore?.getByTeam(sessionStore.teamOf(adopted.record));
-			return current === adopted.record && current.confirmedAt === undefined;
-		};
-		try {
-			const target = targets.tmuxTarget(op.target, sessionId);
-			const workdirHint =
-				sessionStore && adopted ? sessionStore.hostWorkdirHint(adopted.record) : (op.workdir ?? label);
+		// The console is the authority: the record outlives a launch that fails, listed asleep until a forget.
+		const target = targets.tmuxTarget(op.target, sessionId);
+		const workdirHint =
+			sessionStore && adopted ? sessionStore.hostWorkdirHint(adopted.record) : (op.workdir ?? label);
 
-			const launchTeam = composeSessionName(target.name, target.sessionName);
-			const viaWake = target.kind === "devcontainer" && tryWakeTeam;
-			const releaseInFlight = markCreateInFlight?.(launchTeam);
-			const launch: Promise<HostOpResult> = (
-				viaWake
-					? tryWakeTeam(launchTeam).then(
-							(r): HostOpResult =>
-								r.ok
-									? { ok: true }
-									: {
-											ok: false,
-											error: `failed to wake "${sessionId}"`,
-											errorKind: r.errorKind,
-										},
-						)
-					: relayToHost({
-							kind: "createSession",
-							target,
-							workdirHint,
-							resumeSessionId: adopted?.record.claudeSessionId,
-							sessionToken: adopted ? sessionStore?.ensureBindToken(adopted.record) : undefined,
-							dedupKey,
-						})
-			).finally(() => {
-				if (viaWake || !awaitRegister) {
-					releaseInFlight?.();
-				} else {
-					void awaitRegister(launchTeam).finally(() => releaseInFlight?.());
-				}
-			});
-
-			let boundTimer: TimerHandle | undefined;
-			const bound = new Promise<null>((resolve) => {
-				boundTimer = ambient.setTimer(() => resolve(null), createSessionBoundMs);
-			});
-			const winner = await Promise.race([launch, bound]);
-			if (boundTimer) ambient.clearTimer(boundTimer);
-
-			if (winner === null) {
-				void launch
-					.then((r) => {
-						if (!r.ok && mayForget()) sessionStore?.forget(sessionStore.teamOf(adopted!.record));
+		const launchTeam = composeSessionName(target.name, target.sessionName);
+		const viaWake = target.kind === "devcontainer" && tryWakeTeam;
+		const releaseInFlight = markCreateInFlight?.(launchTeam);
+		const launch: Promise<HostOpResult> = (
+			viaWake
+				? tryWakeTeam(launchTeam).then(
+						(r): HostOpResult =>
+							r.ok
+								? { ok: true }
+								: {
+										ok: false,
+										error: `failed to wake "${sessionId}"`,
+										errorKind: r.errorKind,
+									},
+					)
+				: relayToHost({
+						kind: "createSession",
+						target,
+						workdirHint,
+						resumeSessionId: adopted?.record.claudeSessionId,
+						sessionToken: adopted ? sessionStore?.ensureBindToken(adopted.record) : undefined,
+						dedupKey,
 					})
-					.catch(() => {
-						if (mayForget()) sessionStore?.forget(sessionStore.teamOf(adopted!.record));
-					});
-				return {
-					created: true,
-					id: adopted?.record.id ?? sessionId,
-					sessionLabel: adopted?.record.sessionLabel,
-					labelSanitized,
-					status: "pending" as const,
-				};
+		).finally(() => {
+			if (viaWake || !awaitRegister) {
+				releaseInFlight?.();
+			} else {
+				void awaitRegister(launchTeam).finally(() => releaseInFlight?.());
 			}
+		});
 
-			if (!winner.ok) {
-				if (winner.errorKind === "timeout" || winner.errorKind === "disconnected") {
-					throw new CreateSessionAmbiguousError(winner.error ?? "create session had no definitive answer");
-				}
-				throw new Error(winner.error ?? "create session failed");
+		let boundTimer: TimerHandle | undefined;
+		const bound = new Promise<null>((resolve) => {
+			boundTimer = ambient.setTimer(() => resolve(null), createSessionBoundMs);
+		});
+		const winner = await Promise.race([launch, bound]);
+		if (boundTimer) ambient.clearTimer(boundTimer);
+
+		if (winner === null) {
+			launch.catch(() => undefined);
+			return {
+				created: true,
+				id: adopted?.record.id ?? sessionId,
+				sessionLabel: adopted?.record.sessionLabel,
+				labelSanitized,
+				status: "pending" as const,
+			};
+		}
+
+		if (!winner.ok) {
+			if (winner.errorKind === "timeout" || winner.errorKind === "disconnected") {
+				throw new CreateSessionAmbiguousError(winner.error ?? "create session had no definitive answer");
 			}
-		} catch (e) {
-			if (mayForget() && !(e instanceof CreateSessionAmbiguousError)) {
-				sessionStore?.forget(sessionStore.teamOf(adopted!.record));
-			}
-			throw e;
+			throw new Error(winner.error ?? "create session failed");
 		}
 		return {
 			created: true,
