@@ -38,7 +38,7 @@ const BACKGROUND_CADENCE_MS = 60_000;
 
 /**
  * Resolves the peek cadence every live session should derive at, from the union of every device's
- * currently-declared focus intent - the interest-management scheduler the plan calls for: intent
+ * currently-declared focus intent. Intent
  * only ever RAMPS UP the floor (background), never turns derivation off, so a session nobody is
  * watching still eventually reflects reality instead of freezing.
  *

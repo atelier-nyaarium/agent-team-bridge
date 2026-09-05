@@ -101,7 +101,8 @@ describe("migration fence durability", () => {
 		).toBe("migrating");
 		expect(ops.markInFlight("conversation", "fenced")).toBeNull();
 		expect(anchors.report("owner", "team", { epoch: 1, seq: 1, at: 1 })).toBe(false);
-		expect(shares.unshare("session", target)).toBe(false);
+		expect(shares.share("session", target)).toBe(false);
+		expect(shares.unshare("session", target)).toBe("fenced");
 		expect(push.deliverToOwner({ entry: { kind: "notice" } as never, dedupeKey: "fenced" })).toBe(MIGRATING);
 		expect(await relay.handleOp({ kind: "wake", team: "team" }, "peer", null)).toEqual({
 			ok: false,
@@ -122,7 +123,7 @@ describe("migration fence durability", () => {
 		).toBe("enqueued");
 		expect(ops.markInFlight("conversation", "live")).toEqual(expect.any(Number));
 		expect(anchors.report("owner", "team", { epoch: 1, seq: 1, at: 1 })).toBe(true);
-		shares.share("session", target);
+		expect(shares.share("session", target)).toBe(true);
 		expect(shares.all()).toEqual([expect.objectContaining({ sessionTarget: "session" })]);
 		expect(push.deliverToOwner({ entry: { kind: "notice" } as never, dedupeKey: "live" })).toBe(true);
 		expect(await relay.handleOp({ kind: "wake", team: "team" }, "peer", null)).toEqual({ ok: true });

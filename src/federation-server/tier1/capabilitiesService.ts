@@ -101,7 +101,7 @@ export function createCapabilitiesService(deps: CapabilitiesServiceDeps) {
 				return { ...snapshot(op.domainId), outcome: result.outcome };
 			});
 			hooks.ownerOp("capabilities_read", async (op) => snapshot(op.domainId));
-			hooks.gatewayFrame("capabilities_read", async (reg, value) => {
+			hooks.gatewayFrame("capabilities_read", "read", async (reg, value) => {
 				if (!CapabilitiesReadSchema.safeParse(value).success) throw new OwnerOpRefused("malformed");
 				try {
 					return snapshot(reg.domainId);

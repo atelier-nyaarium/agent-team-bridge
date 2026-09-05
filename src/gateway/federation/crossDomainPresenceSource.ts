@@ -69,7 +69,7 @@ export interface CrossDomainPresenceSource {
 /**
  * The source-side outbound mechanism: one internal, never-polled change-detector plane per
  * linked-and-shared-to Domain, whose only consumer is its own `onBump` callback (a push, not
- * anything a poll response ever serves directly - see the plan's Source side section).
+ * anything a poll response ever serves directly).
  *
  * Cold start: `Plane`'s constructor seeds its baseline hash from the snapshot computed AT
  * REGISTRATION TIME, so `recompute()` can never see a brand-new plane's very first content as

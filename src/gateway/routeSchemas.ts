@@ -8,7 +8,7 @@ import { MAX_BLOB_BYTES } from "../shared/router-protocol.js";
 import { BOARD_BODY_MAX, ChannelFilesSchema } from "../shared/schemas.js";
 import { isSlug } from "../shared/session-id.js";
 import type { ChannelFile, ConnectionMode } from "../shared/types.js";
-import type { WsData } from "./websocket.js";
+import type { WsData } from "./wsTypes.js";
 
 // Interfaces & Types.
 
@@ -35,17 +35,17 @@ export const SendRequestSchema = z.object({
 	opId: producerOpId,
 	fromConversationId: z.string().regex(CONVERSATION_ID_RE).max(MAX_CONVERSATION_ID_LEN).optional(),
 	to: z.string(),
-	// The Domain id of a cross-Domain target (a session from a linked friend Domain). A.
+	// Present only when `to` names a session on a linked friend Domain.
 	targetDomainId: z.string().optional(),
 	body: z.string().optional(),
-	// Human-readable label for a not-yet-existing target: the gateway mints an opaque id under the.
+	// Only used when the target has no id yet; the gateway mints one.
 	displayLabel: z.string().min(1).max(64).optional(),
 	// Agent sends declare the expected reply convention.
 	disposition: z.enum(["asking", "informing", "closing"]).optional(),
 	session_id: z.string().optional(),
 	debug: z.boolean().optional(),
 	files: ChannelFilesSchema.optional(),
-	// Console-originated sends: reject CLI-mode targets instead of entering the.
+	// Console sends may require the target already be in channel mode.
 	channelOnly: z.boolean().optional(),
 	// Cross-Gateway INBOUND send (the gateway-relay handler): use this exact session id.
 	sessionId: z.string().optional(),
@@ -59,9 +59,9 @@ export const RespondBodySchema = z.object({
 	opId: producerOpId,
 	status: z.string().optional(),
 	response: z.string().optional(),
-	// The MCP process's own stable conversationId (see mcp/bridge/helpers.ts's bridgeConversationId),.
+	// The MCP process's own stable conversationId (see mcp/bridge/helpers.ts's bridgeConversationId).
 	conversationId: z.string().regex(CONVERSATION_ID_RE).max(MAX_CONVERSATION_ID_LEN).optional(),
-	// Optional notice-style tiers on a reply (title = notification-bar line + shortest spoken.
+	// Optional notice-style tiers on a reply: title, summary, full, and spoken variants.
 	...NoticeTierWireFields,
 	replyAsJson: z.record(z.string(), z.unknown()).optional(),
 	question: z.string().optional(),
@@ -75,7 +75,7 @@ export const RespondBodySchema = z.object({
 // Per-payload total across a message's files, and DERIVED rather than restated: an independently.
 export const MAX_RESPONSE_FILE_BYTES = MAX_BLOB_BYTES;
 
-// How long a send waits after waking a session before delivering: registration is instant, but.
+// Registration is instant, but the woken agent needs a moment to attach.
 export const POST_WAKE_SETTLE_MS = 3_000;
 
 // A plugin-action payload is meant to carry a small, action-specific value (e.g. a filename), never.
@@ -88,7 +88,7 @@ export const PollRequestSchema = z.object({
 	session_id: z.string(),
 });
 
-// title, summary, and full are REQUIRED: a notice must always carry a headline,.
+// title, summary, and full are REQUIRED: a notice must always carry a headline.
 export const HumanNotifySchema = z.object({
 	from: z.string().min(1).max(128),
 	title: NoticeTitle,

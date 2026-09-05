@@ -1,5 +1,4 @@
-// The gateway's one federation reader. Activation publishes the boot, the Domain id, and the
-// slice together, so no reader can hold a copy that an enrollment install left behind.
+// The gateway's one federation reader.
 
 import type { CrossDomainShareTarget } from "../../shared/console-protocol.js";
 import type { GatewayBootstrap } from "../boot.js";
@@ -83,8 +82,11 @@ export class FederationContext {
 		this.state = { phase: "arming", arming };
 	}
 
+	/** Drops the boot, the Domain id, and the slice together, so nothing survives the phase. */
 	standalone(): void {
 		this.state = { phase: "standalone" };
+		this.activeBoot = null;
+		this.domain = null;
 	}
 
 	/** Builds the slice first, so a failed build leaves the phase untouched. */

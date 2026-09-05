@@ -16,7 +16,8 @@ import {
 import { isHostSpawn } from "../shared/host-spawn.js";
 import type { SessionRecord } from "../shared/session-store.js";
 import { AGENT_FAILURE_ANSWERS, jsonResponse as json } from "./agentRouteEnvelope.js";
-import { type CopilotAgentService, CopilotTransitionError } from "./copilotAgentService.js";
+import type { CopilotAgentService } from "./copilotAgentService.js";
+import { CopilotTransitionError } from "./copilotAgentTypes.js";
 import type { CopilotRelay } from "./copilotRelay.js";
 import { presentedByRequest } from "./sessionAuthority.js";
 

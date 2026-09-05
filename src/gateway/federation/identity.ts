@@ -1,4 +1,3 @@
-import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fingerprint, generateIdentity, type Identity } from "../../shared/crypto.js";
@@ -21,7 +20,7 @@ function isIdentity(v: unknown): v is Identity {
  * that exists but does not parse or validate is an orphan signal (a partial write, a disk
  * fault, the wrong volume mounted), never a reason to mint a throwaway key that abandons the
  * admitted one - so a human investigates instead of the Gateway silently re-rooting itself. */
-export function loadOrCreateIdentity(dataDir: string): Identity {
+export function loadOrCreateIdentity(dataDir: string, newId: () => string): Identity {
 	const file = path.join(dataDir, IDENTITY_FILE);
 	let raw: string | null = null;
 	try {
@@ -53,7 +52,7 @@ export function loadOrCreateIdentity(dataDir: string): Identity {
 	}
 	const id = generateIdentity();
 	fs.mkdirSync(dataDir, { recursive: true });
-	const temp = `${file}.${randomBytes(16).toString("hex")}`;
+	const temp = `${file}.${newId()}`;
 	let linked = false;
 	try {
 		const descriptor = fs.openSync(temp, "wx", 0o600);
@@ -74,7 +73,7 @@ export function loadOrCreateIdentity(dataDir: string): Identity {
 			fs.unlinkSync(temp);
 		} catch {}
 	}
-	if (!linked) return loadOrCreateIdentity(dataDir);
+	if (!linked) return loadOrCreateIdentity(dataDir, newId);
 	if (process.platform !== "win32") {
 		const descriptor = fs.openSync(dataDir, "r");
 		try {

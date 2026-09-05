@@ -5,10 +5,6 @@ import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
 
-/**
- * The conversation id is resolved by the parser and persisted by the identity door, so a parse
- * leaves the store as it found it and a written blob keeps its id across every later read.
- */
 class ConsoleCredentialsTest {
 	private val blob = "{\"appToken\":\"token\",\"device\":\"device\"}"
 

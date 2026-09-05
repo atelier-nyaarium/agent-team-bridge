@@ -1,9 +1,10 @@
 import type { GatewayFrameHandler, GatewayRegistration } from "./gatewayBridge.js";
-import type { OwnerOpHandler, OwnerOpKind } from "./ownerOpRegistry.js";
+import type { OwnerOpHandler, OwnerOpKind, OwnerOpMutation } from "./ownerOpRegistry.js";
 
 export interface OwnerServiceHooks {
 	ownerOp<Kind extends OwnerOpKind>(kind: Kind, handler: OwnerOpHandler<Kind>): void;
-	gatewayFrame(name: string, handler: GatewayFrameHandler): void;
+	/** The class the migration fence reads; `value` waits behind it. */
+	gatewayFrame(name: string, mutation: OwnerOpMutation, handler: GatewayFrameHandler): void;
 	onGatewayRegistered(listener: (reg: GatewayRegistration) => void): void;
 	onGatewayDropped(listener: (reg: GatewayRegistration) => void): void;
 	onSessionForgotten(listener: (reg: GatewayRegistration, sessionId: string) => void): void;

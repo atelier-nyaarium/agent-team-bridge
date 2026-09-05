@@ -29,7 +29,7 @@ import {
 	type HandshakeRepushOutcome,
 	resolveLiveIncarnation,
 	type TeamRegistry,
-} from "../websocket.js";
+} from "../wsTypes.js";
 import type { CallerScope } from "./callerGuards.js";
 
 type ConsolePushOps = ReturnType<typeof import("../consolePushOps.js").createConsolePushOps>;
@@ -42,15 +42,15 @@ export interface SendRoutesDeps {
 	conversationRegistry: ConversationRegistry;
 	store: Pick<PendingJobStore<ResponsePayload>, "create">;
 	tryWakeTeam: (team: string, createOpts?: { displayLabel?: string; mintedFrom?: string }) => Promise<WakeResult>;
-	// Session records support live-incarnation resolution. Optional in test harnesses.
+	// Resolves a live incarnation.
 	sessionStore?: import("../../shared/session-store.js").SessionStore;
 	routerClient?: Pick<import("../router/routerClient.js").RouterClient, "isConnected"> | null;
-	// Re-sends a (team, subId)'s still-pending handshake so a caller that lost the original.
+	// Re-sends a still-pending handshake.
 	repushHandshake?: (team: string, subId: string) => HandshakeRepushOutcome;
-	// The sole resolver of "what must a caller prove to act as X". Absent in test harnesses that do.
+	// The sole resolver of what a caller must prove to act as X.
 	auth?: SessionAuthority;
 	awareness?: { takeFor(sessionKey: string): RidingAwareness | null };
-	// Holds a channel message for a session that could not take it, and hands it over when the.
+	// Holds a channel message a session could not take.
 	deliveries?: ChannelDeliveryCoordinator;
 	localAddress: (name: string) => Address;
 	consoleSelfAddress: (ownerId: string) => Address;
@@ -94,21 +94,19 @@ export function createSendRoutes({
 }: SendRoutesDeps) {
 	const { localGatewayId } = config;
 
-	/** Origin side of a cross-Gateway channel send. Keeps a local pollable anchor keyed
-	 * by the canonical session id (so the sender can poll and the eventual
-	 * response_push delivers back to its conversation), forwards the send to the
-	 * destination Gateway with a return-route, and hands the session id back. */
+	/** Origin side of a cross-Gateway channel send: a local pollable anchor keyed by the canonical
+	 * session id, the forward with its return route, and the session id back. */
 	async function sendCrossGateway(args: {
 		targetGateway: string;
 		targetName: string;
 		targetDomain?: string;
 		from: string;
-		// Pre-built canonical sender address. The console sets it (owner-id based) because its `from`.
+		// Pre-built canonical sender address; the console sets it since its `from` is a Device Name.
 		fromAddress?: string;
 		fromConversationId: string | undefined;
 		body?: string;
 		files?: ChannelFile[];
-		// Threaded through to the destination Gateway's own local send() so a not-yet-existing target.
+		// Threaded through so a not-yet-existing target still gets a display label.
 		displayLabel?: string;
 		disposition?: "asking" | "informing" | "closing";
 		/** The caller's id, so its retries stay one operation. */
@@ -133,7 +131,7 @@ export function createSendRoutes({
 		if (!fromConversationId) {
 			return jsonResponse({ error: `fromConversationId is required for a cross-Gateway send` }, 400);
 		}
-		// Resolve the destination Domain ONCE so the address's domain segment and the anchor's.
+		// Resolved once so the address's domain segment and the anchor's key agree.
 		const resolvedDomain = targetDomainId(targetGateway, targetDomain);
 		const { project: tSpawn, session: tSession } = parseSessionName(targetName);
 		const targetAddr = Address.remote(resolvedDomain ?? localDomain, targetGateway, tSpawn, tSession);
@@ -154,13 +152,13 @@ export function createSendRoutes({
 		const relay = await relayToGateway(targetGateway, op, targetDomain, opId);
 		if (!relay.ok)
 			return jsonResponse({ error: relay.error ?? `cross-Gateway send to "${qualifiedTo}" failed` }, 502);
-		// Keep a local pollable anchor ONLY once the destination accepted the send, so.
+		// Anchor only after the destination accepts; a failed relay leaves nothing to poll.
 		store.create(srcSession, from, qualifiedTo, {
 			persistent: true,
 			fromConversationId,
 			dstDomainId: resolvedDomain ?? undefined,
 		});
-		// Mirror the LOCAL sender's own outbound leg; the remote target's own gateway mirrors its.
+		// Mirrors only this Gateway's outbound leg; the remote gateway mirrors its own.
 		if (senderAddr) {
 			mirrorPeer(senderAddr, senderCanonical, targetAddr.canonical, { body, files });
 		}
@@ -196,18 +194,18 @@ export function createSendRoutes({
 		const files =
 			rawSendFiles &&
 			(opts.trustedInbound || opts.consoleSender ? rawSendFiles : stampBlobHolder(rawSendFiles, localGatewayId));
-		// Only a real external caller is gated. A federated relay speaks for a remote sender, and the.
+		// Only a real external caller is gated; a federated relay speaks for its own sender.
 		if (!opts.trustedInbound && !opts.consoleSender) {
 			const refused = refuseImpersonation(req, from, "session");
 			if (refused) return refused;
-			// fromConversationId decides where the eventual REPLY lands, so naming someone else's is.
+			// fromConversationId decides where the reply lands, so a foreign one is refused.
 			const holder = fromConversationId ? conversationRegistry.get(fromConversationId) : undefined;
 			if (auth && !auth.satisfies(auth.toAnswerFor(holder), presentedByRequest(req))) {
 				console.warn(`[auth] refused a send claiming another session's conversation`);
 				return jsonResponse({ error: "conversation is not this caller's" }, 403);
 			}
 		}
-		// The federated-inbound-only fields are honored ONLY when the call comes from the trusted.
+		// Federated-inbound-only fields are honored only from the trusted gateway-relay handler.
 		const trustedInbound = opts.trustedInbound === true;
 		const inboundSessionId = trustedInbound ? parsed.data.sessionId : undefined;
 		const returnRoute = trustedInbound ? parsed.data.returnRoute : undefined;
@@ -224,7 +222,7 @@ export function createSendRoutes({
 			}
 		}
 
-		// Classify the target by arity. An INBOUND federated send (the gateway-relay handler) arrives.
+		// Classify target by arity; an inbound federated send arrives with sessionId already set.
 		const parsedTarget = inboundSessionId ? null : parseTarget(to, localDomain, localGatewayId);
 		if (parsedTarget instanceof SpawnPoint) {
 			return jsonResponse(
@@ -232,7 +230,7 @@ export function createSendRoutes({
 				400,
 			);
 		}
-		// Cross-Gateway OUTBOUND: an Address whose (domain, gateway) is not ours routes through the.
+		// Cross-Gateway outbound: a mismatched (domain, gateway) routes through the Router.
 		if (parsedTarget && (parsedTarget.domain !== localDomain || parsedTarget.gateway !== localGatewayId)) {
 			const realDomain =
 				parsedTarget.domain !== localDomain && parsedTarget.domain !== LOCAL_DOMAIN_SENTINEL
@@ -243,7 +241,7 @@ export function createSendRoutes({
 				targetName: composeSessionName(parsedTarget.spawn, parsedTarget.session),
 				targetDomain: realDomain,
 				from,
-				// A console send carries a non-slug Device Name as `from`; build its sender address from.
+				// A console send's `from` is a Device Name; derive its address from the conversation.
 				fromAddress:
 					opts.consoleSender && fromConversationId
 						? consoleSelfAddress(fromConversationId).canonical
@@ -257,7 +255,7 @@ export function createSendRoutes({
 			});
 		}
 
-		// Resolve the target to a local registry name + its canonical Address. A local target.
+		// Resolve the target to a local registry name and its canonical Address.
 		let target = resolveLocalTarget(to);
 		if (!target) {
 			return jsonResponse({ error: `Gateway for "${to}" is not reachable from this Gateway` }, 404);
@@ -280,7 +278,7 @@ export function createSendRoutes({
 
 		// If offline, attempt to wake the container - or, for a target with no record yet, create it.
 		if (!targetWs) {
-			// A retry sharing the same (sender conversation, resolved target) provenance reattaches to.
+			// A retry with the same provenance reattaches to the same minted id.
 			const mintedFrom =
 				inboundSessionId ?? (fromConversationId ? `${fromConversationId}:${localName}` : undefined);
 			const woken = await tryWakeTeam(localName, { displayLabel, mintedFrom });
@@ -296,12 +294,12 @@ export function createSendRoutes({
 					);
 				}
 				if (woken.errorKind === "timeout") {
-					// Ambiguous by contract: the waiter gave up and the launch may still be coming. Calling.
+					// Ambiguous by contract: the waiter gave up, but the launch may still be coming.
 					return jsonResponse({ error: `"${qualifiedTo}" is still starting; try again shortly` }, 404);
 				}
 			}
 			if (woken.ok) {
-				// Minting (no existing record, a displayLabel was set) lands on a fresh id, never the.
+				// Minting a fresh record never reuses the originally requested name.
 				if (woken.resolvedTeam && woken.resolvedTeam !== localName) {
 					localName = woken.resolvedTeam;
 					const resolved = tryLocalAddress(localName);
@@ -316,9 +314,9 @@ export function createSendRoutes({
 			}
 		}
 
-		// Deliver to the resolved incarnation's own team subs (localName for a canonical pane, the.
+		// Delivers to the live incarnation's own subs, not the requested name's.
 		const subs = targetWs ? registry.get(targetWs.data.teamName ?? localName) : undefined;
-		// Nothing is listening. Without somewhere to hold the message this is the end of the road, so.
+		// Nothing is listening; with nowhere to hold the message, the send fails.
 		if ((!targetWs || !subs) && !deliveries) {
 			return jsonResponse(
 				{
@@ -332,10 +330,10 @@ export function createSendRoutes({
 			);
 		}
 
-		// An absent session is taken as channel mode: every bridge connection registers as one (see.
+		// An absent session is taken as channel mode; every bridge connection registers as one.
 		const targetMode = subs ? getTeamMode(subs) : "channel";
 
-		// channelOnly senders (the console) must never reach the CLI branch below:.
+		// channelOnly senders (the console) must never reach the CLI branch below.
 		if (channelOnly && targetMode !== "channel") {
 			return jsonResponse(
 				{ error: `"${localName}" is a CLI-mode agent; console chat supports channel-mode (Claude) teams only` },
@@ -346,7 +344,7 @@ export function createSendRoutes({
 		// Channel mode: stable job id per (sender_conversation_id, target_team) pair.
 		if (targetMode === "channel") {
 			try {
-				// A federated inbound send carries the origin's session id; a local send.
+				// A federated inbound send carries the origin's session id; a local send mints one.
 				const channelJobId =
 					inboundSessionId ??
 					(fromConversationId
@@ -356,7 +354,7 @@ export function createSendRoutes({
 					return jsonResponse({ error: `fromConversationId is required for channel-mode targets` }, 400);
 				}
 
-				// Honor a Domain binding ONLY on an inbound federated send (the gateway-relay.
+				// Honors a Domain binding only on an inbound federated send from the gateway-relay.
 				const inboundDstDomainId = inboundSessionId ? dstDomainId : undefined;
 				store.create(channelJobId, from, localName, {
 					persistent: true,
@@ -368,12 +366,12 @@ export function createSendRoutes({
 				// message_id is the file-materialization bucket key, read only when files are present.
 				const hasFiles = files !== undefined && files.length > 0;
 				const messageId = hasFiles ? ambient.newId() : undefined;
-				// Taken once, HERE, and carried on the row. Reading it at delivery would drop it on a.
+				// Taken once here and carried on the row; a later read would drop it on retry.
 				const riding = awareness?.takeFor(localName) ?? undefined;
 
 				if (deliveries) {
 					const outcome = deliveries.accept({
-						// Minted per send. The console's own op store already collapses its retries before.
+						// Minted per send; the console's own op store already collapses retries.
 						deliveryId: ambient.newId(),
 						team: targetWs?.data.teamName ?? localName,
 						channelJobId,
@@ -411,7 +409,7 @@ export function createSendRoutes({
 					const payload = JSON.stringify(channelPayload);
 
 					for (const ws of activeWs) {
-						// An unconfirmed recipient gets its still-pending handshake re-pushed AHEAD of the.
+						// An unconfirmed recipient's handshake is re-pushed ahead of the message.
 						if (!ws.data.handshakeConfirmed && ws.data.teamName) {
 							repushHandshake?.(ws.data.teamName, ws.data.subId);
 						}
@@ -426,10 +424,10 @@ export function createSendRoutes({
 				if (targetWs && !targetWs.data.virtual) {
 					const toAddr = target.address;
 					if (inboundSessionId) {
-						// Federated inbound landing: only the local target is ours to mirror. `from` here.
+						// Federated inbound landing: only the local target mirrors; `from` names a remote sender.
 						mirrorPeer(toAddr, from, toAddr.canonical, { body: msgBody, files });
 					} else if (!opts.consoleSender) {
-						// A malformed `from` (never slug-validated at the SendRequestSchema boundary) must.
+						// A malformed `from` must resolve locally before it's safe to mirror.
 						const fromAddr = tryLocalAddress(from);
 						if (fromAddr && provedLocalSession(req)) {
 							mirrorPeer(fromAddr, fromAddr.canonical, toAddr.canonical, { body: msgBody, files });
@@ -450,7 +448,7 @@ export function createSendRoutes({
 			}
 		}
 
-		// Unreachable: targetMode is the single-value `channel` literal, so the block above always.
+		// Unreachable: targetMode is the single-value `channel` literal; the block above always returns.
 		return jsonResponse({ error: "unsupported connection mode" }, 400);
 	}
 

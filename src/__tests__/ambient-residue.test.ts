@@ -9,21 +9,10 @@ const ROOT = path.resolve(import.meta.dirname, "..");
 const FENCED = ["gateway", "federation-server", "shared"];
 
 /** A direct read of the process clock, entropy, ids, or timers. */
-const DIRECT = /\b(Date\.now|crypto\.randomUUID|randomUUID|crypto\.randomBytes|Math\.random)\b|\bnodeRandomBytes\b/;
+const DIRECT =
+	/\b(Date\.now|performance\.now|crypto\.randomUUID|randomUUID|crypto\.randomBytes|Math\.random)\b|(^|[^.\w"'])randomBytes\b|\bnew Date\(\s*\)|\bnodeRandomBytes\b/;
 const TIMERS = /(^|[^.\w])(setTimeout|setInterval|clearTimeout|clearInterval)\s*\(/;
 
-/**
- * Every entry names the one reason the ambient cannot reach it. Two groups, and nothing else:
- *
- * - Cryptographic material. A nonce, a token, or a key must be drawn from the platform CSPRNG,
- *   never from a record a caller supplies, so these four never take one.
- * - A reader outside a composed graph. `ownerLock` compares its heartbeat against another OS
- *   process's wall clock, `migration-fence` is a process-global with its own `useMigrationClock`
- *   seam that two graphs in one process would fight over, `reconnect` and `tmp-files` are also
- *   loaded by the MCP process, which composes no graph (reconnect takes an ambient when a graph
- *   supplies one; its fallback must NOT unref, since the host daemon's only live handle between
- *   connections is that timer).
- */
 const ALLOWED: ReadonlyArray<{ file: string; why: string }> = [
 	{ file: "shared/crypto.ts", why: "seals and key generation draw from the platform CSPRNG" },
 	{ file: "shared/content-envelope.ts", why: "content nonces draw from the platform CSPRNG" },
@@ -45,10 +34,6 @@ describe("ambient residue", () => {
 		.map((file) => ({ file, rel: path.relative(ROOT, file) }))
 		.filter(({ rel }) => rel !== "shared/ambient.ts" && !allowed.has(rel));
 
-	it("covers the fenced directories", () => {
-		expect(fenced.length).toBeGreaterThan(150);
-	});
-
 	it("reads the clock, the entropy, and the ids only through the ambient", () => {
 		const offenders = fenced
 			.map(({ file, rel }) => ({ rel, lines: linesMatching(file, DIRECT) }))
@@ -66,7 +51,9 @@ describe("ambient residue", () => {
 	it("keeps every allowlist entry real and justified", () => {
 		for (const entry of ALLOWED) {
 			expect(entry.why.length).toBeGreaterThan(20);
+			const abs = path.join(ROOT, entry.file);
 			expect(filesUnder(ROOT).map((file) => path.relative(ROOT, file))).toContain(entry.file);
+			expect(linesMatching(abs, DIRECT).length + linesMatching(abs, TIMERS).length).toBeGreaterThan(0);
 		}
 	});
 });

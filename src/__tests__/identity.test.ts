@@ -3,8 +3,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { loadOrCreateIdentity } from "../gateway/federation/identity.js";
+import { loadOrCreateIdentity as load } from "../gateway/federation/identity.js";
+import { processAmbient } from "../shared/ambient.js";
 import { fingerprint } from "../shared/crypto.js";
+
+const loadOrCreateIdentity = (dir: string) => load(dir, processAmbient().newId);
 
 const dirs: string[] = [];
 function tmpDir(): string {
@@ -58,7 +61,7 @@ describe("federation identity", () => {
 			new Promise<string>((resolve, reject) => {
 				const child = spawn("bun", [
 					"-e",
-					`import { loadOrCreateIdentity } from ${JSON.stringify(path.join(process.cwd(), "src/gateway/federation/identity.ts"))}; loadOrCreateIdentity(${JSON.stringify(dir)}); ${script}`,
+					`import { loadOrCreateIdentity } from ${JSON.stringify(path.join(process.cwd(), "src/gateway/federation/identity.ts"))}; loadOrCreateIdentity(${JSON.stringify(dir)}, () => String(process.pid)); ${script}`,
 				]);
 				let output = "";
 				child.stdout.on("data", (chunk) => (output += chunk));

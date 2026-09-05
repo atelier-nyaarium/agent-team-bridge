@@ -1,7 +1,7 @@
 import type { ServerWebSocket } from "bun";
 import WebSocket from "ws";
 import type { Ambient } from "../shared/ambient.js";
-import type { WsData } from "./websocket.js";
+import type { WsData } from "./wsTypes.js";
 
 const upstreamMap = new Map<ServerWebSocket<WsData>, WebSocket>();
 

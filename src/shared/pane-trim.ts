@@ -34,7 +34,7 @@ export function trimPaneRowPadding(ansi: string): string {
 	// Positions of the trailing unpainted spaces of the row being scanned. Cleared the moment
 	// anything else lands, so at a row's end it holds exactly what may go.
 	const tail: number[] = [];
-	// Ascending by construction: rows are scanned in order and each tail is.
+	// Ascending by construction: rows scan in order and each tail is already sorted.
 	const cut: number[] = [];
 	let bg = false;
 	let reverse = false;

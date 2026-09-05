@@ -35,19 +35,6 @@ import {
 	type OwnedCopilotAgent,
 } from "./copilotAgentTypes.js";
 
-export type {
-	CopilotAgentServiceDeps,
-	CopilotApplication,
-	CopilotExistingAgentIntentInput,
-	CopilotIntentInput,
-	CopilotStopIntentInput,
-	CopilotTransitionErrorCode,
-	CopilotTransitionResult,
-	OwnedCopilotAgent,
-	OwnedCopilotOperation,
-} from "./copilotAgentTypes.js";
-export { CopilotTransitionError } from "./copilotAgentTypes.js";
-
 ////////////////////////////////
 //  Class
 
@@ -279,5 +266,3 @@ export class CopilotAgentService {
 		return copilotAgentIndex(catalog, agentId);
 	}
 }
-
-export type { CopilotDaemonEvent, CopilotDaemonReceipt };

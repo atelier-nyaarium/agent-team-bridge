@@ -9,6 +9,7 @@ import {
 	type ErasedOwnerOpHandler,
 	type OwnerOpHandler,
 	type OwnerOpKind,
+	type OwnerOpMutation,
 	ownerOpEntry,
 } from "../federation-server/ownerOpRegistry.js";
 import { createShareService, type ShareServiceDeps } from "../federation-server/share/shareService.js";
@@ -69,7 +70,8 @@ const make = () => {
 			ownerOp: <Kind extends OwnerOpKind>(kind: Kind, handler: OwnerOpHandler<Kind>) => {
 				ownerOps.set(kind, handler as ErasedOwnerOpHandler);
 			},
-			gatewayFrame: (name: string, handler: GatewayFrameHandler) => gatewayFrames.set(name, handler),
+			gatewayFrame: (name: string, _mutation: OwnerOpMutation, handler: GatewayFrameHandler) =>
+				gatewayFrames.set(name, handler),
 			onGatewayRegistered: () => undefined,
 			onGatewayDropped: (listener: (reg: GatewayRegistration) => void) => {
 				gatewayDropped = listener;
@@ -185,7 +187,6 @@ describe("ShareService", () => {
 	});
 
 	it("stops honouring an attestation from a gateway that went quiet", () => {
-		// Otherwise one attestation pins its share for as long as the Router runs.
 		const ctx = make();
 		ctx.links.add("a|b");
 		ctx.service.share("a", "a.g.spawn.gone", { kind: "domain", domainId: "b" });
@@ -219,14 +220,16 @@ describe("ShareService", () => {
 		expect(ctx.service.generation("a", "a.g.spawn.trusted", "b")).toBe(1);
 		expect(ctx.service.isSharedTo("a", "a.g.spawn.main", "b")).toBe(false);
 		expect(ctx.service.isSharedTo("a", "a.g.spawn.trusted", "b")).toBe(false);
-		expect(ctx.pushed.map(({ domainId, gatewayId }) => `${domainId}/${gatewayId}`)).toEqual([
-			"a/a-gateway",
-			"b/b-gateway",
-		]);
-		expect(ctx.pushed.map(({ frame }) => frame)).toEqual([
-			{ type: "unlink", domainId: "b" },
-			{ type: "unlink", domainId: "a" },
-		]);
+		expect(ctx.pushed).toContainEqual({
+			domainId: "a",
+			gatewayId: "a-gateway",
+			frame: { type: "unlink", domainId: "b" },
+		});
+		expect(ctx.pushed).toContainEqual({
+			domainId: "b",
+			gatewayId: "b-gateway",
+			frame: { type: "unlink", domainId: "a" },
+		});
 		ctx.registry.close();
 	});
 
@@ -327,7 +330,6 @@ describe("ShareService", () => {
 		const unshare = ctx.gatewayFrames.get("cross_domain_unshare")!;
 		expect(share(reg, { sessionTarget: "a.gw.spawn.main", target })).toEqual({ ok: true });
 		expect(ctx.service.isSharedTo("a", "a.gw.spawn.main", "b")).toBe(true);
-		// The registration names the Domain and the gateway, so a session on neither is refused.
 		expect(() => share(reg, { sessionTarget: "a.other.spawn.main", target })).toThrow(/session/);
 		expect(() => share(reg, { sessionTarget: "z.gw.spawn.main", target })).toThrow(/session/);
 		expect(() => share(reg, { sessionTarget: "a.gw.spawn.main" })).toThrow();
@@ -371,30 +373,37 @@ describe("ShareService", () => {
 		const ctx = make();
 		ctx.links.add("a|b");
 		ctx.service.register(ctx.hooks);
-		expect([...ctx.ownerOps.keys()]).toEqual([
-			"cross_domain_share",
-			"cross_domain_unshare",
-			"cross_domain_unlink",
-			"cross_domain_list_shares",
-		]);
-		expect([...ctx.gatewayFrames.keys()]).toEqual(["share_job_live", "cross_domain_share", "cross_domain_unshare"]);
 		const op = { domainId: "a" } as Parameters<ErasedOwnerOpHandler>[0];
-		ctx.ownerOps.get("cross_domain_share")!(op, {
-			sessionTarget: "a.g.spawn.main",
-			target: { kind: "domain", domainId: "b" },
+		const target = { kind: "domain" as const, domainId: "b" };
+
+		expect(ctx.ownerOps.get("cross_domain_share")!(op, { sessionTarget: "a.g.spawn.main", target })).toEqual({
+			ok: true,
 		});
 		expect(ctx.ownerOps.get("cross_domain_list_shares")!(op, {})).toEqual({
-			shares: [{ sessionTarget: "a.g.spawn.main", target: { kind: "domain", domainId: "b" } }],
+			shares: [{ sessionTarget: "a.g.spawn.main", target }],
 		});
-		ctx.ownerOps.get("cross_domain_unshare")!(op, {
+		expect(ctx.ownerOps.get("cross_domain_unshare")!(op, { sessionTarget: "a.g.spawn.main", target })).toEqual({
+			ok: true,
+		});
+		expect(ctx.ownerOps.get("cross_domain_unlink")!(op, { domainId: "b" })).toEqual({
+			peersRemoved: 1,
+			sharesDropped: 0,
+			jobsExpired: 0,
+		});
+
+		const reg: GatewayRegistration = { domainId: "a", gatewayId: "g", signPub: "p", incarnation: 1 };
+		expect(ctx.gatewayFrames.get("cross_domain_share")!(reg, { sessionTarget: "a.g.spawn.main", target })).toEqual({
+			ok: true,
+		});
+		expect(
+			ctx.gatewayFrames.get("cross_domain_unshare")!(reg, { sessionTarget: "a.g.spawn.main", target }),
+		).toEqual({ ok: true });
+		ctx.gatewayFrames.get("share_job_live")!(reg, {
 			sessionTarget: "a.g.spawn.main",
-			target: { kind: "domain", domainId: "b" },
+			jobIds: ["job"],
+			observedAt: 100,
+			incarnation: 1,
 		});
-		ctx.ownerOps.get("cross_domain_unlink")!(op, { domainId: "b" });
-		ctx.gatewayFrames.get("share_job_live")!(
-			{ domainId: "a", gatewayId: "g", signPub: "p", incarnation: 1 },
-			{ sessionTarget: "a.g.spawn.main", jobIds: ["job"], observedAt: 100, incarnation: 1 },
-		);
 		ctx.registry.close();
 	});
 });

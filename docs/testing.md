@@ -58,10 +58,11 @@ one scenario never mint the same nonce. Its timers have two drives:
 
 - **"real"**, the harness default. Timers ride the process ones, so the persist tick, the presence
   watch, the awareness tick, the inbox pump, and the reconciler fire on their own cadence and every
-  scenario makes progress with no sleeps. This is what the gateway did before the ambient existed.
+  scenario makes progress with no sleeps.
 - **"manual"**, per scenario. Nothing fires until `advance(ms)`, which runs each timer at its own
   deadline (intervals repeating) and yields to the event loop between firings, so the I/O and
-  promises a real elapsed second would have settled do settle. `startFederationHarness({ drive:
+  promises a real elapsed second would have settled do settle. A timer that throws still lets the
+  rest of that move's due timers run, then rejects the `advance`. `startFederationHarness({ drive:
   "manual" })` selects it; the fake is exposed as `h.ambient` for the home gateway,
   `h.routerAmbient` for the Router, and `peer.ambient` for a Domain added with `addDomain`.
 
@@ -90,7 +91,7 @@ bookkeeping:
 | `federation-harness-sessions.test.ts` | Session bindings and impostors, worker answers, transcript handover, duplicated deliveries, reply authority, the wake boundary, the console's create, rename, close, forget, tmux, peek, and notify rules, daemon capabilities |
 | `federation-harness-handshake.test.ts` | A session verifying before its lead confirms, a reconnect within retention, a stale close under a newer registration; under manual drive, the re-send throttle window and the expiry sweep |
 | `federation-harness-domains.test.ts` | Two and three Domains: the handshake, shares and the Router record, cross-Domain send and reply, opaque refusal, unshare, unlink, colliding gateway ids, forged replies, a repeated send opId |
-| `federation-harness-xdomain.test.ts` | The share gate, a cross-Domain wake, return-route authentication, a relay retried across a Router restart, unlink of in-flight work, share auto-forget |
+| `federation-harness-xdomain.test.ts` | The share gate, the gateway's own share frames, a share under the migration fence, a cross-Domain wake, return-route authentication, a relay retried across a Router restart, unlink of in-flight work, share auto-forget |
 | `federation-harness-router.test.ts` | Router-only: tenant provision, first root, rename and its refusals, removal, deletion, replay across a restart, device approval, the trust rendezvous |
 | `federation-harness-codex.test.ts` | Codex through the gateway and the daemon: start, message, list, stop, replayed frames, gateway and daemon restarts |
 

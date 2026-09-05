@@ -6,7 +6,7 @@ import { MAX_BLOB_BYTES } from "../shared/router-protocol.js";
 import { composeGateway, type GatewayConfig, type GatewayGraph } from "./composeGateway.js";
 import { handleProxyClose, handleProxyMessage, isProxyConnection, setupProxy } from "./connectorProxy.js";
 import { routerBootstrapOverride } from "./router/transport.js";
-import type { WsData } from "./websocket.js";
+import type { WsData } from "./wsTypes.js";
 
 export { createProjectPredicates } from "./composeGateway.js";
 

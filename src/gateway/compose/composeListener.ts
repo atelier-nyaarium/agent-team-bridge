@@ -1,4 +1,4 @@
-// Stage 13: the HTTP entry point, and the shutdown that flushes before it stops anything.
+// The HTTP entry point, and the shutdown that flushes before it stops anything.
 
 import type { Ambient } from "../../shared/ambient.js";
 import { reportUnrecognizedDataEntries } from "../dataDirInventory.js";
@@ -21,16 +21,16 @@ export interface ListenerStageDeps {
 	enrollNonce?: string;
 	ambient: Pick<Ambient, "clearInterval">;
 	context: FederationContext;
-	stores: StoresStage;
-	sessions: SessionsStage;
+	stores: Pick<StoresStage, "blobStore" | "jobs" | "jobsDurable" | "sessionResumeDurable">;
+	sessions: Pick<SessionsStage, "sessionAuthority" | "sessionResumeSnapshot" | "tripwireTimer" | "sessionReporter">;
 	persistence: PersistenceStage;
-	host: HostStage;
+	host: Pick<HostStage, "presenceWatchTimer">;
 	agents: Pick<AgentsStage, "agentRoutes">;
 	awareness: Pick<AwarenessStage, "awareness" | "awarenessTimer">;
 	federation: Pick<FederationStage, "stop">;
-	enrollment: EnrollmentStage;
-	websockets: WebSocketsStage;
-	routes: RoutesStage;
+	enrollment: Pick<EnrollmentStage, "handleEnrollPost" | "stop">;
+	websockets: Pick<WebSocketsStage, "wsHandlers">;
+	routes: Pick<RoutesStage, "current" | "stop">;
 	routerPresence: Pick<RouterPresenceStage, "stop">;
 }
 

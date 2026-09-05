@@ -87,7 +87,7 @@ function make() {
 			intake.register(kind, handler);
 			ownerOps.set(kind, handler as ErasedOwnerOpHandler);
 		},
-		gatewayFrame: (name, handler) => frames.set(name, handler),
+		gatewayFrame: (name, _mutation, handler) => frames.set(name, handler),
 		onGatewayRegistered: () => undefined,
 		onGatewayDropped: () => undefined,
 		onSessionForgotten: () => undefined,

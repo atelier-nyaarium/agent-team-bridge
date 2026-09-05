@@ -7,7 +7,12 @@ import { OwnerOpRefused } from "../federation-server/inbox/ownerOpIntake.js";
 import { OwnerStoreRegistry } from "../federation-server/inbox/ownerStoreRegistry.js";
 import { DomainQuota } from "../federation-server/owner/domainQuota.js";
 import { OwnerQuarantined } from "../federation-server/owner/ownerStateStore.js";
-import type { ErasedOwnerOpHandler, OwnerOpHandler, OwnerOpKind } from "../federation-server/ownerOpRegistry.js";
+import type {
+	ErasedOwnerOpHandler,
+	OwnerOpHandler,
+	OwnerOpKind,
+	OwnerOpMutation,
+} from "../federation-server/ownerOpRegistry.js";
 import type { OwnerServiceHooks } from "../federation-server/ownerServiceHooks.js";
 import { createCapabilitiesService } from "../federation-server/tier1/capabilitiesService.js";
 import { createReadAnchorsService } from "../federation-server/tier1/readAnchorsService.js";
@@ -37,7 +42,8 @@ const makeHooks = () => {
 			ownerOp: <Kind extends OwnerOpKind>(name: Kind, handler: OwnerOpHandler<Kind>) => {
 				ownerOps.set(name, handler as ErasedOwnerOpHandler);
 			},
-			gatewayFrame: (name: string, handler: GatewayFrameHandler) => gatewayFrames.set(name, handler),
+			gatewayFrame: (name: string, _mutation: OwnerOpMutation, handler: GatewayFrameHandler) =>
+				gatewayFrames.set(name, handler),
 			onGatewayRegistered: () => {},
 			onGatewayDropped: () => {},
 			onSessionForgotten: () => {},

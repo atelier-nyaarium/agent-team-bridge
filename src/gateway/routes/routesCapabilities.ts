@@ -38,10 +38,9 @@ export function createCapabilityRoutes({
 	routerClient,
 	ambient,
 }: CapabilityRoutesDeps) {
-	/** Ungated on purpose: it serves non-secret capability ids and their own instruction text, and the
-	 * hand-launched host window this exists to serve carries no credential to present. */
+	/** Ungated on purpose: non-secret ids, and the host window carries no credential to present. */
 	async function capabilities(): Promise<Response> {
-		// Kept apart rather than merged here: only the caller knows what it already holds, and a.
+		// The console and daemon folds stay apart: only the caller knows what it already holds.
 		let consoleSnapshot = capabilityStore?.snapshot() ?? UNREPORTED_CAPABILITIES;
 		if (routerClient?.isRegistered()) {
 			const result = await withDeadline(
@@ -55,7 +54,7 @@ export function createCapabilityRoutes({
 			if (!result.error && parsed.success && parsed.data.known) consoleSnapshot = parsed.data;
 		}
 		return jsonResponse({
-			// LEGACY, remove after 2026-11-01. A session started by a plugin from before the split reads.
+			// Remove-by: 2026-11-01. An older plugin reads the console fold at the top level.
 			...consoleSnapshot,
 			console: consoleSnapshot,
 			daemon: daemonCapabilityStore?.snapshot() ?? UNREPORTED_CAPABILITIES,

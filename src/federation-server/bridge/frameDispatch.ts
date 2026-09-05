@@ -1,4 +1,5 @@
 import type { GatewayFrameHandler } from "../gatewayBridge.js";
+import type { OwnerOpMutation } from "../ownerOpRegistry.js";
 
 export const BUILT_IN_FRAMES = new Set([
 	"gateway_register",
@@ -19,21 +20,22 @@ export const BUILT_IN_FRAMES = new Set([
 	"list_gateways",
 ]);
 
-/** Gateway frames the migration fence holds, mirroring their owner-op twins. */
-export const MIGRATION_FENCED_GATEWAY_FRAMES = new Set(["board_op", "cross_domain_share", "cross_domain_unshare"]);
-
 /** Registered service frames, keyed by name. */
 export class FrameDispatchTable {
-	private readonly handlers = new Map<string, GatewayFrameHandler>();
+	private readonly entries = new Map<string, { mutation: OwnerOpMutation; handler: GatewayFrameHandler }>();
 
-	/** Handlers receive connection identity. */
-	register(name: string, handler: GatewayFrameHandler): void {
-		if (this.handlers.has(name) || BUILT_IN_FRAMES.has(name))
+	/** Handlers receive connection identity; the class is what the migration fence reads. */
+	register(name: string, mutation: OwnerOpMutation, handler: GatewayFrameHandler): void {
+		if (this.entries.has(name) || BUILT_IN_FRAMES.has(name))
 			throw new Error(`gateway frame "${name}" already registered`);
-		this.handlers.set(name, handler);
+		this.entries.set(name, { mutation, handler });
 	}
 
 	get(name: string): GatewayFrameHandler | undefined {
-		return this.handlers.get(name);
+		return this.entries.get(name)?.handler;
+	}
+
+	mutation(name: string): OwnerOpMutation | undefined {
+		return this.entries.get(name)?.mutation;
 	}
 }

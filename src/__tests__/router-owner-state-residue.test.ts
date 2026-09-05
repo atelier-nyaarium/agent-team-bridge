@@ -127,7 +127,7 @@ describe("Router owner state residue", () => {
 		});
 		// The registration is the only identity a frame handler ever sees.
 		const seen: Array<{ reg: unknown; params: unknown }> = [];
-		bridge.registerGatewayFrame("probe", (reg, params) => {
+		bridge.registerGatewayFrame("probe", "read", (reg, params) => {
 			seen.push({ reg, params });
 			return { ok: true };
 		});

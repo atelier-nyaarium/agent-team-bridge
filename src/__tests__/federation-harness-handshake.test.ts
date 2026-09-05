@@ -136,8 +136,6 @@ describe("gateway session handshake lifecycle", () => {
 	});
 });
 
-// Manual drive: the re-send throttle and the expiry deadline are both read off the gateway clock,
-// and nothing else in these two cases needs a timer to fire on its own.
 describe("gateway handshake deadlines", () => {
 	let h: FederationHarness;
 	const clock = Date.now();
@@ -176,12 +174,19 @@ describe("gateway handshake deadlines", () => {
 		const team = "fixture-app.expire";
 		const socket = registerRaw(h, sockets, team, "one");
 		const pending = String(pushesOf(socket)[0]?.session_id);
-		expect(h.gateway.wsHandlers.findPendingHandshakeId(team, "one")).toBe(pending);
 
 		await h.ambient.advance(HANDSHAKE_PENDING_TTL_MS + 30_000);
 
-		// The sweep consumed the entry, so a late answer no longer finds a handshake to confirm.
+		// Expiry drops the entry.
 		expect(h.gateway.wsHandlers.resolveHandshake(pending, { isMainOrLead: true })).toBe(false);
-		expect(socket.ws.readyState).not.toBe(1);
+		expect(pushesOf(socket)).toHaveLength(1);
+
+		const revived = registerRaw(h, sockets, team, "two");
+		await h.phone.deliver(team, { kind: "send", to: team, body: "after-expiry" });
+		await h.waitFor(
+			() => revived.sent.find((frame) => frame.type === "channel_push" && frame.body === "after-expiry"),
+			"delivery after expiry",
+		);
+		expect(socket.sent.find((frame) => frame.body === "after-expiry")).toBeUndefined();
 	});
 });

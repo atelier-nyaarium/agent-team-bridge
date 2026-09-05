@@ -1,5 +1,4 @@
-// The harness's ambient: a clock the scenario moves, entropy seeded per instance, and timers that
-// either ride real time (so every scenario makes progress unchanged) or wait for `advance`.
+// The harness's ambient: a clock the scenario moves, and timers it can hold.
 
 import crypto from "node:crypto";
 import type { Ambient, IntervalHandle, TimerHandle } from "../shared/ambient.js";
@@ -10,22 +9,14 @@ import type { Ambient, IntervalHandle, TimerHandle } from "../shared/ambient.js"
 export interface FakeAmbientOptions {
 	/** The clock this one is offset from. Defaults to the process clock. */
 	now?: () => number;
-	/**
-	 * "real" rides the process timers, which is what keeps the persist tick, the presence watch, the
-	 * awareness tick, the inbox pump, and the reconciler firing. "manual" holds every timer until
-	 * `advance` reaches its deadline.
-	 */
+	/** "real" rides the process timers; "manual" holds every timer until `advance` reaches it. */
 	drive?: "real" | "manual";
 	/** Fixes the entropy stream. Defaults to a fresh draw, so two instances never collide. */
 	seed?: Buffer;
 }
 
 export interface FakeAmbient extends Ambient {
-	/**
-	 * Moves the clock. Under manual drive every timer whose deadline the move passes runs at its own
-	 * deadline, intervals repeating, with the event loop given a turn between firings so the I/O and
-	 * promises a real elapsed second would have settled do settle.
-	 */
+	/** Runs each timer the move passes at its own deadline, yielding between, and rejects on a throw. */
 	advance(ms: number): Promise<void>;
 	/** Timers still scheduled under manual drive. */
 	scheduled(): number;
@@ -126,6 +117,8 @@ export function fakeAmbient(options: FakeAmbientOptions = {}): FakeAmbient {
 		clearInterval: (handle) => stop(handle as unknown as number),
 		advance: async (ms) => {
 			const target = now() + Math.max(0, ms);
+			let failed = false;
+			let failure: unknown;
 			for (let step = 0; step < ADVANCE_STEP_LIMIT; step += 1) {
 				const entry = dueBefore(target);
 				if (!entry) break;
@@ -135,12 +128,23 @@ export function fakeAmbient(options: FakeAmbientOptions = {}): FakeAmbient {
 				try {
 					entry.run();
 				} catch (error) {
-					console.error(`[fake-ambient] timer threw: ${(error as Error).message}`);
+					// The rest of the due timers still run, the way real time would have run them.
+					if (failed) console.error(`[fake-ambient] timer threw: ${(error as Error).message}`);
+					else {
+						failed = true;
+						failure = error;
+					}
 				}
 				await yieldToLoop();
 			}
+			if (dueBefore(target)) {
+				throw new Error(
+					`[fake-ambient] ${ADVANCE_STEP_LIMIT} firings and timers are still due before the target`,
+				);
+			}
 			setClock(target);
 			await yieldToLoop();
+			if (failed) throw failure;
 		},
 		scheduled: () => held.size,
 	};

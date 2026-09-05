@@ -278,12 +278,12 @@ export function createPresenceService(deps: {
 	};
 
 	const register = (hooks: OwnerServiceHooks): void => {
-		hooks.gatewayFrame("presence_baseline", (reg, params) => {
+		hooks.gatewayFrame("presence_baseline", "delivery", (reg, params) => {
 			const result = applyBaseline(reg, params as Baseline);
 			pushIfChanged(reg.domainId);
 			return result;
 		});
-		hooks.gatewayFrame("presence_delta", (reg, params) => {
+		hooks.gatewayFrame("presence_delta", "delivery", (reg, params) => {
 			const result = applyDelta(reg, params as Delta);
 			pushIfChanged(reg.domainId);
 			if (result.resync)
@@ -312,7 +312,7 @@ export function createPresenceService(deps: {
 			forgetSession(reg, sessionId);
 			pushIfChanged(reg.domainId);
 		});
-		hooks.gatewayFrame("presence_read", (reg) => {
+		hooks.gatewayFrame("presence_read", "read", (reg) => {
 			if (!deps.projection) return { ok: false, error: "projection unavailable" };
 			try {
 				return ownerProjection(reg.domainId, deps.projection);

@@ -5,7 +5,7 @@ import { isComposite, parseSessionName } from "../shared/session-id.js";
 import type { SessionStore } from "../shared/session-store.js";
 import type { PresenceFacade } from "./presence.js";
 import { decideWakeCreate, type WakeCoordinator, type WakeResult } from "./wake.js";
-import { resolveLiveIncarnation, type TeamRegistry, type WsData } from "./websocket.js";
+import { resolveLiveIncarnation, type TeamRegistry, type WsData } from "./wsTypes.js";
 
 ////////////////////////////////
 //  Interfaces & Types

@@ -4,7 +4,7 @@ import type { PresenceRow } from "../shared/presence-identity.js";
 import { presenceIdentityOf } from "../shared/presence-identity.js";
 import { isComposite, isSlug, parseSessionName } from "../shared/session-id.js";
 import type { SessionRecord, SessionStore } from "../shared/session-store.js";
-import { resolveLiveIncarnation, type TeamRegistry, type WsData } from "./websocket.js";
+import { resolveLiveIncarnation, type TeamRegistry, type WsData } from "./wsTypes.js";
 
 ////////////////////////////////
 //  Interfaces & Types

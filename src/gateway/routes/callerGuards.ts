@@ -15,7 +15,7 @@ import { presentedByRequest, type SessionAuthority } from "../sessionAuthority.j
 export type CallerScope = "session" | "owner-data";
 
 export interface CallerGuardsDeps {
-	// The sole resolver of "what must a caller prove to act as X". Absent in test harnesses that do.
+	// The sole resolver of "what must a caller prove to act as X". Absent when tests skip auth.
 	auth?: SessionAuthority;
 	store: Pick<PendingJobStore<ResponsePayload>, "askerOf">;
 }
@@ -46,14 +46,14 @@ export function createCallerGuards({ auth, store }: CallerGuardsDeps) {
 	 */
 	function refuseImpersonation(req: Request, claimed: string, scope: CallerScope): Response | null {
 		if (!auth) return null;
-		// Owner data is not addressed to a session, so naming one proves nothing about the right to.
+		// Owner data is not addressed to a session, so naming one proves no right to it.
 		if (scope === "owner-data" && !provedLocalSession(req)) {
 			console.warn(`[auth] refused an owner-data call claiming "${claimed}" without any session binding`);
 			return jsonResponse({ error: "the owner's own data is not open to this caller" }, 403);
 		}
 		const key = auth.localTeamKey(claimed);
 		if (key === null) {
-			// Malformed rather than unauthorized: the name cannot denote any session here, so the.
+			// Malformed rather than unauthorized: the name cannot denote any session here.
 			return jsonResponse({ error: `Invalid sender: "${claimed}" does not name a local session` }, 400);
 		}
 		if (auth.satisfies(auth.toClaim(key), presentedByRequest(req))) return null;

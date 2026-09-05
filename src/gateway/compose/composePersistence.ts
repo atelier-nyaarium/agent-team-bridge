@@ -1,9 +1,9 @@
-// Stage 4: the flush every writer takes part in, and the periodic tick that runs it.
+// The flush every writer takes part in, and the tick that runs it.
 
 import type { Ambient, IntervalHandle } from "../../shared/ambient.js";
 import { createPersistRunner } from "../../shared/durable-store.js";
 import { fenced, MIGRATION_SETTLE_MS } from "../../shared/migration-fence.js";
-import { resolveLiveIncarnation } from "../websocket.js";
+import { resolveLiveIncarnation } from "../wsTypes.js";
 import type { SessionsStage } from "./composeSessions.js";
 import type { StoresStage } from "./composeStores.js";
 import type { FederationContext } from "./federationContext.js";
@@ -13,8 +13,18 @@ const MAX_SESSION_RESUME_ENTRIES = 2_000;
 
 export interface PersistenceStageDeps {
 	ambient: Pick<Ambient, "now" | "setInterval">;
-	stores: StoresStage;
-	sessions: SessionsStage;
+	stores: Pick<
+		StoresStage,
+		| "jobs"
+		| "jobsDurable"
+		| "durableOpStore"
+		| "boardReplays"
+		| "capabilityStore"
+		| "blobStore"
+		| "maxBlobStoreBytes"
+		| "sessionResumeDurable"
+	>;
+	sessions: Pick<SessionsStage, "sessionStore" | "registry" | "presence" | "sessionResumeSnapshot">;
 	context: FederationContext;
 }
 

@@ -3,7 +3,7 @@ import { CopilotAgentService } from "../gateway/copilotAgentService.js";
 import { CopilotRelay } from "../gateway/copilotRelay.js";
 import { CopilotRoute } from "../gateway/copilotRoute.js";
 import { createSessionAuthority } from "../gateway/sessionAuthority.js";
-import { resolveLiveIncarnation, type TeamRegistry } from "../gateway/websocket.js";
+import { resolveLiveIncarnation, type TeamRegistry } from "../gateway/wsTypes.js";
 import { processAmbient } from "../shared/ambient.js";
 import { CopilotAgentResultSchema, copilotAgentIdForOperation } from "../shared/copilot-agent.js";
 import { type CopilotCatalogWriter, SessionStore } from "../shared/session-store.js";

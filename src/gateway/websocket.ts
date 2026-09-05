@@ -7,22 +7,14 @@ import type { ConnectionMode } from "../shared/types.js";
 import { HandshakeGate } from "./handshakeGate.js";
 import { NOTHING_PRESENTED, type Presented, presentedByRegister } from "./sessionAuthority.js";
 import {
-	type ConversationRegistry,
-	getAllActiveRealWs,
 	getAllActiveWs,
-	HANDSHAKE_REPUSH_DEDUPE_MS,
 	type HandshakeRepushOutcome,
 	REGISTER_WINDOW_MS,
 	RESERVED_TEAM_NAMES,
 	resolveLiveIncarnation,
-	type TeamRegistry,
 	type WebSocketDeps,
 	type WsData,
 } from "./wsTypes.js";
-
-// The pre-split public surface of this module, preserved verbatim so the nine importers of.
-export type { ConversationRegistry, HandshakeRepushOutcome, TeamRegistry, WebSocketDeps, WsData };
-export { getAllActiveRealWs, getAllActiveWs, HANDSHAKE_REPUSH_DEDUPE_MS, RESERVED_TEAM_NAMES, resolveLiveIncarnation };
 
 const CODEX_INBOUND_FRAMES = agentInboundFrameTypes("codex");
 const COPILOT_INBOUND_FRAMES = agentInboundFrameTypes("copilot");
@@ -52,7 +44,7 @@ export function createWebSocketHandlers({
 	ambient,
 }: WebSocketDeps) {
 	const { HEARTBEAT_INTERVAL_MS = 30000, MISSED_PINGS_LIMIT = 2 } = config;
-	// Falls back to sessionStore directly (its own methods have identical signatures) when no.
+	// Falls back to sessionStore directly (identical method signatures) when none is given.
 	const liveWriter = presenceWriter ?? sessionStore;
 
 	function heartbeatTick() {
@@ -76,7 +68,7 @@ export function createWebSocketHandlers({
 	}
 	const heartbeatInterval = ambient.setInterval(heartbeatTick, HEARTBEAT_INTERVAL_MS);
 
-	// The handshake's state and rules (which hs-* id a socket owes, throttle windows, attempt caps,.
+	// The handshake's state and rules: which hs-* id a socket owes, throttle windows, attempt caps.
 	const handshakeGate = new HandshakeGate(ambient);
 
 	/** Mint a fresh lead handshake for a channel socket and send it. Sent once at register; a session
@@ -161,7 +153,7 @@ export function createWebSocketHandlers({
 			const mode: ConnectionMode = "channel";
 			const conversationId = reg.data.conversationId ?? null;
 
-			// Host-daemon auth: the reserved "host" slot (which drives agent terminals and.
+			// Host-daemon auth: only the reserved "host" slot may drive terminals and wakes.
 			if (team === "host" && (!config.hostWsToken || reg.data.token !== config.hostWsToken)) {
 				console.log(`[ws] rejected host register - bad or missing token`);
 				ws.send(JSON.stringify({ type: "register_reject", team, reason: "unauthorized" }));
@@ -170,13 +162,13 @@ export function createWebSocketHandlers({
 				return;
 			}
 
-			// Session binding: the token was minted with the record and reaches the session only.
+			// Session binding: presenting the token proves ownership of the record.
 			const presentedToken = reg.data.sessionToken;
 			const boundRecord = presentedToken ? sessionStore?.recordByBindToken(presentedToken) : undefined;
 			const isBound = !!boundRecord && sessionStore?.teamOf(boundRecord) === team;
 			const presentedHere = presentedByRegister(reg.data);
 
-			// A name whose binding is ACTIVE may be claimed only by the holder of that binding. This.
+			// A name whose binding is ACTIVE may be claimed only by the holder of that binding.
 			if (auth && !auth.satisfies(auth.toClaim(team), presentedHere)) {
 				console.log(`[ws] rejected register for bound team "${team}" - binding not presented`);
 				ws.send(JSON.stringify({ type: "register_reject", team, reason: "unauthorized" }));
@@ -184,7 +176,7 @@ export function createWebSocketHandlers({
 				ws.close();
 				return;
 			}
-			// A session on a host SHELL must prove the daemon launched it, because that name is what.
+			// A host SHELL session must prove the daemon launched it.
 			if (auth && isHostSpawnSession(team) && !auth.presentsOwnLaunchToken(team, presentedHere)) {
 				console.log(`[ws] rejected register for host session "${team}" - no daemon launch token`);
 				ws.send(JSON.stringify({ type: "register_reject", team, reason: "unauthorized" }));
@@ -196,7 +188,7 @@ export function createWebSocketHandlers({
 				ws.data.boundToken = presentedToken;
 				const wasInert = !sessionStore?.isBindingActive(boundRecord);
 				sessionStore?.activateBinding(boundRecord);
-				// Arming the binding must also expel anyone who claimed this name while it was inert,.
+				// Arming the binding also expels anyone who claimed the name while inert.
 				if (wasInert) {
 					for (const [otherSubId, other] of registry.get(team) ?? []) {
 						if (other !== ws && other.data.boundToken !== presentedToken) {
@@ -209,7 +201,7 @@ export function createWebSocketHandlers({
 				}
 			}
 
-			// Reserved-name protection: first live registration wins. A second process.
+			// Reserved-name protection: first live registration wins; a later claim is rejected.
 			if (RESERVED_TEAM_NAMES.has(team)) {
 				const existingSubs = registry.get(team);
 				const existingActive = existingSubs ? getAllActiveWs(existingSubs) : [];
@@ -223,7 +215,7 @@ export function createWebSocketHandlers({
 				}
 			}
 
-			// After every rejection gate, so a second daemon carrying the token cannot replace the live.
+			// Placed after every rejection gate, so only the surviving connection sets capabilities.
 			if (team === "host" && reg.data.daemonCapabilities) {
 				onDaemonCapabilities?.(reg.data.daemonCapabilities);
 			}
@@ -263,12 +255,12 @@ export function createWebSocketHandlers({
 			ws.data.claudeSessionId = reg.data.claudeSessionId;
 			ws.data.cwdName = reg.data.cwdName;
 			subs.set(subId, ws);
-			// The registry a snapshot reads from already reflects this socket live at this point (see.
+			// The registry a snapshot reads from already reflects this socket as live here.
 			announcePresenceDirty?.();
 
 			if (conversationId) {
 				const priorConversationWs = conversationRegistry.get(conversationId);
-				// A conversationId belongs to ONE MCP process for its whole lifetime, reused across.
+				// A conversationId belongs to one MCP process for its whole lifetime, reused across reconnects.
 				if (priorConversationWs && priorConversationWs.data.teamName !== team) {
 					console.warn(
 						`[ws] refusing conversationId claim: ${team}/${subId} presented a conversationId already held by team "${priorConversationWs.data.teamName}"`,
@@ -281,7 +273,7 @@ export function createWebSocketHandlers({
 				}
 			}
 
-			// Only a bare project is a devcontainer catalog entry; a composite `project.session` is a.
+			// Only a bare project is a devcontainer catalog entry, never a composite `project.session`.
 			if (typeof msg.projectPath === "string" && msg.projectPath && !isComposite(team)) {
 				knownTeamPaths.set(team, msg.projectPath);
 			}
@@ -289,7 +281,7 @@ export function createWebSocketHandlers({
 			wakeCoordinator.notify(team);
 			console.log(`[ws] ${team}/${subId} connected (mode: ${mode})`);
 
-			// Handshake: ask channel-mode connections if they are the main/lead agent - UNLESS this.
+			// Handshake: ask channel-mode connections if they are lead, unless they proved that role before.
 			try {
 				ws.send(JSON.stringify({ type: "register_ok", opLedgerProtocol: OP_LEDGER_PROTOCOL }));
 			} catch {
@@ -317,7 +309,7 @@ export function createWebSocketHandlers({
 			onTeamConnect?.(team, ws);
 		}
 
-		// Only the authenticated host socket may report a wake outcome (matching host_op_reply and.
+		// Only the authenticated host socket may report a wake outcome.
 		if (msg.type === "wake_result" && ws.data.teamName === "host" && typeof msg.team === "string") {
 			if (msg.success === false) {
 				wakeCoordinator.notify(msg.team, false);
@@ -331,7 +323,7 @@ export function createWebSocketHandlers({
 			onDeliveryAck?.(ws.data.teamName, msg.delivery_id);
 		}
 
-		// The host daemon's reply to a peek/send relay, correlated by reqId. Only the.
+		// The host daemon's reply to a peek/send relay, correlated by reqId.
 		if (msg.type === "host_op_reply" && ws.data.teamName === "host" && typeof msg.reqId === "string") {
 			hostOpCoordinator?.settle(msg.reqId, {
 				ok: msg.ok === true,
@@ -360,7 +352,7 @@ export function createWebSocketHandlers({
 					}
 				}
 				console.log(`[ws] catalog received: ${offlineCatalog.size} projects`);
-				// Detected host spawn points ride the same frame. Rewritten whole on every catalog,.
+				// Detected host spawn points ride the same frame, rewritten whole each catalog.
 				const spawns = msg.hostSpawns;
 				if (Array.isArray(spawns) && hostSpawnPoints) {
 					hostSpawnPoints.ids = spawns.filter((s): s is string => typeof s === "string" && s.length > 0);
@@ -404,12 +396,12 @@ export function createWebSocketHandlers({
 				if (subs.size === 0) {
 					registry.delete(teamName);
 					offlineCatalog.clear();
-					// Cleared with the catalog, for the same reason: a machine with no daemon cannot.
+					// Cleared with the catalog: a machine with no daemon cannot report spawn points.
 					if (hostSpawnPoints) {
 						hostSpawnPoints.known = false;
 						hostSpawnPoints.ids = [];
 					}
-					// Fail in-flight terminal ops AND wakes so a console peek/send or a /send awaiting a.
+					// Fail in-flight terminal ops and wakes so no caller hangs forever.
 					hostOpCoordinator?.failAll("host daemon disconnected");
 					wakeCoordinator.failAll();
 					console.log(`[ws] host disconnected - offline catalog cleared`);
@@ -522,7 +514,7 @@ export function createWebSocketHandlers({
 		const subs = registry.get(pending.team);
 		const ws = subs?.get(pending.subId);
 		if (!ws) return true;
-		// Honor a confirm only for a still-open socket: a reply arriving after the socket dropped or.
+		// Ignore a confirm for a socket that already closed or reconnected.
 		if (ws.readyState !== 1) return true;
 
 		const claim = HandshakeGate.leadClaim(replyAsJson, response);

@@ -1,4 +1,4 @@
-// Stage 9: the enrollment window, its pinned-TLS door, and the bootstrap install.
+// The enrollment window, its pinned-TLS door, and the bootstrap install.
 
 import type { Ambient, TimerHandle } from "../../shared/ambient.js";
 import type { Identity } from "../../shared/crypto.js";

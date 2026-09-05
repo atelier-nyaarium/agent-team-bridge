@@ -94,10 +94,7 @@ internal data class EnrollEnvelope(
 
 /** A retryable bounce body (offline / malformed), distinct from an EnrollResult. */
 @Serializable
-// internal (not private): referenced from postRouterDirect, an internal inline fun - an inline
-// function's body cannot access a private-in-file type even from the same file (the compiler
-// treats inlining as a visibility-widening operation). Same bug class as ConsoleHttp's
-// PINNED_*/HELD_*/ROUTER_HOLD_MS constants; see their comment for the general rule.
+// internal, not private: an inline fn's body cannot see a private-in-file type.
 internal data class BounceBody(val error: String? = null, val retryable: Boolean = false)
 
 /** First-root POST body: a top-level `firstRoot` field routes to the Router's first-root intake. */

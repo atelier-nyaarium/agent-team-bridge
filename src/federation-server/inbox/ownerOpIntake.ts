@@ -74,6 +74,11 @@ export class OwnerOpIntake {
 		this.registry.register(kind, handler);
 	}
 
+	/** Catalogued kinds no handler serves. */
+	unregisteredKinds(): OwnerOpKind[] {
+		return this.registry.unregistered();
+	}
+
 	/** The inbox's own kinds land through the same registry as every service. */
 	private registerInboxOps(): void {
 		this.register("deliver", (op, value) => this.deliver(op, value));
@@ -186,7 +191,17 @@ export class OwnerOpIntake {
 		}
 		const handler = entry && this.registry.handler(entry.kind);
 		if (!entry || !handler) return refused("unsupported");
-		return handler(op, entry.value.parse(op.op) as Record<string, unknown>);
+		const answered = handler(op, entry.value.parse(op.op) as Record<string, unknown>);
+		const schema = entry.answer;
+		if (!schema) return answered;
+		return Promise.resolve(answered).then((result) => {
+			// An unsettled outcome belongs to the intake, not to the handler's answer.
+			if (!isSettled(result)) return result;
+			const checked = schema.safeParse(result);
+			if (!checked.success)
+				console.warn(`[owner-op] ${entry.kind} answered off its schema: ${checked.error.issues[0]?.message}`);
+			return result;
+		});
 	}
 
 	/** Console writes stay in their Domain and use their opKey. */
@@ -209,7 +224,7 @@ export class OwnerOpIntake {
 			row.data.envelope.kind === "console_op" &&
 			(this.gatewayProtocol?.(op.domainId, address.gatewayId) ?? 0) < FEDERATION_VALUE_PROTOCOL_VERSION
 		) {
-			// Remove-by: every registered gateway reports protocol 2.
+			// A gateway below the value protocol cannot open a console op.
 			throw new OwnerOpRefused("unsupported");
 		}
 		const result = this.params.inbox.appendRow({

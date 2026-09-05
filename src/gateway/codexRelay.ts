@@ -10,7 +10,8 @@ import {
 	type CodexPersistedAgent,
 } from "../shared/codex-agent.js";
 import type { SessionRecord, SessionStore } from "../shared/session-store.js";
-import type { CodexAgentService, CodexApplication } from "./codexAgentService.js";
+import type { CodexAgentService } from "./codexAgentService.js";
+import type { CodexApplication } from "./codexAgentTypes.js";
 
 ////////////////////////////////
 //  Interfaces & Types

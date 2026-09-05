@@ -1,6 +1,6 @@
 import type { ServerWebSocket } from "bun";
 import { describe, expect, it } from "vitest";
-import { resolveLiveIncarnation, type TeamRegistry, type WsData } from "../gateway/websocket.js";
+import { resolveLiveIncarnation, type TeamRegistry, type WsData } from "../gateway/wsTypes.js";
 import { processAmbient } from "../shared/ambient.js";
 import { SessionStore } from "../shared/session-store.js";
 

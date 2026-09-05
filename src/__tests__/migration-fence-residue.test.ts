@@ -218,14 +218,14 @@ describe("migration fence residue", () => {
 	it("a share is neither taken nor withdrawn under the fence", () => {
 		const state = new CrossDomainShareState(tempDir(), undefined, processAmbient());
 		const target = { kind: "domain", domainId: "beta" } as never;
-		state.share("alpha.gw.spawn.session", target);
+		expect(state.share("alpha.gw.spawn.session", target)).toBe(true);
 		setMigrationEpoch(7);
 
-		state.share("alpha.gw.other.session", target);
+		expect(state.share("alpha.gw.other.session", target)).toBe(false);
 
-		expect(state.unshare("alpha.gw.spawn.session", target)).toBe(false);
+		expect(state.unshare("alpha.gw.spawn.session", target)).toBe("fenced");
 		setMigrationEpoch(null);
-		expect(state.unshare("alpha.gw.spawn.session", target)).toBe(true);
-		expect(state.unshare("alpha.gw.other.session", target)).toBe(false);
+		expect(state.unshare("alpha.gw.spawn.session", target)).toBe("removed");
+		expect(state.unshare("alpha.gw.other.session", target)).toBe("absent");
 	});
 });

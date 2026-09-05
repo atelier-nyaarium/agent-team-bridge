@@ -7,7 +7,7 @@ import { jsonResponse } from "../routeSchemas.js";
 export interface PresenceRoutesDeps {
 	config: GatewayConfig;
 	localDomain: string;
-	// Live daemon catalog state. `known` distinguishes no reply from an empty catalog.
+	// `known` separates no reply from an empty catalog.
 	hostSpawnPoints?: HostSpawnState;
 	routerClient?: Pick<import("../router/routerClient.js").RouterClient, "isRegistered" | "callInboxTool"> | null;
 	teams: () => Response;
@@ -22,13 +22,9 @@ export function createPresenceRoutes({
 }: PresenceRoutesDeps) {
 	const { localGatewayId, localDomainId } = config;
 
-	/** What THIS machine offers, as the one-element list every consumer merges peers into.
-	 *
-	 * Always a row, even when the list is empty: an empty `hostSpawns` is an affirmative "nothing
-	 * beyond host", which is a different answer from a Gateway that said nothing at all, and only the
-	 * row makes that distinction expressible. */
+	/** This machine's one row, empty `hostSpawns` and all: that says nothing beyond host. */
 	function localSpawnPoints(): GatewaySpawnPoints[] {
-		// NO ROW until a daemon has actually answered. An empty `hostSpawns` is an affirmative.
+		// No row until a daemon has answered, which is a different answer from an empty one.
 		if (!hostSpawnPoints?.known) return [];
 		return [
 			{
@@ -39,8 +35,7 @@ export function createPresenceRoutes({
 		];
 	}
 
-	/** Folds the Router projection. Coverage rides along because a peer that could not be asked and
-	 * one with nothing to say are otherwise the same answer, and its sessions get swept as absent. */
+	/** Folds the Router projection. Coverage rides along: an unasked peer is not a silent one. */
 	async function discoverFull(): Promise<{
 		teams: TeamInfo[];
 		coverage: DiscoverCoverage;
@@ -48,7 +43,7 @@ export function createPresenceRoutes({
 	}> {
 		const local = (await teams().json()) as TeamInfo[];
 		const offlineCoverage: DiscoverCoverage = { rosterKnown: false, asked: 0, answered: 0 };
-		// isRegistered, not isConnected: a refused registration leaves the socket open, and reading.
+		// isRegistered, not isConnected: a refused registration leaves the socket open.
 		if (!routerClient?.isRegistered()) {
 			return { teams: local, coverage: offlineCoverage, spawnPoints: localSpawnPoints() };
 		}
@@ -72,13 +67,11 @@ export function createPresenceRoutes({
 		};
 	}
 
-	/** HTTP wrapper. The bare array is the legacy shape older plugins parse; `?coverage=1` opts into
-	 * the object form. Carries this Gateway's own identity so the caller can tell ITS row from a
-	 * same-named session on another machine. */
+	/** `?coverage=1` opts into the object form, which names this Gateway; the bare array is the rest. */
 	async function discover(url?: URL): Promise<Response> {
 		const full = await discoverFull();
 		if (url?.searchParams.get("coverage") === "1") {
-			// `spawnPoints` is destructured off and NOT served here. It is answered to a same-Domain.
+			// `spawnPoints` is deliberately not served on this route.
 			const { spawnPoints: _spawnPoints, ...served } = full;
 			return jsonResponse({ ...served, localGatewayId, localDomainId: localDomain });
 		}

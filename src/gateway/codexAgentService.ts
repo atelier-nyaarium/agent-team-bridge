@@ -49,23 +49,6 @@ import {
 } from "./codexAgentTypes.js";
 import type { SessionAuthority } from "./sessionAuthority.js";
 
-export type {
-	CodexAcceptanceResult,
-	CodexAgentServiceDeps,
-	CodexApplication,
-	CodexDaemonDeliveryAcceptance,
-	CodexDeliveryAcceptance,
-	CodexExistingAgentIntentInput,
-	CodexIntentInput,
-	CodexStartIntentInput,
-	CodexStopIntentInput,
-	CodexTransitionErrorCode,
-	CodexTransitionResult,
-	OwnedCodexAgent,
-	OwnedCodexOperation,
-} from "./codexAgentTypes.js";
-export { CodexTransitionError } from "./codexAgentTypes.js";
-
 ////////////////////////////////
 //  Class
 

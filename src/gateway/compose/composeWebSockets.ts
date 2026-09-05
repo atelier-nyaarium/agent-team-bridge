@@ -1,4 +1,4 @@
-// Stage 10: the session sockets and the held-delivery handover that rides them.
+// The session sockets and the held-delivery handover that rides them.
 
 import type { Ambient } from "../../shared/ambient.js";
 import { ChannelDeliveryCoordinator } from "../channelDelivery.js";
@@ -15,8 +15,18 @@ const MISSED_PINGS_LIMIT = 2;
 export interface WebSocketsStageDeps {
 	hostWsToken?: string;
 	ambient: Ambient;
-	stores: StoresStage;
-	sessions: SessionsStage;
+	stores: Pick<StoresStage, "pendingDeliveries" | "daemonCapabilityStore">;
+	sessions: Pick<
+		SessionsStage,
+		| "registry"
+		| "conversationRegistry"
+		| "knownTeamPaths"
+		| "offlineCatalog"
+		| "hostSpawnPoints"
+		| "presence"
+		| "sessionStore"
+		| "sessionAuthority"
+	>;
 	host: Pick<HostStage, "wakeCoordinator" | "hostOpCoordinator" | "pushPresenceWatch">;
 	agents: Pick<AgentsStage, "codexRelay" | "copilotRelay">;
 	federation: Pick<FederationStage, "channelDeliveryAck">;

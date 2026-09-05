@@ -1,6 +1,5 @@
 import { mintEpoch } from "../../shared/epoch.js";
 import {
-	CONSUMER_IDLE_TTL_MS,
 	formatInboxAddress,
 	type InboxAddress,
 	type InboxRow,

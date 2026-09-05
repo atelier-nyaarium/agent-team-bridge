@@ -22,10 +22,11 @@ import type { SessionStore } from "../../shared/session-store.js";
 import type { GatewaySpawnPoints, TeamInfo } from "../../shared/types.js";
 import type { DeliverToOwner } from "../consolePushOps.js";
 import type { CrossDomainPresenceConsumer } from "../federation/crossDomainPresenceConsumer.js";
+import type { ShareMirrorOutcome } from "../federation/crossDomainShareState.js";
 import type { IntentTracker } from "../intent.js";
 import type { ReadAnchors } from "../readAnchors.js";
 import type { WakeResult } from "../wake.js";
-import type { ConversationRegistry, TeamRegistry } from "../websocket.js";
+import type { ConversationRegistry, TeamRegistry } from "../wsTypes.js";
 import type { DurableOpStore } from "./durableOpStore.js";
 
 ////////////////////////////////
@@ -230,10 +231,9 @@ export interface CrossDomainShareHandlers {
 		sessionTarget: string,
 		target: CrossDomainShareTarget,
 	) => Promise<void>;
-	share: (sessionTarget: string, target: CrossDomainShareTarget) => void;
-	/** Withdraw a session's share from an audience, returning whether a record was removed
-	 * (so the handler only expires in-flight jobs when the share actually changed). */
-	unshare: (sessionTarget: string, target: CrossDomainShareTarget) => boolean;
+	/** False while the migration fence holds. */
+	share: (sessionTarget: string, target: CrossDomainShareTarget) => boolean;
+	unshare: (sessionTarget: string, target: CrossDomainShareTarget) => ShareMirrorOutcome;
 	listShares: () => CrossDomainListSharesResult["shares"];
 	/** Settle any in-flight cross-Domain job after a withdrawn share, so an already-accepted send's
 	 * reply stops at the destination instead of forwarding back to the origin. Targets the one

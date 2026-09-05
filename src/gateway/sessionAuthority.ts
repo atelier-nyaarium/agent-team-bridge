@@ -3,7 +3,7 @@ import { Address, composeSessionName, DEFAULT_SESSION, parseTarget } from "../sh
 import type { SessionRecord, SessionStore } from "../shared/session-store.js";
 // Type-only: websocket.ts imports the gates from here, so a value import either way would close a
 // runtime cycle. The one function needed from that module is injected instead.
-import type { TeamRegistry, WsData } from "./websocket.js";
+import type { TeamRegistry, WsData } from "./wsTypes.js";
 
 ////////////////////////////////
 //  Interfaces & Types

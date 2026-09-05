@@ -1,4 +1,3 @@
-import crypto from "node:crypto";
 import type { Ambient } from "../../shared/ambient.js";
 import { canonicalJson, sha256Hex } from "../../shared/canonical-json.js";
 import type { SealedEnvelope } from "../../shared/crypto.js";
@@ -19,7 +18,7 @@ export interface RelayDeps {
 	blobUploader?: ReturnType<typeof import("../router/blobUploader.js").createBlobUploader>;
 	// The disjoint cross-Domain peer set. A cross-Domain send resolves its target's Domain.
 	crossDomainPeers?: import("../federation/crossDomainPeers.js").CrossDomainPeers | null;
-	// Whether a gateway id resolves to a LOCAL (single-owner allowlist) peer. Mirrors the.
+	// Whether a gateway id is a LOCAL (single-owner allowlist) peer.
 	resolvesLocalGateway?: ((gatewayId: string) => boolean) | null;
 	ambient: Pick<Ambient, "newId" | "setTimer">;
 }
@@ -66,7 +65,7 @@ export function createRelay(deps: RelayDeps) {
 		if (!routerClient?.isConnected())
 			return { ok: false, error: `Router unavailable; cannot reach Gateway "${dstGateway}"` };
 		if (!sealer) return { ok: false, error: `federation crypto is not configured` };
-		// Resolve the target to a SealTarget once: a local peer is the bare string (v1); a.
+		// Resolve to a SealTarget once: a local peer is the bare string; a cross-Domain target pairs domain and gateway ids.
 		let target: import("../federation/sealer.js").SealTarget;
 		let sealed: SealedEnvelope;
 		try {
@@ -107,7 +106,7 @@ export function createRelay(deps: RelayDeps) {
 			const result = await routerClient.callInboxTool("inbox_append", {
 				address,
 				row: { envelope, producerSig: signRowEnvelope(envelope, producerSignPriv), body: sealed },
-				// Identifies the operation by the CLEAR op. The ledger's own hash covers the sealed bytes,.
+				// Identifies the operation by the clear op; the ledger's hash covers the sealed bytes.
 				opKey: { ...envelope.opKey, hash: sha256Hex(canonicalJson({ address, op })) },
 			});
 			if (result.error) return { ok: false, error: result.error };
@@ -117,7 +116,7 @@ export function createRelay(deps: RelayDeps) {
 				return { ok: false, error: accepted.outcome };
 			return { ok: true, result: accepted };
 		}
-		// The Domain the target actually resolved to (authoritative over the caller's hint),.
+		// The Domain the target actually resolved to, authoritative over the caller's hint.
 		const resolvedDstDomain = typeof target === "string" ? undefined : target.domainId;
 		const relayId = ambient.newId();
 		const call = await routerClient.callTool("gateway_relay", {
@@ -130,7 +129,7 @@ export function createRelay(deps: RelayDeps) {
 		if (call.error) return { ok: false, error: call.error };
 		const reply = call.result as { ok?: boolean; result?: unknown; error?: string } | undefined;
 		if (!reply || reply.ok === false) return { ok: false, error: reply?.error ?? "cross-Gateway relay failed" };
-		// The reply result is sealed by the destination Gateway back to us; open it. A.
+		// The reply is sealed by the destination Gateway back to us; open it here.
 		try {
 			return { ok: true, result: sealer.open(dstGateway, reply.result as SealedEnvelope, resolvedDstDomain) };
 		} catch (err) {

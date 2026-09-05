@@ -106,7 +106,7 @@ export class BlobStore {
 			fs.closeSync(fd);
 		}
 		// Reads refresh eviction time.
-		touch(file);
+		touch(file, this.ambient.now());
 		return { bytes: out, eof: offset + want >= size };
 	}
 
@@ -253,9 +253,9 @@ function sizeOf(file: string): number | null {
 }
 
 /** Refresh usage timestamp, best effort. */
-function touch(file: string): void {
+function touch(file: string, atMs: number): void {
 	try {
-		const at = new Date();
+		const at = new Date(atMs);
 		fs.utimesSync(file, at, at);
 	} catch {
 		// Timestamp failure is non-fatal.

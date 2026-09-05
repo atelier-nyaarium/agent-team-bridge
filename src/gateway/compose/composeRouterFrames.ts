@@ -1,4 +1,4 @@
-// Stage 12a: the Router frames this Gateway answers, and the console dispatcher behind the value op.
+// The Router frames this Gateway answers, and the console dispatcher behind the value op.
 
 import type { Ambient } from "../../shared/ambient.js";
 import { opPayloadAadKind } from "../../shared/content-envelope.js";
@@ -23,8 +23,18 @@ export interface RouterFramesStageDeps {
 	wakeTimeoutMs: number;
 	ambient: Ambient;
 	context: FederationContext;
-	stores: StoresStage;
-	sessions: SessionsStage;
+	stores: Pick<StoresStage, "blobStore" | "jobs" | "durableOpStore">;
+	sessions: Pick<
+		SessionsStage,
+		| "registry"
+		| "conversationRegistry"
+		| "isTrustedCatalogProject"
+		| "presence"
+		| "planeRegistry"
+		| "intentTracker"
+		| "readAnchors"
+		| "crossDomainPresenceConsumer"
+	>;
 	host: Pick<HostStage, "relayToHost" | "wakeService" | "wakeCoordinator">;
 	routes: () => GatewayRoutes;
 }

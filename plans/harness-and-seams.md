@@ -781,61 +781,86 @@ waiter, so the call held for the whole budget.
   TypeScript driver, not the app; host and session frames the fakes exchange are not
   schema-checked, since no shared schema names them.
 
-## Phase 5 - Split
+## Phase 5 - Split ✅
 
-### Slices
+### Slices, as shipped (`d76a9d37`, `cc54aa0a`, `7ba3cb65`) ✅
 
-Reassessed after Phase 4.
+**Routes and the HTTP router:** `routes.ts` is a 266-line composer over twelve modules under
+`src/gateway/routes/` (addressing, the caller guards, the relay, status, capabilities, presence,
+send, respond, board, and the three bindings for console push, blob fetch, and presence
+exchange), each declaring only the fields it reads. The four capture-nothing helpers are module
+level in `routesBoard.ts`. `resolveHandshake` stays in `RoutesDeps`: the assessment's fact was
+stale, `respond` calls it for every bridge handshake reply. `createHttpRouter` in
+`src/gateway/httpRouter.ts` owns the dispatch, the enrollment routes, and the blob routes;
+`routes` reaches it as a thunk because federation activation rebuilds them. `send`, `respond`,
+and `taskBoard` stay one function each, over 200 lines apiece; their locals are the closure.
 
-1. `routes.ts` into modules by the field matrix (`routesStatus`, `routesCapabilities`,
-   `routesPresence`, `routesSend`, `routesRespond`, `routesBoard`, `routesHumanNotify` over
-   `createConsolePushOps`, `routesBlob`, `routesFederationPresence`) behind a compatibility
-   `createRoutes(ctx)`; the four captured-nothing helpers to module level; `resolveHandshake`
-   dropped from `RoutesDeps`.
-2. The `router` function to its own module taking `{handleEnrollPost, enrollNonce, admitPayload,
-   blobStore, sessionAuthority, agentRoutes}`, with the blob and enrollment routes beside it.
-3. `composeGateway`'s residue into the thirteen modules in compose order (bootstrap, stores,
-   sessions, persistence, host, agents, awareness, federation, websockets, routes, router
-   handlers, HTTP router, listener); the four late-bound cycles stay closures. `GatewayGraph`
-   shrinks to `router`, `wsHandlers`, `close`, and an explicit fault port (link down, keyring
-   state) that replaces the harness's `federation().routerClient.stop()`,
-   `contentKeyStore.epochs()`, `federation().sealer`, and `crossDomainPeers` reads.
-   `RouterHandlers` splits frame dispatch from the presence-push lifecycle. The gateway takes the
-   phone door's shape: one active federation context published atomically on a bootstrap install
-   replaces the outer `gatewayBoot` and `localDomainId` captures and the `routerCertFp` the
-   routes read, which go stale after an install today. That context owns the share record: it
-   posts the Router record when it writes its own mirror, replacing the phone's two posts and the
-   compensating unshare.
-4. **Ambient context:** One injected record (clock, entropy, ids, timers) through
-   `composeGateway` and `RouterServerParams` replaces the per-module `now?`, `randomBytes?`,
-   `newId?` defaults (25 `Date.now` sites; the timers in `routes`, `wake`, the relays,
-   `crossDomainPresence`, `routerClient`, `gatewayBridge`, `consoleSockets`, and the websocket
-   handshake re-send and expiry, which read the process clock behind `createWebSocketHandlers`
-   and so have no harness scenario). A residue test
-   fences direct `Date.now`, `randomBytes`, `randomUUID`, `Math.random`, `setTimeout`, and
-   `setInterval` outside the adapters. Closes the clock-defaults bug class from Phase 1. The
-   phone's fold shipped as `PhoneAmbient` in Phase 4; the two share the vocabulary (clock,
-   entropy, ids, timers), not a type.
-5. **Router:** One body reader feeds both `resolve` and `handle`. A typed owner-op registry:
-   definitions carry kind, value schema, handler, and mutation class; built-ins register through
-   the same path as the services; `OwnerOp.op` stops being `z.record`; the per-kind answer shapes
-   become schemas the phone driver, the fixtures, and Kotlin read. The registry is the catalog:
-   the codegen and the residue fences read the kinds, outcomes, and reasons from it, and the hand
-   list in `wire-vocabulary.ts` goes.
-6. **Names:** The two `Provisioning` types (the generated `proto.Provisioning`, eleven optional
-   fields and positional hazards, and the parsed one in `ConsoleClientTypes.kt`) become a wire
-   type and a credential blob; `Provisioning.parse` stops saving the conversation id, the last
-   identity write outside the door. `ChatRepository.client` (a var) beside `client()` gets one
-   name. `DrainHost`, `SessionHost`, and `PresenceHost` fold onto the role ports where their
-   members overlap. `connect()` leaves `ChatRepository` for a JVM-testable coordinator over the
-   door and the transport.
-7. `startGateway` under 100 lines; no file over 600.
+**The gateway root:** `composeGateway.ts` is 193 lines calling thirteen stages under
+`src/gateway/compose/` in order, with the four late-bound cycles as closures and thunks for a
+stage that needs a later one. `GatewayGraph` is `router`, `wsHandlers`, `close`, and `faults`
+(`dropRouterLink`, `routerRegistered`, `routerIncarnation`, `heldEpochs`, `sessionRecord`,
+`forgePeerRow`, `sealForPeer`, `routerCall`, `routerInboxCall`), which the harness and the boot
+smoke drive instead of reaching into the graph; `isConnectorProject` lives on the socket
+handlers so the connector proxy's forgery gate needs no graph member. `FederationContext`
+publishes the boot, the Domain id, and the slice together on activation; every stage reads
+through it, which closed two staleness instances (the certificate fingerprint `buildRoutes` read
+off the boot-time decision and the Domain id the console dispatcher captured by value). The
+context owns the share record: the console's share and unshare value ops post the Router record
+through the new `cross_domain_share` and `cross_domain_unshare` gateway frames before writing
+the mirror, so a refusal leaves neither; a mirror the gateway's own fence refuses withdraws the
+record and answers `migrating`, which the harness proves. The phone's two posts and its
+compensating unshare are gone. `startGateway` is 44 lines.
+
+**The Router:** `routerBody.ts` reads the body once for both surfaces with the cap and the
+refusals in one place. `ownerOpRegistry.ts` catalogues 29 kinds with kind, value schema,
+mutation class (`delivery`, `value`, `read`), and, for seven, an answer schema; `register` refuses
+an uncatalogued kind and a second handler, and the intake parses the value before the handler
+and logs a settled answer that misses its schema.
+`OwnerOp.op` stays a refined record on the wire (the codegen would otherwise emit a data class
+the phone cannot compose), with the typed union applied per kind at dispatch. The hand list in
+`wire-vocabulary.ts` is gone; the codegen and the fences read the registry, which surfaced nine
+kinds the list had missed and two raw `capabilities_report` literals on the phone. The bridge
+is 519 lines over `bridge/frameDispatch.ts`, `registrationHandler.ts`, `relayRouter.ts`, and
+`inboxFrames.ts`; the inbox service 426 over `inboxAppend.ts`, `inboxRetire.ts`, `inboxSweep.ts`,
+`inboxOpResult.ts`, and `inboxCore.ts`. A gateway frame registers with its mutation class and the
+migration fence holds the `value` ones, which is how `board_session_end` joined `board_op` and
+the two share frames; the hand list it replaced had missed it. The Router's construction fails
+closed when a catalogued kind has no handler, and a gateway's share frame is authorized by the
+target's Domain and gateway segments, not by a string prefix.
+
+**Ambient context:** `src/shared/ambient.ts` declares `Ambient` (clock, entropy, ids, timers);
+`processAmbient()` is the sole reader of `Date.now`, the CSPRNG, and the global timers;
+`composeGateway` and `RouterServerParams` take it, and 203 call sites across 90 files read
+through it. `src/testing/fakeAmbient.ts` drives timers on the process clock by default and on a
+manual deadline queue when a scenario asks, which is how the handshake re-send and expiry rules
+gained harness scenarios; `advance` rejects on a thrown timer and on timers still due at its step
+limit. `ambient-residue.test.ts` fences the globals, a bare `randomBytes`, and `new Date()` behind
+a nine-file allowlist: the CSPRNG for cryptographic material, and readers outside a composed graph
+(the owner lock against another process's clock, the migration fence, and the two modules the
+MCP process also loads). The identity mint's temp name and the blob store's read touch were the
+two reads the narrower fence had passed.
+
+**Names:** `ConsoleCredentials` is the credential blob with named required fields and a pure
+`parse`; the conversation-id write lives in `PhoneIdentity`, resolved before every blob write.
+`ChatRepository.client` the var is gone. `DrainHost` and `SessionHost` lost their presence members
+to `PresencePort`. `ConnectCoordinator` owns the connect sequence over `PhoneIdentity` and
+`ConsoleReach`, with a JVM behavior test; `ChatRepository.kt` is 577 lines after the inbox and
+migration extensions moved out.
+
+**Sizes:** No source file over 600 lines. The Codex and Copilot services, the daemon service,
+the local runtime, the shared Copilot family, the cross-Domain presence family, and the console
+handler each split by cohesion with unchanged public surfaces.
 
 ### Bug classes
 
-- Structural: a root nobody can read or test, and the same fragility in `routes.ts`.
-- The clock seam finishes, as one context with a fence.
-- An owner-op kind with no schema, handler, or classification has no place to be added.
+- Structural: held. The root is thirteen readable stages; `routes.ts` is a composer.
+- The clock seam: held as one context with a fence; the handshake timers are now testable.
+- An owner-op kind with no schema, handler, or classification: held by the registry, and at
+  construction.
+- A gateway frame that mutates owner state outside the fence: held by the registration class.
+- Not held: the three long route handlers; the `board_op` frame's own schema and the 22 kinds
+  with no answer schema; an answer off its schema is logged, not refused; `OwnerOp.op` typed as a
+  record at the envelope.
 
 ## Deploy
 
@@ -847,6 +872,27 @@ into the app; no wire field changes. Gateway first as usual.
 - A bootstrap wire op collapsing reach, roster, and the first key request.
 - Fault injection under the real stores through a `SecretIO` and `DurableStore` fault seam;
   Phase 1's remaining blind spot.
+- A `GATEWAY_PATHS` vocabulary for the sixteen gateway routes, so the wire fence checks both
+  servers without a basename exemption for `httpRouter.ts`.
+- Shared schemas for the host and session frames, so the fakes validate every frame they exchange.
+- Answer schemas for the 22 owner-op kinds that answer a service value or a durability outcome,
+  and refusal instead of a log once the intake test stubs answer their declared shapes.
+- The three long route handlers (`send`, `respond`, `taskBoard`): each a closure over a dozen
+  locals, each a redesign rather than a move.
+- A fake host that can refuse: every HostOp succeeds today, so tmux refusals and error
+  classification have no scenario; the dedupe scenarios still settle on fixed sleeps.
+- One meaning per mutation class across both fences. The intake holds every owner op but `read`
+  during a migration window; the bridge holds only `value` frames. `key_request`, `key_grant`,
+  and `key_receipt` are catalogued `read` while their handlers append owner rows, and their frame
+  twins are `delivery`, so the phone's key request passes the window and the gateway's does too by
+  a different label. Decide per row family whether it must survive the cut, then label both sides
+  from that.
+- A disposer per federation slice. `buildSlice` runs once per process today; a second activation
+  (live re-enrollment, in-place Domain migration) would leak the first slice's timers and throw on
+  the `linked-peers` plane. The disposer stops the Router client, the pusher, the reporter, the
+  attestor, the requester, and the sweep, and unregisters the plane, before a replacement builds.
+- A blob lease renewal scenario under manual drive: the chunk lands before the first lease ages,
+  so a renewal that returns a live lease without moving its deadline goes unproved.
 
 ## Painpoints
 
@@ -944,5 +990,28 @@ into the app; no wire field changes. Gateway first as usual.
 - **A fake that reimplements the lifecycle.** `codex-daemon-service` proved 63 rules against a
   `FakeSession` that copied `ThreadLifecycle`; the real lifecycle disagreed on where a terminal
   is archived. The scripted App Server at the JSONL boundary is the double; nothing above it is.
+- **A weekly Codex quota with no warning.** Seven Luna implementers died within minutes of a
+  fan-out, each leaving unreported partial edits; the tree was reverted and the phase redone on
+  Claude agents until a reset was redeemed. A fan-out needs a quota read first, and an
+  implementer must report before it edits, so a dead agent's state is known.
+- **Plan facts age.** The assessment said `resolveHandshake` was never used and `connect()` lived
+  in `ChatRepository`; both were false by the time the slice ran. An implementer that trusts the
+  plan over the code ships a regression. A fact in a plan names its commit or gets re-derived.
+- **A hand list that lied by omission.** `OWNER_OP_KINDS` named twenty kinds while the Router
+  served twenty-nine, and the fence built on it passed for years of laps. A catalog derived from
+  the registrations cannot omit; a curated one silently does.
+- **Two paths, one fence.** The Router held `board_op` frames during a migration but not the share
+  frames that arrived beside them, and the name list written to close that gap still missed
+  `board_session_end`; the owner-op twins were held by class. A fence keyed on a name list
+  drifts; keyed on the registration's mutation class it cannot.
+- **A port callback is not bookkeeping.** One audit removed `expect(ctx.retired)` from the unlink
+  test as a fake's call log; the next audit wanted it back, since `retireRevokedPeerRows` is the
+  service's outbound effect on the inbox. A dep the service calls to change a peer is the peer's
+  observation; a counter the fake keeps for itself is not.
+- **A basename-pinned exemption.** The wire fence exempted `composeGateway.ts` for one `/health`
+  literal; the split moved the literal and the exemption with it. Exemptions name a reason, not
+  a file.
+- **Truncated teammate reports.** Every implementer's final report was cut mid-sentence by the
+  channel, costing a follow-up round trip each. Reports lead with the verdict and the gaps.
 - **The fixture world built the client's transport over a store that never held the identity.**
   The reach fixture lost its signer; one store per case, or the world hands out both from one.

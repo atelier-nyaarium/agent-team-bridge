@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { ReferenceHeldStore } from "../federation-server/blobs/referenceHeldStore.js";
 import { RouterBlobCache } from "../federation-server/blobs/routerBlobCache.js";
 import { GatewayBridge } from "../federation-server/gatewayBridge.js";
@@ -214,7 +214,6 @@ describe("GatewayBridge inbox", () => {
 				incarnation: 1,
 			})) as { kind: string; lease: { id: string; generation: number } };
 			expect(begun.kind).toBe("lease");
-			const renew = vi.spyOn(cache, "renew");
 			expect(
 				await bridge.handleCall("c1", "blob_chunk", {
 					blobId,
@@ -226,7 +225,7 @@ describe("GatewayBridge inbox", () => {
 					incarnation: 1,
 				}),
 			).toMatchObject({ complete: true });
-			expect(renew).toHaveBeenCalledWith("domain", blobId, begun.lease.id);
+			expect(cache.read("domain", blobId, 0, ciphertext.length)).toEqual(ciphertext);
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
 		}
@@ -307,15 +306,11 @@ describe("GatewayBridge inbox", () => {
 		expect(answer).toMatchObject({ ok: false, error: "migrating" });
 	});
 
-	// The fence holds a share frame the same way it holds its owner-op twin.
-	it("holds board_op and cross-domain share frames under the Router migration window, but not an uncatalogued frame", async () => {
+	it("holds every value frame under the Router migration window and passes a read frame", async () => {
 		const { bridge } = await registered(fakeInbox());
-		const calls: string[] = [];
 		for (const name of ["board_op", "cross_domain_share", "cross_domain_unshare", "board_session_end"])
-			bridge.registerGatewayFrame(name, () => {
-				calls.push(name);
-				return { ok: true };
-			});
+			bridge.registerGatewayFrame(name, "value", () => ({ ok: true }));
+		bridge.registerGatewayFrame("board_read", "read", () => ({ ok: true }));
 		bridge.setMigrationReady(() => false);
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-fence-"));
 		const previousDataDir = process.env.DATA_DIR;
@@ -323,12 +318,12 @@ describe("GatewayBridge inbox", () => {
 		process.env.DATA_DIR = dir;
 		process.env.ROUTER_MIGRATION_EPOCH = "9";
 		try {
-			for (const name of ["board_op", "cross_domain_share", "cross_domain_unshare"])
+			for (const name of ["board_op", "cross_domain_share", "cross_domain_unshare", "board_session_end"])
 				expect(await bridge.handleCall("c1", name, { incarnation: 1 })).toEqual({
 					outcome: "refused",
 					reason: "migrating",
 				});
-			expect(await bridge.handleCall("c1", "board_session_end", { incarnation: 1 })).toEqual({ ok: true });
+			expect(await bridge.handleCall("c1", "board_read", { incarnation: 1 })).toEqual({ ok: true });
 		} finally {
 			if (previousDataDir === undefined) delete process.env.DATA_DIR;
 			else process.env.DATA_DIR = previousDataDir;
@@ -336,7 +331,6 @@ describe("GatewayBridge inbox", () => {
 			else process.env.ROUTER_MIGRATION_EPOCH = previousEpoch;
 			fs.rmSync(dir, { recursive: true, force: true });
 		}
-		expect(calls).toEqual(["board_session_end"]);
 	});
 
 	it("pushes an owner row a gateway appends to the bound console sockets", async () => {

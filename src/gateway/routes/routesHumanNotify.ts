@@ -8,7 +8,7 @@ export interface HumanNotifyRoutesDeps {
 	dataDir: string;
 	config: GatewayConfig;
 	ambient: Pick<Ambient, "now" | "newId" | "setInterval" | "clearInterval">;
-	// This Gateway's own Domain owner id (a hash of the owner's signing key), used to key the.
+	// This Gateway's Domain owner id (hash of the signing key); keys this device's push rows.
 	ownerId?: (() => string | null) | null;
 	ownerSignPub?: (() => string | null) | null;
 	producerSignPriv?: string;

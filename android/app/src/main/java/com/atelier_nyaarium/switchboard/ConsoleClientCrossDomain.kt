@@ -1,6 +1,5 @@
 package com.atelier_nyaarium.switchboard
 
-import com.atelier_nyaarium.switchboard.proto.Address
 import com.atelier_nyaarium.switchboard.proto.ConsoleOp
 import com.atelier_nyaarium.switchboard.proto.CrossDomainCancelResult
 import com.atelier_nyaarium.switchboard.proto.CrossDomainConfirmResult
@@ -15,20 +14,12 @@ import com.atelier_nyaarium.switchboard.proto.CrossDomainUnlinkResult
 import com.atelier_nyaarium.switchboard.proto.CrossDomainUnshareResult
 import com.atelier_nyaarium.switchboard.proto.Protocol
 import com.atelier_nyaarium.switchboard.proto.SignedXDomainLink
-import com.atelier_nyaarium.switchboard.proto.SpawnPoint
-import com.atelier_nyaarium.switchboard.proto.parseTarget
 import java.util.UUID
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.encodeToJsonElement
-import kotlinx.serialization.json.put
 
 ////////////////////////////////
 //  Cross-Domain trust ops
 //
-//  Gateway: the handshake coordinator, the per-session share state, and the unlink cleanup all run on
-//  this owner's own Gateway (the friend Gateway is reached through the mesh, not sealed to directly).
-//  Reads run fresh; the mutating ops carry a stable opId so a lost-reply retry replays the cached
-//  result rather than re-running, like send/tmux_send.
+//  All run on this owner's own Gateway. Mutating ops carry a stable opId.
 
 /** RECEIVER: open a listening window. Returns the short token to read to the friend plus
  * this Gateway's keys (for the SAS) and the window's expiry. */
@@ -91,59 +82,28 @@ suspend fun ConsoleClient.crossDomainShare(
 	sessionTarget: String,
 	target: CrossDomainShareTarget,
 	opId: String = UUID.randomUUID().toString(),
-): CrossDomainShareResult {
-	postRouterShare(Protocol.Wire.ConsoleOpKind.CROSS_DOMAIN_SHARE, sessionTarget, target)
-	return try {
-		valueResult(
-			sendValueOp(defaultGatewayId(), ConsoleOp.CrossDomainShare(sessionTarget = sessionTarget, target = target), opId),
-			Protocol.Wire.ConsoleOpKind.CROSS_DOMAIN_SHARE,
-		)
-	} catch (e: Exception) {
-		// A refused mirror withdraws the record.
-		runCatching { postRouterShare(Protocol.Wire.ConsoleOpKind.CROSS_DOMAIN_UNSHARE, sessionTarget, target) }
-			.onFailure { DebugLog.log("Share", "withdrawal after a refused mirror failed") }
-		throw e
-	}
-}
+): CrossDomainShareResult =
+	valueResult(
+		sendValueOp(defaultGatewayId(), ConsoleOp.CrossDomainShare(sessionTarget = sessionTarget, target = target), opId),
+		Protocol.Wire.ConsoleOpKind.CROSS_DOMAIN_SHARE,
+	)
 
 /** Withdraw a local session's share from an audience. */
 suspend fun ConsoleClient.crossDomainUnshare(
 	sessionTarget: String,
 	target: CrossDomainShareTarget,
 	opId: String = UUID.randomUUID().toString(),
-): CrossDomainUnshareResult {
-	postRouterShare(Protocol.Wire.ConsoleOpKind.CROSS_DOMAIN_UNSHARE, sessionTarget, target)
-	return valueResult(
+): CrossDomainUnshareResult =
+	valueResult(
 		sendValueOp(defaultGatewayId(), ConsoleOp.CrossDomainUnshare(sessionTarget = sessionTarget, target = target), opId),
 		Protocol.Wire.ConsoleOpKind.CROSS_DOMAIN_UNSHARE,
 	)
-}
 
-/** The Router record admits the friend's rows. */
-private suspend fun ConsoleClient.postRouterShare(kind: String, sessionTarget: String, target: CrossDomainShareTarget) {
-	val answer = postSigned(
-		buildJsonObject {
-			put("kind", kind)
-			put("sessionTarget", canonicalShareTarget(sessionTarget))
-			put("target", wireJson.encodeToJsonElement(CrossDomainShareTarget.serializer(), target))
-		},
-	)
-	requireDelivery(answer, kind)
-}
-
-private fun ConsoleClient.canonicalShareTarget(sessionTarget: String): String =
-	when (val parsed = parseTarget(sessionTarget, localDomainId(), defaultGatewayId())) {
-		is Address -> parsed.canonical
-		is SpawnPoint -> Address.of(parsed.domain, parsed.gateway, parsed.spawn, Protocol.DEFAULT_SESSION).canonical
-	}
-
-/** This owner's current shares, so the UI can render the per-session checkmarks. */
+/** This owner's current shares. */
 suspend fun ConsoleClient.crossDomainListShares(): CrossDomainListSharesResult =
 	valueResult(sendValueOp(defaultGatewayId(), ConsoleOp.CrossDomainListShares), Protocol.Wire.ConsoleOpKind.CROSS_DOMAIN_LIST_SHARES)
 
- /**
- * peer is visible (and its detail reachable) before any of its sessions surface in the presence plane. A
- * fresh read each call (never cached). */
+/** Linked peers, read fresh. */
 suspend fun ConsoleClient.crossDomainListPeers(): CrossDomainListPeersResult =
 	valueResult(sendValueOp(defaultGatewayId(), ConsoleOp.CrossDomainListPeers), Protocol.Wire.ConsoleOpKind.CROSS_DOMAIN_LIST_PEERS)
 

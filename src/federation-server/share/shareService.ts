@@ -80,7 +80,8 @@ function state(records: ShareRecord[], unlinkedDomains: UnlinkedDomainMark[] = [
 
 /** A gateway names only sessions on itself. */
 function ownSession(reg: GatewayRegistration, sessionTarget: string): string {
-	if (!sessionTarget.startsWith(`${reg.domainId}.${reg.gatewayId}.`)) throw new OwnerOpRefused("session");
+	const [domainId, gatewayId, ...rest] = sessionTarget.split(".");
+	if (domainId !== reg.domainId || gatewayId !== reg.gatewayId || !rest.length) throw new OwnerOpRefused("session");
 	return sessionTarget;
 }
 
@@ -351,12 +352,12 @@ export function createShareService(deps: ShareServiceDeps): ShareService {
 			);
 			hooks.ownerOp("cross_domain_unlink", (op, value) => this.unlink(op.domainId, value.domainId));
 			hooks.ownerOp("cross_domain_list_shares", (op) => this.listShares(op.domainId));
-			hooks.gatewayFrame("share_job_live", (reg, params) => this.attest(reg, params));
-			hooks.gatewayFrame("cross_domain_share", (reg, params) => {
+			hooks.gatewayFrame("share_job_live", "delivery", (reg, params) => this.attest(reg, params));
+			hooks.gatewayFrame("cross_domain_share", "value", (reg, params) => {
 				const value = CrossDomainShareValueSchema.parse(params);
 				return this.share(reg.domainId, ownSession(reg, value.sessionTarget), value.target);
 			});
-			hooks.gatewayFrame("cross_domain_unshare", (reg, params) => {
+			hooks.gatewayFrame("cross_domain_unshare", "value", (reg, params) => {
 				const value = CrossDomainUnshareValueSchema.parse(params);
 				return this.unshare(reg.domainId, ownSession(reg, value.sessionTarget), value.target);
 			});

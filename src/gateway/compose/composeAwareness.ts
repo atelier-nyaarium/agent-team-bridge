@@ -1,16 +1,16 @@
-// Stage 7: the awareness bank that rides changes out on the next channel push.
+// The awareness bank that rides changes out on the next channel push.
 
 import type { Ambient, IntervalHandle } from "../../shared/ambient.js";
 import type { AwarenessObservation } from "../../shared/awareness-types.js";
 import type { BoardEntry } from "../../shared/console-protocol.js";
 import { type AwarenessBank, createAwarenessBank } from "../awarenessBank.js";
 import { boardAwarenessSubscriber } from "../boardAwareness.js";
-import { resolveLiveIncarnation } from "../websocket.js";
+import { resolveLiveIncarnation } from "../wsTypes.js";
 import type { HostStage } from "./composeHost.js";
 import type { SessionsStage } from "./composeSessions.js";
 
 export interface AwarenessStageDeps {
-	sessions: SessionsStage;
+	sessions: Pick<SessionsStage, "registry" | "sessionStore">;
 	host: Pick<HostStage, "wakeService">;
 	ambient: Pick<Ambient, "now" | "randomBytes" | "setInterval">;
 }

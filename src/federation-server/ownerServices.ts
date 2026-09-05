@@ -87,7 +87,7 @@ export function createOwnerServices(deps: OwnerServicesDeps) {
 		registry.domains().filter((other) => other !== domainId && deps.hasLinkEdge(domainId, other));
 	const hooks: OwnerServiceHooks = {
 		ownerOp: (kind, handler) => deps.intake.register(kind, handler),
-		gatewayFrame: (name, handler) => bridge.registerGatewayFrame(name, handler),
+		gatewayFrame: (name, mutation, handler) => bridge.registerGatewayFrame(name, mutation, handler),
 		onGatewayRegistered: (listener) => bridge.onGatewayRegistered(listener),
 		onGatewayDropped: (listener) => bridge.onGatewayDropped(listener),
 		onSessionForgotten: (listener) => bridge.onSessionForgotten(listener),
@@ -247,6 +247,9 @@ export function createOwnerServices(deps: OwnerServicesDeps) {
 	const cursors = createCursorService({ registry, migrationEpoch: () => readRouterMigrationWindow().epoch ?? 0 });
 	for (const service of [share, presence, board, scheduled, capabilities, readAnchors, cursors, keyDelivery])
 		service.register(hooks);
+	// A catalogued kind nothing serves refuses at runtime, so construction refuses first.
+	const unserved = deps.intake.unregisteredKinds();
+	if (unserved.length) throw new Error(`owner op kinds without a handler: ${unserved.join(", ")}`);
 
 	const perDomain = (label: string, fn: (domainId: string) => void): void => {
 		for (const domainId of registry.domains()) {

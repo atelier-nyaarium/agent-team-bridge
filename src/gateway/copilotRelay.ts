@@ -10,7 +10,8 @@ import {
 } from "../shared/copilot-agent.js";
 import type { SessionRecord, SessionStore } from "../shared/session-store.js";
 import { RECONCILE_GUARD_MS } from "./codexRelay.js";
-import type { CopilotAgentService, CopilotApplication } from "./copilotAgentService.js";
+import type { CopilotAgentService } from "./copilotAgentService.js";
+import type { CopilotApplication } from "./copilotAgentTypes.js";
 
 type CopilotCommandRequest = CopilotDaemonCommand extends infer Command
 	? Command extends CopilotDaemonCommand

@@ -1,4 +1,4 @@
-// Stage 5: the host daemon socket and everything routed over it.
+// The host daemon socket and everything routed over it.
 
 import type { ServerWebSocket } from "bun";
 import type { Ambient, IntervalHandle } from "../../shared/ambient.js";
@@ -6,13 +6,22 @@ import type { HostOp, HostOpResult } from "../../shared/host-op.js";
 import { HostOpCoordinator } from "../hostOpCoordinator.js";
 import { WakeCoordinator } from "../wake.js";
 import { WakeService } from "../wakeService.js";
-import type { WsData } from "../websocket.js";
+import type { WsData } from "../wsTypes.js";
 import type { SessionsStage } from "./composeSessions.js";
 
 const HOST_OP_TIMEOUT_MS = 20_000;
 
 export interface HostStageDeps {
-	sessions: SessionsStage;
+	sessions: Pick<
+		SessionsStage,
+		| "registry"
+		| "sessionStore"
+		| "presence"
+		| "isAvailableProject"
+		| "knownTeamPaths"
+		| "offlineCatalog"
+		| "intentTracker"
+	>;
 	wakeTimeoutMs: number;
 	ambient: Ambient;
 }

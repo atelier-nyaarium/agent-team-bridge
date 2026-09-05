@@ -29,6 +29,7 @@ const CrossDomainShareFileSchema = z.object({ shares: z.array(ShareRecordSchema)
 type CrossDomainShareFile = ShareState;
 
 export type ShareChangeReason = { kind: "domain"; domainId: string } | { kind: "sweep" };
+export type ShareMirrorOutcome = "removed" | "absent" | "fenced";
 
 export const XDOMAIN_SHARE_FILE = "cross-domain-share-state.json";
 
@@ -62,25 +63,23 @@ export class CrossDomainShareState {
 		fs.writeFileSync(this.file, JSON.stringify(this.state), { mode: 0o600 });
 	}
 
-	share(sessionTarget: string, target: CrossDomainShareTarget): void {
-		if (fenced()) return;
+	/** False while the migration fence holds. */
+	share(sessionTarget: string, target: CrossDomainShareTarget): boolean {
+		if (fenced()) return false;
 		this.state = shareRule(this.state, sessionTarget, target, this.ambient.now());
 		this.persist();
 		this.onChange?.(target.kind === "domain" ? { kind: "domain", domainId: target.domainId } : { kind: "sweep" });
+		return true;
 	}
 
-	unshare(sessionTarget: string, target: CrossDomainShareTarget): boolean {
-		if (fenced()) return false;
+	unshare(sessionTarget: string, target: CrossDomainShareTarget): ShareMirrorOutcome {
+		if (fenced()) return "fenced";
 		const result = unshareRule(this.state, sessionTarget, target);
 		this.state = result.state;
-		const removed = result.removed;
-		if (removed) {
-			this.persist();
-			this.onChange?.(
-				target.kind === "domain" ? { kind: "domain", domainId: target.domainId } : { kind: "sweep" },
-			);
-		}
-		return removed;
+		if (!result.removed) return "absent";
+		this.persist();
+		this.onChange?.(target.kind === "domain" ? { kind: "domain", domainId: target.domainId } : { kind: "sweep" });
+		return "removed";
 	}
 
 	isSharedTo(sessionTarget: string, toDomainId: string, isLinked: (domainId: string) => boolean): boolean {

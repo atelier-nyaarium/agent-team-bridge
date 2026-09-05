@@ -2,7 +2,7 @@ import type { ServerWebSocket } from "bun";
 import { describe, expect, it } from "vitest";
 import { WakeCoordinator } from "../gateway/wake.js";
 import { WakeService, type WakeServiceDeps } from "../gateway/wakeService.js";
-import type { TeamRegistry, WsData } from "../gateway/websocket.js";
+import type { TeamRegistry, WsData } from "../gateway/wsTypes.js";
 import { processAmbient } from "../shared/ambient.js";
 import { SessionStore } from "../shared/session-store.js";
 

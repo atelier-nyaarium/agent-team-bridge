@@ -17,7 +17,8 @@ import {
 import { isHostSpawn } from "../shared/host-spawn.js";
 import type { SessionRecord } from "../shared/session-store.js";
 import { AGENT_FAILURE_ANSWERS, jsonResponse as json } from "./agentRouteEnvelope.js";
-import { type CodexAgentService, CodexTransitionError } from "./codexAgentService.js";
+import type { CodexAgentService } from "./codexAgentService.js";
+import { CodexTransitionError } from "./codexAgentTypes.js";
 import type { CodexRelay } from "./codexRelay.js";
 import { presentedByRequest } from "./sessionAuthority.js";
 

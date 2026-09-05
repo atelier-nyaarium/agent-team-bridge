@@ -456,7 +456,7 @@ export function createBoardService(deps: Deps) {
 		);
 		hooks.ownerOp("board_read", (op) => read(op.domainId));
 		// Gateways act only for registered sessions.
-		hooks.gatewayFrame("board_op", (reg: GatewayRegistration, params) => {
+		hooks.gatewayFrame("board_op", "value", (reg: GatewayRegistration, params) => {
 			const p = BoardOpParamsSchema.parse(params);
 			if (!deps.inbox.hasSession(reg.domainId, reg.gatewayId, p.sessionId)) throw new OwnerOpRefused("session");
 			return write(
@@ -469,7 +469,7 @@ export function createBoardService(deps: Deps) {
 				p.opId,
 			);
 		});
-		hooks.gatewayFrame("board_session_end", (reg: GatewayRegistration, params) => {
+		hooks.gatewayFrame("board_session_end", "value", (reg: GatewayRegistration, params) => {
 			const p = BoardSessionEndParamsSchema.parse(params);
 			return sessionEnded(
 				reg.domainId,
@@ -477,7 +477,7 @@ export function createBoardService(deps: Deps) {
 				p.disposition,
 			);
 		});
-		hooks.gatewayFrame("board_read", (reg: GatewayRegistration) => {
+		hooks.gatewayFrame("board_read", "read", (reg: GatewayRegistration) => {
 			try {
 				return read(reg.domainId);
 			} catch (error) {

@@ -207,26 +207,11 @@ class ConsoleClientOwnerOpsTest {
 	}
 
 	@Test
-	fun aShareWritesTheRouterRecordBeforeTheGatewayMirror() = runBlocking {
+	fun aShareRidesGatewayValueAlone() = runBlocking {
 		val result = client.crossDomainShare("domain.gateway.spawn.session", CrossDomainShareTarget.Domain("friend"))
 
 		assertTrue(result.ok)
-		assertEquals(listOf("cross_domain_share", "gateway_value"), sent.map { it.op["kind"]?.jsonPrimitive?.content })
-		assertEquals("domain.gateway.spawn.session", sent[0].op["sessionTarget"]?.jsonPrimitive?.content)
-	}
-
-	@Test
-	fun aRefusedMirrorWithdrawsTheRouterRecord() = runBlocking {
-		valueResultMode = ValueResultMode.Refused
-		val failure = runCatching {
-			client.crossDomainShare("domain.gateway.spawn.session", CrossDomainShareTarget.Domain("friend"))
-		}.exceptionOrNull()
-
-		assertNotNull(failure)
-		assertEquals(
-			listOf("cross_domain_share", "gateway_value", "cross_domain_unshare"),
-			sent.map { it.op["kind"]?.jsonPrimitive?.content },
-		)
+		assertEquals(listOf("gateway_value"), sent.map { it.op["kind"]?.jsonPrimitive?.content })
 	}
 
 	@Test
@@ -407,7 +392,6 @@ class ConsoleClientOwnerOpsTest {
 				)
 			}
 			"report_read" -> wireJson.encodeToJsonElement(com.atelier_nyaarium.switchboard.proto.ConsoleReportReadResult.serializer(), com.atelier_nyaarium.switchboard.proto.ConsoleReportReadResult(true))
-			"cross_domain_share", "cross_domain_unshare" -> buildJsonObject { put("ok", true) }
 			else -> null
 		}
 	}

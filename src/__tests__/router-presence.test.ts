@@ -6,9 +6,13 @@ import type { GatewayFrameHandler, GatewayRegistration } from "../federation-ser
 import { OwnerStoreRegistry } from "../federation-server/inbox/ownerStoreRegistry.js";
 import { DomainQuota } from "../federation-server/owner/domainQuota.js";
 import { OwnerQuarantined } from "../federation-server/owner/ownerStateStore.js";
-import type { ErasedOwnerOpHandler, OwnerOpHandler, OwnerOpKind } from "../federation-server/ownerOpRegistry.js";
+import type {
+	ErasedOwnerOpHandler,
+	OwnerOpHandler,
+	OwnerOpKind,
+	OwnerOpMutation,
+} from "../federation-server/ownerOpRegistry.js";
 import { createPresenceService } from "../federation-server/presence/presenceService.js";
-import { processAmbient } from "../shared/ambient.js";
 import { TeamInfoSchema } from "../shared/schemasPresence.js";
 
 const roots: string[] = [];
@@ -60,7 +64,7 @@ describe("router presence slice", () => {
 		const frames = new Map<string, GatewayFrameHandler>();
 		service.register({
 			ownerOp: () => undefined,
-			gatewayFrame: (name, handler) => frames.set(name, handler),
+			gatewayFrame: (name, _mutation, handler) => frames.set(name, handler),
 			onGatewayRegistered: () => undefined,
 			onGatewayDropped: () => undefined,
 			onSessionForgotten: () => undefined,
@@ -200,7 +204,7 @@ describe("router presence slice", () => {
 		const pushed: Record<string, unknown>[] = [];
 		service.register({
 			ownerOp: () => undefined,
-			gatewayFrame: (name, handler) => frames.set(name, handler),
+			gatewayFrame: (name, _mutation, handler) => frames.set(name, handler),
 			onGatewayRegistered: (listener) => registered.push(listener),
 			onGatewayDropped: () => undefined,
 			onSessionForgotten: () => undefined,
@@ -376,7 +380,8 @@ describe("router presence slice", () => {
 		const frames = new Map<string, GatewayFrameHandler>();
 		service.register({
 			ownerOp: () => undefined,
-			gatewayFrame: (name: string, handler: GatewayFrameHandler) => frames.set(name, handler),
+			gatewayFrame: (name: string, _mutation: OwnerOpMutation, handler: GatewayFrameHandler) =>
+				frames.set(name, handler),
 			onGatewayRegistered: () => undefined,
 			onGatewayDropped: () => undefined,
 			onSessionForgotten: () => undefined,
@@ -416,7 +421,8 @@ describe("router presence slice", () => {
 		const pushed: Record<string, unknown>[] = [];
 		const hooks = {
 			ownerOp: () => undefined,
-			gatewayFrame: (name: string, handler: GatewayFrameHandler) => frames.set(name, handler),
+			gatewayFrame: (name: string, _mutation: OwnerOpMutation, handler: GatewayFrameHandler) =>
+				frames.set(name, handler),
 			onGatewayRegistered: () => undefined,
 			onGatewayDropped: () => undefined,
 			onSessionForgotten: () => undefined,

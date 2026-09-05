@@ -1,4 +1,4 @@
-// Stage 8: everything the FederationActive phase owns, built from one bootstrap.
+// Everything the FederationActive phase owns, built from one bootstrap.
 
 import { DomainSnapshotSchema } from "../../shared/admission.js";
 import type { Ambient, IntervalHandle } from "../../shared/ambient.js";
@@ -29,7 +29,7 @@ import { buildRegisterAuth } from "../router/registerAuth.js";
 import { startRouterClient } from "../router/routerClient.js";
 import { createShareAttestor } from "../router/shareAttestor.js";
 import { routerWsConnection, saveRouterReach } from "../router/transport.js";
-import { resolveLiveIncarnation } from "../websocket.js";
+import { resolveLiveIncarnation } from "../wsTypes.js";
 import type { AwarenessStage } from "./composeAwareness.js";
 import type { HostStage } from "./composeHost.js";
 import type { GatewayRoutes } from "./composeRoutes.js";
@@ -57,8 +57,11 @@ export interface FederationStageDeps {
 	routerBootstrapUrl: string | null;
 	ambient: Ambient;
 	context: FederationContext;
-	stores: StoresStage;
-	sessions: SessionsStage;
+	stores: Pick<StoresStage, "restored" | "blobStore" | "jobs" | "inboxClaims">;
+	sessions: Pick<
+		SessionsStage,
+		"planeRegistry" | "presence" | "sessionReporter" | "hostSpawnPoints" | "registry" | "sessionStore"
+	>;
 	host: Pick<HostStage, "wakeService">;
 	awareness: Pick<AwarenessStage, "boardObserve">;
 	/** Later stages, read on demand. */

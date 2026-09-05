@@ -35,7 +35,7 @@ export const PendingTenantSchema = z
 		// The opaque Domain id (slug; never shown to the human - pure plumbing).
 		domainId: slugField(),
 		// The friendly display name (one per owner/Domain). Free text the admin
-		// pre-sets and the friend edits from their profile once in.
+		// pre-sets; the friend edits it from their profile once rooted.
 		displayName: displayField(128),
 		// The one-time invite nonce (base64), spent on the first successful first-root.
 		nonce: b64Field(),

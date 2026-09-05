@@ -151,8 +151,8 @@ export function createKeyDeliveryService(params: {
 				}));
 			return KeyReceiptsReadResultSchema.parse({ receipts });
 		});
-		hooks.gatewayFrame("key_request", (reg, value) => frameRequest(reg, value));
-		hooks.gatewayFrame("key_receipt", (reg, value) => frameReceipt(reg, value));
+		hooks.gatewayFrame("key_request", "delivery", (reg, value) => frameRequest(reg, value));
+		hooks.gatewayFrame("key_receipt", "delivery", (reg, value) => frameReceipt(reg, value));
 	};
 	const frameRequest = (reg: GatewayRegistration, value: Record<string, unknown>) => {
 		const parsed = KeyRequestFrameSchema.safeParse(value);

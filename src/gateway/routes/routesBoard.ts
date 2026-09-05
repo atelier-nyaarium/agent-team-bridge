@@ -17,16 +17,7 @@ import type { CallerScope } from "./callerGuards.js";
 
 const replayKeyOf = (action: string, operationId: string) => `${action}:${operationId}`;
 
-/**
- * What an agent sees of an entry: its attachments as FILENAMES only.
- *
- * Without this projection the list route returns the store's entries verbatim, so any field that
- * later lands on the BoardEntry schema (e.g. `blobId`, `blobGateway`) reaches every visible session
- * with no code change and no review step. A blobId is a bearer token, and this is the only place an
- * agent could otherwise obtain one: ids are content digests and no enumeration op exists. The
- * plumbing lives on the `attachments` action instead, which the tool handler calls and whose answer
- * never reaches the model's context.
- */
+/** What an agent sees: attachments as FILENAMES only, since a blobId is a bearer token. */
 function projectForAgent(entry: BoardEntry): AgentBoardEntry {
 	if (!entry.attachments) return entry;
 	const attachments = entry.attachments.map((a) => ({ filename: a.filename, mime: a.mime, size: a.size }));
@@ -51,25 +42,14 @@ function cutToBudget(entries: BoardEntry[]): { entries: BoardEntry[]; truncated:
 }
 
 export interface BoardRoutesDeps {
-	// The sole resolver of "what must a caller prove to act as X". Absent in test harnesses that do.
+	// The sole resolver of what a caller must prove to act as X.
 	auth?: SessionAuthority;
 	// Router-held owner board. Unavailable before enrollment.
 	boardClient?: ReturnType<typeof createBoardClient>;
-	// Restart-proof replay for the board's ABSOLUTE writes. Absent only in tests, which then fall.
+	// Restart-proof replay for the board's ABSOLUTE writes.
 	boardReplays?: DurableOpStore<BoardReply>;
-	/** Settled replies for the board route's mutating operations, keyed by sender, action and
-	 * operation id.
-	 *
-	 * Durable when `boardReplays` is wired: an MCP operation id outlives this process, so a restart
-	 * between committing a write and flushing its reply would otherwise lose the record and let the
-	 * caller's retry re-apply an ABSOLUTE set over a newer value. The in-memory map remains only as
-	 * the fallback for harnesses that wire no durable store.
-	 *
-	 * The ACTION is in the key because operation ids arrive on the wire: a caller reusing one across
-	 * two actions would otherwise be handed the first action's reply for the second.
-	 *
-	 * Residual, and not closable here: the mutation and this record are two durable files, so a crash
-	 * between their writes still loses the record. Closing it wants both in one atomic snapshot. */
+	/** Settled replies keyed by sender, action and operation id, so one id across two actions
+	 * cannot read the other's reply. The fallback for a harness that wires no `boardReplays`. */
 	boardOperationReplies: Map<string, Record<string, unknown>>;
 	refuseImpersonation: (req: Request, claimed: string, scope: CallerScope) => Response | null;
 }
@@ -95,12 +75,10 @@ export function createBoardRoutes({
 		capFifo(boardOperationReplies, MAX_BOARD_REPLIES);
 	};
 
-	/** The one task-board route behind all six taskBoard* tools. `from` (hardcoded MCP-side) is both
-	 * the impersonation gate's claim and the only scoping key, so a session touches the backlog plus
-	 * its own entries and nothing else. A refusal answers 200 with `applied:false` + `refused` (a
-	 * normal outcome the tool relays); non-200 is reserved for transport, auth and validation. A
-	 * multi-field update applies field-by-field and reports the first refusal - each field was its
-	 * own absolute intent, so what landed before it stays. */
+	/** The one task-board route. `from` is both the impersonation claim and the only scoping key, so
+	 * a session touches the backlog plus its own entries. A refusal answers 200 with `applied:false`;
+	 * non-200 is transport, auth and validation. A multi-field update reports the first refusal and
+	 * keeps what landed before it. */
 	async function taskBoard(req: Request, body: Record<string, unknown>): Promise<Response> {
 		const parsed = BoardRouteRequestSchema.safeParse(body);
 		if (!parsed.success) {
@@ -114,7 +92,7 @@ export function createBoardRoutes({
 		if (recorded) return jsonResponse(recorded);
 		if (!boardClient) return jsonResponse({ error: "task board is not enabled on this gateway" }, 503);
 		const client = boardClient;
-		// refuseImpersonation already resolved the name when auth is wired; the bare fallback only.
+		// The bare fallback applies only when auth is not configured.
 		const sessionKey = auth ? auth.localTeamKey(r.from) : r.from;
 		if (!sessionKey) return jsonResponse({ error: `invalid session name "${r.from}"` }, 400);
 		// Mirror authority for local refusal. Reassign and restore stay owner-only.

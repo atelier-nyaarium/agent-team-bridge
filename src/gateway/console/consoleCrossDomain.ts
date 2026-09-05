@@ -6,6 +6,7 @@ import type {
 	CrossDomainShareTarget,
 	CrossDomainUnlinkResult,
 } from "../../shared/console-protocol.js";
+import { MIGRATING } from "../../shared/migration-fence.js";
 import type { TeamInfo } from "../../shared/types.js";
 import type { ConsoleTargets } from "./consoleTargets.js";
 import type { ConsoleRoutes, CrossDomainConsoleHandlers, CrossDomainShareHandlers } from "./consoleTypes.js";
@@ -96,12 +97,15 @@ export function createCrossDomainHandlers({
 			return { cancelled: crossDomain.cancel({ listeningToken: op.listeningToken, pin: op.pin }) };
 		},
 
-		// The Router record lands before the mirror, so a refusal leaves neither.
+		// The Router record lands before the mirror; a fenced mirror withdraws it.
 		async share(op: Extract<ConsoleOp, { kind: "cross_domain_share" }>) {
 			if (!crossDomainShare) throw new Error("cross-Domain sharing is not available on this Gateway");
 			const canonicalTarget = await assertShareable(op.sessionTarget, op.target);
 			await crossDomainShare.postRecord("cross_domain_share", canonicalTarget, op.target);
-			crossDomainShare.share(canonicalTarget, op.target);
+			if (!crossDomainShare.share(canonicalTarget, op.target)) {
+				await crossDomainShare.postRecord("cross_domain_unshare", canonicalTarget, op.target);
+				throw new Error(MIGRATING);
+			}
 			return { ok: true as const };
 		},
 
@@ -109,8 +113,9 @@ export function createCrossDomainHandlers({
 			if (!crossDomainShare) throw new Error("cross-Domain sharing is not available on this Gateway");
 			const canonicalTarget = canonicalShareTarget(op.sessionTarget);
 			await crossDomainShare.postRecord("cross_domain_unshare", canonicalTarget, op.target);
-			const removed = crossDomainShare.unshare(canonicalTarget, op.target);
-			if (removed) crossDomainShare.expireSessionJobsForTarget(canonicalTarget, op.target);
+			const mirror = crossDomainShare.unshare(canonicalTarget, op.target);
+			if (mirror === "fenced") throw new Error(MIGRATING);
+			if (mirror === "removed") crossDomainShare.expireSessionJobsForTarget(canonicalTarget, op.target);
 			return { ok: true as const };
 		},
 

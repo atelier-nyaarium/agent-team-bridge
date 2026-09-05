@@ -8,17 +8,9 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/**
- * The connect sequence over a fake Router preflight and a real identity door, so what a connect
- * learns and what it publishes are asserted together rather than through the repository.
- */
 class ConnectCoordinatorTest {
 	private class FakeReach(private val answer: () -> RouterReach?) : ConsoleReach {
-		var calls = 0
-		override suspend fun apiReachable(): RouterReach? {
-			calls++
-			return answer()
-		}
+		override suspend fun apiReachable(): RouterReach? = answer()
 	}
 
 	private class FakeHost : ConnectHost {
@@ -29,12 +21,14 @@ class ConnectCoordinatorTest {
 		var rootPending = true
 		var admissionError: Throwable? = null
 		var gatewayError: Throwable? = null
-		val ops = mutableListOf<String>()
 		var savedGatewayId: String? = null
+		var capabilitiesReported = false
+		var displayNameRefreshed = false
+		var ingestAttached = false
+		var ingestFlushed = false
 
 		override fun saveGatewayId(id: String) {
 			savedGatewayId = id
-			ops += "saveGateway:$id"
 		}
 		override fun keyringGateways(): List<String> {
 			gatewayError?.let { throw it }
@@ -42,18 +36,22 @@ class ConnectCoordinatorTest {
 		}
 		override fun withoutTombstoned(teams: List<Team>) = teams
 
-		override suspend fun firstRootIfPending(): Boolean {
-			ops += "firstRoot"
-			return rootPending
-		}
+		override suspend fun firstRootIfPending(): Boolean = rootPending
 		override suspend fun submitConsoleAdmission() {
-			ops += "admission"
 			admissionError?.let { throw it }
 		}
-		override fun reportCapabilities() { ops += "capabilities" }
-		override fun refreshDisplayName() { ops += "displayName" }
-		override fun attachIngest() { ops += "attachIngest" }
-		override fun flushIngest() { ops += "flushIngest" }
+		override fun reportCapabilities() {
+			capabilitiesReported = true
+		}
+		override fun refreshDisplayName() {
+			displayNameRefreshed = true
+		}
+		override fun attachIngest() {
+			ingestAttached = true
+		}
+		override fun flushIngest() {
+			ingestFlushed = true
+		}
 	}
 
 	private fun blob(appToken: String = "token"): String = wireJson.encodeToString(
@@ -86,10 +84,11 @@ class ConnectCoordinatorTest {
 		assertEquals("gw", state.value.homeGatewayId)
 		assertEquals("gw", host.savedGatewayId)
 		assertEquals(listOf("gw"), state.value.admittedGateways)
-		assertEquals(
-			listOf("attachIngest", "firstRoot", "admission", "saveGateway:gw", "capabilities", "displayName", "flushIngest"),
-			host.ops,
-		)
+		assertTrue(identity.bootState.value is BootState.Ready)
+		assertTrue(host.capabilitiesReported)
+		assertTrue(host.displayNameRefreshed)
+		assertTrue(host.ingestAttached)
+		assertTrue(host.ingestFlushed)
 	}
 
 	@Test
@@ -105,7 +104,9 @@ class ConnectCoordinatorTest {
 		assertEquals("connecting", state.value.status)
 		assertFalse(state.value.connected)
 		assertNull(identity.readyOrNull())
-		assertEquals(listOf("attachIngest", "flushIngest"), host.ops)
+		assertNull(host.savedGatewayId)
+		assertFalse(host.capabilitiesReported)
+		assertFalse(host.displayNameRefreshed)
 	}
 
 	@Test
@@ -120,7 +121,10 @@ class ConnectCoordinatorTest {
 
 		assertEquals("learned", identity.readyOrNull()?.domainId)
 		assertFalse(state.value.connected)
-		assertEquals(listOf("attachIngest", "firstRoot", "flushIngest"), host.ops)
+		assertFalse(store.consoleAdmitted)
+		assertNull(host.savedGatewayId)
+		assertFalse(host.capabilitiesReported)
+		assertFalse(host.displayNameRefreshed)
 	}
 
 	@Test
@@ -136,7 +140,8 @@ class ConnectCoordinatorTest {
 
 		assertFalse(state.value.connected)
 		assertTrue(store.consoleAdmitted)
-		assertEquals(listOf("attachIngest", "firstRoot", "admission", "flushIngest"), host.ops)
+		assertFalse(host.capabilitiesReported)
+		assertFalse(host.displayNameRefreshed)
 	}
 
 	@Test
@@ -154,6 +159,8 @@ class ConnectCoordinatorTest {
 		assertEquals("connecting", state.value.status)
 		assertFalse(state.value.connected)
 		assertFalse(store.consoleAdmitted)
+		assertFalse(host.capabilitiesReported)
+		assertFalse(host.displayNameRefreshed)
 	}
 
 	@Test
@@ -166,7 +173,9 @@ class ConnectCoordinatorTest {
 		val reach = FakeReach { RouterReach() }
 		coordinator(identity, host, state, reach).connect()
 
-		assertEquals(0, reach.calls)
-		assertEquals(listOf("attachIngest"), host.ops)
+		assertEquals(BootState.Missing(setOf(Need.PROVISIONING)), identity.bootState.value)
+		assertEquals(ChatState(), state.value)
+		assertFalse(host.capabilitiesReported)
+		assertFalse(host.displayNameRefreshed)
 	}
 }

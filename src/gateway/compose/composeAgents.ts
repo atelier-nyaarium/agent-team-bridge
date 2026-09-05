@@ -1,4 +1,4 @@
-// Stage 6: the Codex and Copilot catalogs, their host relays, and their HTTP routes.
+// The Codex and Copilot catalogs, their host relays, and their HTTP routes.
 
 import { agentHttpPath } from "../../shared/agent-backend.js";
 import type { Ambient } from "../../shared/ambient.js";
@@ -12,7 +12,10 @@ import type { HostStage } from "./composeHost.js";
 import type { SessionsStage } from "./composeSessions.js";
 
 export interface AgentsStageDeps {
-	sessions: SessionsStage;
+	sessions: Pick<
+		SessionsStage,
+		"sessionAuthority" | "sessionStore" | "offlineCatalog" | "codexCatalogWriter" | "copilotCatalogWriter"
+	>;
 	host: Pick<HostStage, "liveHostSocket">;
 	ambient: Ambient;
 }

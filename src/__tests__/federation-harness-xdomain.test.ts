@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { setMigrationEpoch } from "../shared/migration-fence.js";
 import { SHARE_TTL_MS, share, sharesFor, sweep } from "../shared/share-rules.js";
 import { attachFakeSession, type FakeSession } from "../testing/fakeSession.js";
 import { type DomainPeer, type FederationHarness, startFederationHarness } from "../testing/federationHarness.js";
@@ -103,6 +104,24 @@ describe("cross-Domain gateway admission and relay", () => {
 		expect(await bob.phone.send({ kind: "cross_domain_list_shares" })).toMatchObject({ shares: [] });
 	});
 
+	it("withdraws the Router record when the migration fence refuses the mirror", async () => {
+		const fenced = session(bob, "fixture-app.fenced");
+		await fenced.ready();
+		const target = { kind: "domain" as const, domainId: h.set.domain.id };
+		setMigrationEpoch(7);
+		try {
+			const refused = await bob.phone.value({ kind: "cross_domain_share", sessionTarget: fenced.team, target });
+			expect(refused.result).toMatchObject({ kind: "refusal", reason: "migrating" });
+		} finally {
+			setMigrationEpoch(null);
+		}
+		expect(await bob.phone.send({ kind: "cross_domain_list_shares" })).toMatchObject({ shares: [] });
+		await share(bob, fenced.team, h.set.domain.id);
+		expect(await bob.phone.send({ kind: "cross_domain_list_shares" })).toMatchObject({
+			shares: [{ sessionTarget: remote(bob, fenced.team), target }],
+		});
+	});
+
 	it("rejects a cross-Domain wake for an unshared session before it reaches the session", async () => {
 		const shared = session(bob, "fixture-app.wake");
 		await shared.ready();
@@ -112,6 +131,7 @@ describe("cross-Domain gateway admission and relay", () => {
 		const refused = await sendFrom(h, remote(bob, "fixture-app.not-shared"), "bob", "wake blocked");
 		expect(refused).toMatchObject({ ok: false });
 		await new Promise((resolve) => setTimeout(resolve, 100));
+		// bob.host is a real peer.
 		expect(bob.host.wakes).toEqual([]);
 	});
 

@@ -4,7 +4,7 @@ import { FEDERATION_PROTOCOL_VERSION } from "../../shared/router-protocol.js";
 import type { Address } from "../../shared/session-id.js";
 import type { GatewayConfig, ResponsePayload, TeamInfo } from "../../shared/types.js";
 import { jsonResponse } from "../routeSchemas.js";
-import type { TeamRegistry } from "../websocket.js";
+import type { TeamRegistry } from "../wsTypes.js";
 
 export interface StatusRoutesDeps {
 	config: GatewayConfig;
@@ -20,7 +20,7 @@ export interface StatusRoutesDeps {
 	presence?: { snapshot(): TeamInfo[] };
 	// Session records support live-incarnation resolution. Optional in test harnesses.
 	sessionStore?: Pick<import("../../shared/session-store.js").SessionStore, "touchLive">;
-	// Refresh the share lastSeenAt for a live local session (its canonical domain.gateway.spawn.session),.
+	// Refreshes share lastSeenAt for a live local session, keyed by its canonical address.
 	touchShares?: ((sessionTarget: string) => void) | null;
 	tryLocalAddress: (name: string) => Address | null;
 	provedLocalSession: (req: Request) => boolean;

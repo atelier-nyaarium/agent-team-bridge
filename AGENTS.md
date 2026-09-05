@@ -62,6 +62,9 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
 - `src/gateway/router/boardClient.ts` - sole sealer of board text and sole local-key mapper; CAS writes
 - `src/gateway/router/blobUploader.ts` - blob copy to the Router cache or reference-held store; unwired, and the Router refuses both upload frames
 - `src/gateway/console/` - Android OwnerOp dispatch and capability store
+- `src/gateway/console/consoleCrossDomain.ts` - the console's link, share, unlink and untrust handlers
+- `src/gateway/console/consoleSessionLifecycle.ts` - create, wake, close, forget, and rename
+- `src/gateway/console/consoleTerminal.ts` - pane peek, key send, directory listing, and plugin reload
 - `src/gateway/consolePushOps.ts` - phone-bound rows, `deliverToOwner`, and durable `OwnerRowOutbox`
 - S8 retained endpoints: `/capabilities`, `/discover`, `/task-board`
 - `android/.../ChatRepository.kt` - console process singleton, OwnerOp client, and home Gateway state
@@ -142,7 +145,7 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
     receiver stamps `at`; it decides cross-epoch merges. `ReadAnchor.kt` is the phone twin and
     resolves by row position.
 - `src/federation-server/gatewayBridge.ts` / `gatewayTransport.ts` - connection registry and frame dispatch; four trust callbacks required
-- `src/federation-server/bridge/registrationHandler.ts` / `relayRouter.ts` / `inboxFrames.ts` / `frameDispatch.ts` - gateway registration; cross-gateway relay and cross-Domain handshake; incarnation-gated inbox, blob, and value frames; the registered-frame table and its migration fence, which holds `board_op`, `cross_domain_share`, and `cross_domain_unshare` the way the owner-op registry holds their `value`-mutation twins
+- `src/federation-server/bridge/registrationHandler.ts` / `relayRouter.ts` / `inboxFrames.ts` / `frameDispatch.ts` - gateway registration; cross-gateway relay and cross-Domain handshake; incarnation-gated inbox, blob, and value frames; the registered-frame table, where a frame registers with its mutation class and the migration fence holds the `value` ones, as the owner-op registry does for their twins
 - `src/federation-server/consoleSurface.ts` / `publicApproval.ts` - token-gated operations and token-exempt nonce routes
 - `src/federation-server/routerTls.ts` - persistent self-signed certificate; rotation re-provisions clients
 - `src/federation-server/*Coordinator.ts` - in-memory flow windows; restart loses and re-arms them

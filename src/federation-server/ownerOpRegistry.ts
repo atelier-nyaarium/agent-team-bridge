@@ -233,4 +233,9 @@ export class OwnerOpRegistry {
 	handler(kind: string): ErasedOwnerOpHandler | null {
 		return this.handlers.get(kind) ?? null;
 	}
+
+	/** Catalogued kinds no handler serves. */
+	unregistered(): OwnerOpKind[] {
+		return OWNER_OP_KIND_LIST.filter((kind) => !this.handlers.has(kind));
+	}
 }

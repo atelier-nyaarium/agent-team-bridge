@@ -1,5 +1,4 @@
-// The whole gateway graph, one stage at a time. Each stage takes what it reads and hands back what
-// the later ones need; the cycles between them stay closures over this file's own bindings.
+// The whole gateway graph, one stage at a time.
 
 import type { ChannelDeliveryCoordinator } from "./channelDelivery.js";
 import { composeAgents } from "./compose/composeAgents.js";

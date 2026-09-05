@@ -20,7 +20,7 @@ import {
 	getAllActiveWs,
 	type HandshakeRepushOutcome,
 	type TeamRegistry,
-} from "../websocket.js";
+} from "../wsTypes.js";
 
 type ConsolePushOps = ReturnType<typeof import("../consolePushOps.js").createConsolePushOps>;
 
@@ -37,13 +37,13 @@ export interface RespondRoutesDeps {
 		response?: string,
 		responderToken?: Presented,
 	) => boolean;
-	// The pending hs-* id owed by a (team, subId), if any - lets respond() name the exact handshake.
+	// The pending hs-* id owed by a (team, subId), if any.
 	findPendingHandshake?: (team: string, subId: string) => string | undefined;
-	// Re-sends a (team, subId)'s still-pending handshake so a caller that lost the original.
+	// Re-sends a still-pending handshake.
 	repushHandshake?: (team: string, subId: string) => HandshakeRepushOutcome;
-	// Whether a local session (canonical domain.gateway.spawn.session) is still shared to a friend Domain,.
+	// Whether a local session is still shared to a friend Domain.
 	isSharedToForReply?: ((sessionTarget: string, domainId: string) => boolean) | null;
-	// This Gateway's own Domain owner id (a hash of the owner's signing key), used to key the.
+	// This Domain's owner id, a hash of the owner's signing key.
 	ownerId?: (() => string | null) | null;
 	tryLocalAddress: (name: string) => Address | null;
 	relayWithRetry: (
@@ -85,7 +85,7 @@ export function createRespondRoutes({
 	function respond(
 		req: Request,
 		body: Record<string, unknown>,
-		// Unlike send(), respond() never needs to tell "trusted federated relay" apart from a.
+		// Unlike send(), respond() never needs to tell "trusted federated relay" apart from a plain caller.
 		opts: { consoleSender?: boolean; trustedInbound?: boolean; onFederatedSettled?: (ok: boolean) => void } = {},
 	): Response {
 		const parsed = RespondBodySchema.safeParse(body);
@@ -94,7 +94,7 @@ export function createRespondRoutes({
 		}
 
 		const { session_id: respondSessionId, replyAsJson, files: rawFiles, opId: producerOpId, ...rest } = parsed.data;
-		// Stamp this Gateway as the holder, but only for a LOCAL agent: it uploaded its bytes here and.
+		// Only a local agent's own upload gets this Gateway's holder stamp.
 		const files =
 			rawFiles &&
 			(opts.trustedInbound || opts.consoleSender ? rawFiles : stampBlobHolder(rawFiles, localGatewayId));
@@ -118,18 +118,18 @@ export function createRespondRoutes({
 			return jsonResponse({ delivered: true, handshake: true });
 		}
 
-		// Nothing can ENFORCE no-reply, so a reply that comes anyway would miss at store.deliver and.
+		// A stray reply on a no-ack session is treated as delivered, not an error.
 		if (isNoAckSessionId(respondSessionId) && !store.has(respondSessionId)) {
 			return jsonResponse({ delivered: true, noAck: true });
 		}
 
-		// This reply isn't itself resolving a handshake - but if the CALLER's own bridge handshake is.
+		// This reply doesn't resolve a handshake, but a still-pending caller handshake bounces it.
 		if (rest.conversationId) {
 			const callerWs = conversationRegistry.get(rest.conversationId);
 			if (callerWs && callerWs.readyState === 1 && !callerWs.data.virtual && !callerWs.data.handshakeConfirmed) {
 				const team = callerWs.data.teamName;
 				const pendingHsId = team && findPendingHandshake?.(team, callerWs.data.subId);
-				// Deliberately does not name the pending hs-* id: conversationId is not secret (it rides.
+				// Omits the pending hs-* id from the error; unlike conversationId, it isn't safe to expose.
 				if (team && pendingHsId) {
 					// Re-push the handshake before bouncing: the caller may have lost the original.
 					const outcome = repushHandshake?.(team, callerWs.data.subId);
@@ -165,14 +165,14 @@ export function createRespondRoutes({
 			}
 		}
 
-		// A reply may only come from the session the job is addressed to: the id is a pure function of.
+		// The session id fixes who may reply; a mismatched caller is refused.
 		const jobTarget = store.targetOf(respondSessionId);
 		if (jobTarget && !opts.consoleSender && !opts.trustedInbound) {
 			const refused = refuseForeignReply(req, jobTarget);
 			if (refused) return refused;
 		}
 
-		// The respond session_id is the opaque store key the agent echoes verbatim; under the.
+		// The session_id is the opaque store key the agent echoes verbatim.
 		const deliverResult = store.deliver(respondSessionId, response);
 		if (!deliverResult) {
 			console.log(
@@ -183,10 +183,10 @@ export function createRespondRoutes({
 
 		console.log(`[respond] ${respondSessionId}${response.status ? ` → ${response.status}` : ""}`);
 
-		// Cross-Gateway reply-pinning: a job created by a federated send belongs to the.
+		// A job created by a federated send carries a returnRoute back to its origin.
 		if (deliverResult.returnRoute) {
 			const rr = deliverResult.returnRoute;
-			// Re-check the per-session share on a CROSS-DOMAIN reply (a destination job carries the.
+			// Share may have been revoked since the original send; re-check it here.
 			if (deliverResult.dstDomainId) {
 				const pinned = parseStoreKey(rr.srcSession);
 				const sessionTarget = pinned?.kind === "conv" ? pinned.address.canonical : undefined;
@@ -218,7 +218,7 @@ export function createRespondRoutes({
 				void relayOutcome.then((r) => opts.onFederatedSettled?.(r.ok));
 			}
 			console.log(`[respond] ${respondSessionId} pinned to Gateway ${rr.srcGateway} via the Router`);
-			// Mirror the LOCAL responder's own thread. Never for the console itself (opts.consoleSender) -.
+			// Mirror the LOCAL responder's own thread; never for the console itself.
 			const localAddr = opts.consoleSender ? null : tryLocalAddress(deliverResult.to);
 			if (localAddr && provedLocalSession(req)) {
 				mirrorPeer(localAddr, localAddr.canonical, deliverResult.from, {
@@ -231,14 +231,14 @@ export function createRespondRoutes({
 			return jsonResponse({ delivered: true, federated: true });
 		}
 
-		// Push response back to the sender. For conversation-routed sends we target the.
+		// Push response back to the sender, preferring its own conversation over a name broadcast.
 		const push: ResponsePushPayload = {
 			type: "response_push",
 			session_id: respondSessionId,
 			response: response.response,
 		};
 		if (response.status) push.status = response.status;
-		// The push carries the full bytes; the store kept metadata only. message_id is the.
+		// The push carries the full bytes; the store kept metadata only. message_id identifies the files.
 		if (files && files.length > 0) {
 			push.files = files;
 			push.message_id = ambient.newId();
@@ -301,7 +301,7 @@ export function createRespondRoutes({
 			}
 		}
 
-		// Conversation-routed sends never degrade to name-based broadcast: the.
+		// Broadcast by name only when the job was never conversation-routed.
 		if (!pushedViaConversation && !deliverResult.fromConversationId) {
 			const fromSubs = registry.get(deliverResult.from);
 			if (fromSubs && getTeamMode(fromSubs) === "channel") {

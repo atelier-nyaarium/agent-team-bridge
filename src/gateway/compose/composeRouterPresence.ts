@@ -1,4 +1,4 @@
-// Stage 12b: the cross-Domain presence pipeline, and the teardown an unlink or untrust runs.
+// The cross-Domain presence pipeline, and the teardown an unlink or untrust runs.
 
 import type { Ambient, IntervalHandle } from "../../shared/ambient.js";
 import type { CrossDomainUnlinkResult } from "../../shared/console-protocol.js";
@@ -15,8 +15,8 @@ import type { FederationContext } from "./federationContext.js";
 export interface RouterPresenceStageDeps {
 	ambient: Ambient;
 	context: FederationContext;
-	stores: StoresStage;
-	sessions: SessionsStage;
+	stores: Pick<StoresStage, "restored" | "jobs">;
+	sessions: Pick<SessionsStage, "planeRegistry" | "presence" | "crossDomainPresenceConsumer">;
 	federation: Pick<FederationStage, "markPresenceDirty">;
 	routes: () => GatewayRoutes;
 }

@@ -1,5 +1,4 @@
-// The clock, the entropy, the ids, and the timers, as one injected record. The gateway and the
-// Router draw every one of them through this; `processAmbient` is the only reader of the globals.
+// The clock, the entropy, the ids, and the timers, as one injected record.
 
 import crypto from "node:crypto";
 
@@ -35,7 +34,7 @@ export type Clock = Pick<Ambient, "now">;
 ////////////////////////////////
 //  Functions & Helpers
 
-/** The process globals, unref'd so no timer holds the runtime open. */
+/** The one reader of the globals, unref'd so no timer holds the runtime open. */
 export function processAmbient(): Ambient {
 	return {
 		now: () => Date.now(),

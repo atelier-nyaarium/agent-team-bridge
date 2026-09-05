@@ -1,4 +1,4 @@
-// Stage 3: the registries, the session records, and every plane read off them.
+// The registries, the session records, and every plane read off them.
 
 import type { ServerWebSocket } from "bun";
 import type { Ambient, IntervalHandle } from "../../shared/ambient.js";
@@ -14,14 +14,14 @@ import { PresenceFacade } from "../presence.js";
 import { ReadAnchors } from "../readAnchors.js";
 import { createSessionRegistryReporter } from "../router/sessionRegistryReporter.js";
 import { createSessionAuthority, type SessionAuthority } from "../sessionAuthority.js";
-import { resolveLiveIncarnation, type TeamRegistry, type WsData } from "../websocket.js";
+import { resolveLiveIncarnation, type TeamRegistry, type WsData } from "../wsTypes.js";
 import type { StoresStage } from "./composeStores.js";
 import type { FederationContext } from "./federationContext.js";
 
 export interface SessionsStageDeps {
 	localGatewayId: string;
 	ambient: Ambient;
-	stores: StoresStage;
+	stores: Pick<StoresStage, "restored" | "jobs" | "durableOpStore" | "sessionResumeDurable">;
 	context: FederationContext;
 }
 

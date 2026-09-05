@@ -40,7 +40,7 @@ export const MAX_CROSSDOMAIN_PRESENCE_SESSIONS = 200;
  * TeamInfoSchema's presence-relevant fields (schemas.ts), not a reuse of that schema directly:
  * TeamInfo's `sessionLabel`/`description` are unbounded free text, fine for content that never
  * leaves this Gateway's own trust boundary, but not for content pushed to a linked friend's
- * Gateway (see the plan's "Trust boundary" section). Only `devcontainer`/`loose` kinds are ever
+ * Gateway. Only `devcontainer`/`loose` kinds are ever
  * shareable (gatewayRelay.ts's gateCrossDomainTarget), so `kind` is narrowed to just those two -
  * a `console` row can never legitimately appear here. Domain-identifying fields (domainId,
  * displayName, isAdminDomain) are deliberately absent: they live once per Domain on the

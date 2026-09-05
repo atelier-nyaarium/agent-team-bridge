@@ -6,7 +6,7 @@ import { CodexAgentService } from "../gateway/codexAgentService.js";
 import { CodexRelay } from "../gateway/codexRelay.js";
 import { CodexRoute } from "../gateway/codexRoute.js";
 import { createSessionAuthority } from "../gateway/sessionAuthority.js";
-import { resolveLiveIncarnation, type TeamRegistry } from "../gateway/websocket.js";
+import { resolveLiveIncarnation, type TeamRegistry } from "../gateway/wsTypes.js";
 import { processAmbient } from "../shared/ambient.js";
 import type {
 	CodexDaemonCommand,

@@ -1,4 +1,4 @@
-// Stage 2: every durable writer the gateway owns, and what the last run left on disk.
+// Every durable writer the gateway owns, and what the last run left on disk.
 
 import type { Ambient } from "../../shared/ambient.js";
 import { BlobStore } from "../../shared/blob-store.js";

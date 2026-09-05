@@ -1,4 +1,4 @@
-// Stage 11: the HTTP route surface, rebuilt whenever federation activates.
+// The HTTP route surface, rebuilt whenever federation activates.
 
 import type { Ambient } from "../../shared/ambient.js";
 import type { Identity } from "../../shared/crypto.js";
@@ -19,8 +19,17 @@ export interface RoutesStageDeps {
 	ambient: Ambient;
 	identity: () => Identity;
 	context: FederationContext;
-	stores: StoresStage;
-	sessions: SessionsStage;
+	stores: Pick<StoresStage, "jobs" | "capabilityStore" | "daemonCapabilityStore" | "blobStore" | "boardReplays">;
+	sessions: Pick<
+		SessionsStage,
+		| "registry"
+		| "conversationRegistry"
+		| "sessionAuthority"
+		| "sessionStore"
+		| "presence"
+		| "hostSpawnPoints"
+		| "crossDomainPresenceConsumer"
+	>;
 	host: Pick<HostStage, "wakeService">;
 	awareness: Pick<AwarenessStage, "awareness">;
 	websockets: WebSocketsStage;

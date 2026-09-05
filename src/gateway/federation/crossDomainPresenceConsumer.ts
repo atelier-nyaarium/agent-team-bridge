@@ -169,7 +169,7 @@ export class CrossDomainPresenceConsumer {
 
 	/** Land a linked friend's `presence_push`: replace this Domain's stored content and bump its
 	 * plane if the content actually changed. `srcDomainId` MUST be the sealer-VERIFIED sender,
-	 * never a payload-supplied value - see the plan's "Trust boundary" section. Never re-fans-out
+	 * never a payload-supplied value. Never re-fans-out
 	 * (the same origin-only invariant `console_push`'s landing side already follows). A Domain
 	 * refused at the cap is dropped outright - never written, never counted against the plane the
 	 * cap exists to bound, and never marked as landed either (see `applyLand` - a permanently

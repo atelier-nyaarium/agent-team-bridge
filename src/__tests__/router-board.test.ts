@@ -944,7 +944,7 @@ describe("router board service", () => {
 		let handler: ((reg: unknown, params: Record<string, unknown>) => unknown) | undefined;
 		service.register({
 			ownerOp: () => undefined,
-			gatewayFrame: (name, registered) => {
+			gatewayFrame: (name, _mutation, registered) => {
 				if (name === "board_op") handler = registered as typeof handler;
 			},
 			onGatewayRegistered: () => undefined,
@@ -980,9 +980,11 @@ describe("router board service", () => {
 			{ kind: "owner" },
 		);
 		let handler: ((reg: unknown, params: Record<string, unknown>) => unknown) | undefined;
+		const classes = new Map<string, string>();
 		service.register({
 			ownerOp: () => undefined,
-			gatewayFrame: (name, registered) => {
+			gatewayFrame: (name, mutation, registered) => {
+				classes.set(name, mutation);
 				if (name === "board_session_end") handler = registered as typeof handler;
 			},
 			onGatewayRegistered: () => undefined,
@@ -992,6 +994,11 @@ describe("router board service", () => {
 			gatewayIncarnation: () => null,
 			connectedGateways: () => [],
 		});
+		expect([...classes]).toEqual([
+			["board_op", "value"],
+			["board_session_end", "value"],
+			["board_read", "read"],
+		]);
 		const result = handler?.(
 			{ domainId: "a", gatewayId: "g1", signPub: "pub", incarnation: 1 },
 			{
@@ -1029,7 +1036,7 @@ describe("router board service", () => {
 		let handler: ((reg: unknown, params: Record<string, unknown>) => unknown) | undefined;
 		service.register({
 			ownerOp: () => undefined,
-			gatewayFrame: (name, registered) => {
+			gatewayFrame: (name, _mutation, registered) => {
 				if (name === "board_op") handler = registered as typeof handler;
 			},
 			onGatewayRegistered: () => undefined,
@@ -1061,7 +1068,7 @@ describe("router board service", () => {
 		let handler: ((reg: unknown, params: Record<string, unknown>) => unknown) | undefined;
 		service.register({
 			ownerOp: () => undefined,
-			gatewayFrame: (name, registered) => {
+			gatewayFrame: (name, _mutation, registered) => {
 				if (name === "board_read") handler = registered as typeof handler;
 			},
 			onGatewayRegistered: () => undefined,

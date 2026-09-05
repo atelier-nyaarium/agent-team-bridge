@@ -1,4 +1,4 @@
-// Stage 1: the directories, the identity, the keyring, and the boot decision, before any store opens.
+// The directories, the identity, the keyring, and the boot decision.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -44,7 +44,7 @@ export function composeBootstrap(deps: GatewayDeps): BootstrapStage {
 	for (const name of sweepAtomicTemps(federationDir)) console.log(`[gateway] removed atomic temp ${name}`);
 
 	let cachedIdentity: Identity | null = null;
-	const identity = () => (cachedIdentity ??= loadOrCreateIdentity(federationDir));
+	const identity = () => (cachedIdentity ??= loadOrCreateIdentity(federationDir, ambient.newId));
 	const contentKeyStore = new ContentKeyStore(federationDir, () => identity().box.priv, ambient);
 
 	const resolveBoot = (enrollNonce: string | null): GatewayBoot =>

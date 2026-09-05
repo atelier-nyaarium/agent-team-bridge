@@ -5,7 +5,7 @@ import { type InboxRow, parseInboxAddress } from "../shared/schemasInbox.js";
 import { GATEWAY_ERROR_STALE_INCARNATION } from "../shared/wire-vocabulary.js";
 import type { ReferenceHeldStore } from "./blobs/referenceHeldStore.js";
 import type { BlobOrigin, RouterBlobCache } from "./blobs/routerBlobCache.js";
-import { FrameDispatchTable, MIGRATION_FENCED_GATEWAY_FRAMES } from "./bridge/frameDispatch.js";
+import { FrameDispatchTable } from "./bridge/frameDispatch.js";
 import { INCARNATION_GATED_FRAMES, InboxFrames } from "./bridge/inboxFrames.js";
 import { RegistrationHandler } from "./bridge/registrationHandler.js";
 import { RelayRouter } from "./bridge/relayRouter.js";
@@ -14,6 +14,7 @@ import { type ConnectionId, GatewayTransport, type ToolProvider } from "./gatewa
 import { BlobFetchRoute } from "./inbox/blobFetchRoute.js";
 import type { InboxService, PeerRowGate } from "./inbox/inboxService.js";
 import { readRouterMigrationWindow } from "./migration/leaseService.js";
+import type { OwnerOpMutation } from "./ownerOpRegistry.js";
 
 export interface GatewayBridgeParams {
 	port: number;
@@ -78,9 +79,7 @@ export class GatewayBridge implements ToolProvider {
 	private readonly getDomainMeta: (domainId: string) => DomainMeta | null;
 	private readonly hasLinkEdge: (srcDomainId: string, dstDomainId: string) => boolean;
 	private readonly adminDomainIdGetter: () => string | null;
-	private readonly reachGetter: GatewayBridgeParams["reach"];
 	private readonly now: () => number;
-	private readonly ambient: Pick<Ambient, "now" | "setTimer" | "clearTimer">;
 
 	public constructor({
 		port,
@@ -95,7 +94,6 @@ export class GatewayBridge implements ToolProvider {
 		referenceHeld,
 		ambient,
 	}: GatewayBridgeParams) {
-		this.ambient = ambient;
 		this.now = () => ambient.now();
 		this.port = port;
 		this.authToken = authToken;
@@ -103,7 +101,6 @@ export class GatewayBridge implements ToolProvider {
 		this.getDomainMeta = getDomainMeta;
 		this.hasLinkEdge = hasLinkEdge;
 		this.adminDomainIdGetter = adminDomainId;
-		this.reachGetter = reach;
 		this.inbox = inbox ?? null;
 		this.blobCache = blobCache ?? null;
 		this.referenceHeld = referenceHeld ?? null;
@@ -131,7 +128,7 @@ export class GatewayBridge implements ToolProvider {
 			getDomain: this.getDomain,
 			getDomainMeta: this.getDomainMeta,
 			adminDomainId: this.adminDomainIdGetter,
-			reach: this.reachGetter,
+			reach,
 			inbox: this.inbox,
 			ambient,
 			migrationLease: (domainId, gatewayId) => this.migrationLease?.(domainId, gatewayId),
@@ -276,9 +273,9 @@ export class GatewayBridge implements ToolProvider {
 		const connId = this.gatewayConnections.get(domainId)?.get(address.gatewayId);
 		const reg = connId ? this.connGateways.get(connId) : undefined;
 		if (!reg || reg.incarnation === null) return false;
+		// An unreported protocol is an old gateway, which cannot take a console op.
 		if (
-			reg.protocolVersion !== undefined &&
-			reg.protocolVersion < FEDERATION_VALUE_PROTOCOL_VERSION &&
+			(reg.protocolVersion ?? 0) < FEDERATION_VALUE_PROTOCOL_VERSION &&
 			rows.some((row) => row.envelope.kind === "console_op")
 		)
 			return false;
@@ -292,8 +289,8 @@ export class GatewayBridge implements ToolProvider {
 	}
 
 	/** Handlers receive connection identity. */
-	public registerGatewayFrame(name: string, handler: GatewayFrameHandler): void {
-		this.frameTable.register(name, handler);
+	public registerGatewayFrame(name: string, mutation: OwnerOpMutation, handler: GatewayFrameHandler): void {
+		this.frameTable.register(name, mutation, handler);
 	}
 
 	public onSessionForgotten(listener: (reg: GatewayRegistration, sessionId: string) => void): void {
@@ -389,7 +386,7 @@ export class GatewayBridge implements ToolProvider {
 			}
 			if (
 				readRouterMigrationWindow().fenced &&
-				MIGRATION_FENCED_GATEWAY_FRAMES.has(name) &&
+				this.frameTable.mutation(name) === "value" &&
 				this.migrationReady &&
 				!this.migrationReady(reg.domainId)
 			)

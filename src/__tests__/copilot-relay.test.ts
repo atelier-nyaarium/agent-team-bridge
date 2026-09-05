@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { CopilotAgentService, CopilotApplication } from "../gateway/copilotAgentService.js";
+import type { CopilotAgentService } from "../gateway/copilotAgentService.js";
+import type { CopilotApplication } from "../gateway/copilotAgentTypes.js";
 import { CopilotRelay } from "../gateway/copilotRelay.js";
 import { processAmbient } from "../shared/ambient.js";
 import {

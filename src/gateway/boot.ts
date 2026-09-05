@@ -118,7 +118,7 @@ export class GatewayBootstrap {
 			if (!domainId) missing.push("domainId");
 			return { kind: "standalone", missing };
 		}
-		const identity = io.identity?.() ?? loadOrCreateIdentity(paths.federationDir);
+		const identity = io.identity?.() ?? loadOrCreateIdentity(paths.federationDir, io.ambient.newId);
 		if (!env.allowFixtureIdentity) refuseFixtureIdentity(identity.sign.pub, "gateway");
 		const contentKeys =
 			io.contentKeys ?? new ContentKeyStore(paths.federationDir, () => identity.box.priv, io.ambient);
