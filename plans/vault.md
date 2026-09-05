@@ -425,14 +425,14 @@ the host token. Grants and helper tokens open through `openDurable`, and a revoc
 only once its snapshot is installed. A request row is volatile: a restart drops whatever the outbox
 still holds, and an answer to a request the gateway no longer holds reads as expired.
 
-## Phase 3 - Phone: Vault tab, editor, request sheet
+## Phase 3 - Phone: Vault tab, editor, request sheet ✅
 
 - `plugins/vault/`: `VaultPlugin.kt` claims `vault:request`, wipe, and forget (A7).
-- `VaultSealing.kt` twin of the AAD kinds, with its case in `WireFixtureGenerator.kt`.
-  `VaultManager` holds Router-held entries through the OwnerOps, sealed with `ContentKeyring`.
-  `Protocol.kt` regenerates with `bun scripts/codegen-kotlin.ts`; the Kotlin gate diffs it.
+- `VaultSealing.kt`, a `ContentSealing` under `vaultAadKind`, with its case in
+  `WireFixtureGenerator.kt`. `VaultManager` holds Router-held entries through the OwnerOps, sealed
+  with `ContentKeyring`. `Protocol.kt` needed no regeneration; the Kotlin gate diffs it.
 - The `vault` plane: the Router's push and `planeVersions` entry land together with the phone's
-  `applyPlane` arm, so a version the phone cannot acknowledge is never advertised.
+  `applyPlane` arm, which acknowledges a version only once the held revision reaches it.
 - A full `vault_list` at the caps is about 49 MB of ciphertext in one frame. Page it, or bound the
   entry total, before the phone holds the list.
 - Vault tab in `MainTabsScreen.kt`, conditional on the capability like Backlog, badged by pending
@@ -546,3 +546,23 @@ Collected after Phase 2.
 - A prose Luna crunching comments removed meaning four times this lap ("Null means owner timeout"
   lost the owner; a plan status line vanished). The snapshot guard catches deletions, not a
   sentence shortened past its fact.
+
+Collected after Phase 3.
+
+- `PollDrain.processEntries` keys every row to a team through `parseStoreKey` or `from`, and drops
+  the rest without a log line. Two gateway rows already had ids the phone could not key (the vault's
+  `gateway.<id>.vault` and the key-request notice's `gateway.<id>.key-request` in
+  `composeFederation.ts`, which still ships). A dropped row should at least log its kind and id.
+- The plugin action contract says fast and non-blocking, but nothing enforces it and the only
+  precedent (Designer) writes to memory. A plugin that needs durable state on dispatch has to pick
+  between a blocking prefs commit and `apply`; there is no framework-owned durable handoff.
+- The generated `VaultRequest` sealed class repeats six common fields per arm and needs six
+  extension properties to read them. The codegen could lift shared fields to the base class.
+- `codegen-kotlin.ts` emits `Protocol.Wire` constants only for discriminator literal sets, so an
+  enum with `.meta({catalog})` (the vault decision) has no Kotlin constants and the phone keeps its
+  own strings.
+- The Bash tool's working directory persists across calls: one `cd android &&` made every later
+  relative path (`./scripts/kotlin-gate.sh`, `bun x biome`) fail with exit 127 or "no files" until
+  the paths went absolute.
+- Plane versions are noted by the drain host through two roads (the socket push and the poll tick),
+  so any rule about acknowledgement has to live in the repository's `applyPlane`, not the drain.
