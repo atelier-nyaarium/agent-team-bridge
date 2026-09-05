@@ -8,9 +8,6 @@ function constantTimeBearerEquals(provided: string, expected: string): boolean {
 	return left.length === right.length && timingSafeEqual(left, right);
 }
 
-////////////////////////////////
-//  Interfaces & Types
-
 type ConsoleApprovalJoin = NonNullable<ConsoleApprovalResult["join"]>;
 type SealedEnvelope = NonNullable<ConsoleApprovalResult["sealed"]>;
 
@@ -22,18 +19,13 @@ interface ApprovalWindow {
 	sealed?: SealedEnvelope;
 }
 
-////////////////////////////////
-//  Constants
-
 const DEFAULT_TTL_MS = 600_000;
 const DEFAULT_MAX_ATTEMPTS = 10;
 const DEFAULT_MAX_WINDOWS = 256;
 
 const OPAQUE_PUBLIC_ERROR = "device approval not available";
 
-////////////////////////////////
-//  Class
-
+// Approval failures stay opaque to callers.
 export class DeviceApprovalCoordinator {
 	private readonly windows = new Map<string, ApprovalWindow>();
 
@@ -71,9 +63,6 @@ export class DeviceApprovalCoordinator {
 				return { ok: true };
 		}
 	}
-
-	////////////////////////////////
-	//  Functions & Helpers
 
 	private handleArm(approvalId: string, nonce: string): ConsoleApprovalResult {
 		const existing = this.windows.get(approvalId);

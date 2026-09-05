@@ -28,50 +28,33 @@ import com.atelier_nyaarium.switchboard.proto.isComposite
 import com.atelier_nyaarium.switchboard.proto.parseSessionName
 import kotlinx.coroutines.delay
 
-////////////////////////////////
-//  Functions & Helpers
 
-/** Live first, then most recent activity, then label, within each section. */
 internal fun sessionOrder(state: ChatState): Comparator<Team> =
 	compareByDescending<Team> { it.isLive }
 		.thenByDescending { state.lastActivity(it.name) ?: 0L }
 		.thenBy { state.label(it.name) }
 
-/** This device's own Domain's sessions, excluding a linked friend's, which render in the "Linked
- * friends" section instead - excluding them here is what keeps a peer session from rendering twice. */
+// Peer rows render in the linked-friends section.
 internal fun localSessions(sessions: List<Team>, adminDomainId: String): List<Team> =
 	sessions.filter { it.domainId.isNullOrEmpty() || it.domainId == adminDomainId }
 
-/** A linked friend's Gateway is content-untrusted, so nothing enforces (gatewayId, team) uniqueness
- * in its session list; a duplicate crashes the "Linked friends" LazyColumn. Keeps the first occurrence. */
+// Peer presence is untrusted and may duplicate keys.
 internal fun dedupedFriendSessions(sessions: List<CrossDomainPresenceSession>): List<CrossDomainPresenceSession> =
 	sessions.distinctBy { it.gatewayId to it.team }
 
-/** The session-board grouping key: the full (Domain, Gateway) pair. A gateway id is
- * unique only within a Domain, so two linked friend Domains running an identically-named
- * gateway must group separately rather than merge. */
+// Gateway IDs are unique only within a Domain.
 internal data class GatewayGroupKey(val domainId: String, val gatewayId: String)
 
-/**
- * Session rows grouped by their owning Gateway, with every ADMITTED Gateway present even when it has
- * contributed no rows. `routes.teams()` drops the headless host daemon, so a machine that is enrolled
- * and running but idle answers with nothing at all, and a grouping built from rows alone draws no
- * section for it - which made a second machine invisible rather than merely empty.
- *
- * The home Gateway sorts first; the rest follow by (Domain, Gateway).
- */
 internal fun groupByGateway(
 	local: List<Team>,
 	admittedGateways: List<String>,
 	adminDomainId: String,
 	homeGatewayId: String,
 ): List<Pair<GatewayGroupKey, List<Team>>> {
+	// Admit headless Gateways so idle machines remain actionable.
 	val grouped = local.groupBy {
 		GatewayGroupKey(it.domainId.orEmpty().ifEmpty { adminDomainId }, it.gatewayId.ifEmpty { homeGatewayId })
 	}
-	// An admitted Gateway is placed in my own Domain, the only Domain an admission can name. Before a
-	// local session confirms that Domain it cannot be named at all - no site in this app acts on a
-	// names correctly. Naming the others bare instead would spawn on the route machine and say nothing.
 	val admitted =
 		admittedGateways.filter { it.isNotEmpty() && (adminDomainId.isNotEmpty() || it == homeGatewayId) }
 	val empties =
@@ -84,66 +67,27 @@ internal fun groupByGateway(
 	}
 }
 
-/** Every id that names a shell on the machine rather than a devcontainer project. Kept here as the
- * console's own copy of the gateway's registry: a project literally named `host` or `windows` is
- * deduped against these, and the gateway's catalog scan refuses such a directory anyway. */
 internal val HOST_SPAWN_IDS = setOf("host", "windows")
 
-/**
- * Which project the create dialog opens on, or null for no selection.
- *
- * Null rather than a default, because `host` is not a neutral choice: it is one of several real
- * targets, and preselecting it means a mis-tap spawns on the wrong one silently. Nothing selected
- * cannot be submitted, so the dialog asks rather than assumes.
- *
- * A remembered project is only a SUGGESTION and is re-checked against what this Gateway offers right
- * now. That is what makes it safe to persist: a project since renamed, removed, or belonging to a
- * machine whose Windows side is no longer detected simply falls back to no selection instead of
- * preselecting something that cannot be spawned.
- */
 internal fun initialProject(remembered: String?, projects: List<String>): String? =
 	remembered?.takeIf { it in projects }
 
-/** How a host spawn point is labelled in the picker. `host` is only called "WSL" when a `windows`
- * peer is present on the SAME Gateway: on a Linux machine it is just the host, and renaming it there
- * would be a lie. The wire word never changes either way - `host` is an address segment keying
- * session records, resume state and board work, so this is presentation only. */
 internal fun hostSpawnLabel(id: String, offered: List<String>): String = when {
 	id == "windows" -> "Windows"
 	id == "host" && offered.contains("windows") -> "WSL"
 	else -> id
 }
 
-/**
- * The host spawn points to offer for one Gateway, Windows first.
- *
- * `host` is always present and never advertised, because every machine has one; the advertised list
- * carries only what was DETECTED. An empty or absent advertisement therefore yields exactly `host`,
- * which is the behaviour every console had before this existed.
- */
 internal fun hostSpawnChoices(
 	advertised: List<GatewaySpawnPoints>,
 	key: GatewayGroupKey,
 	adminDomainId: String,
 ): List<String> {
 	val offered = advertised.filter { it.groupKey(adminDomainId) == key }.flatMap { it.hostSpawns }
-	// Detected points first, `host` last, stated rather than left to alphabetical accident: on a
-	// Windows machine the Windows side is what the owner means by default, and it is the one they had
-	// to go out of their way to make available. Unknown ids are dropped rather than offered, since a
-	// newer gateway may advertise a spawn point this console cannot label or reason about.
 	val detected = offered.filter { it in HOST_SPAWN_IDS && it != "host" }.distinct().sorted()
 	return detected + "host"
 }
 
-/**
- * What the create dialog was opened on: the Gateway, and the projects selectable there.
- *
- * Owns the ONE rule that turns a picked project into a spawn target, so address grammar lives here
- * rather than in the dialog. A project on this device's own home Gateway stays BARE, because that is
- * what a bare name already means everywhere else and re-spelling it would change the meaning of
- * targets that work today. Anything else is qualified, which is the entire mechanism for spawning on
- * another machine: `targetGatewayOf` reads the gateway out of the target and seals the frame there.
- */
 internal data class CreateDialogTarget(
 	val domainId: String,
 	val gatewayId: String,
@@ -158,8 +102,6 @@ internal data class CreateDialogTarget(
 		}
 }
 
-////////////////////////////////
-//  Composables
 
 @Composable
 fun SessionsScreen(
@@ -171,32 +113,20 @@ fun SessionsScreen(
 	onOpen: (String) -> Unit,
 	onRename: (String, String) -> Unit,
 	onForget: (String) -> Unit,
-	// qualified spawn-point address on any other, which is the whole mechanism for spawning elsewhere.
 	onSpawn: (String, String, String?) -> Unit,
-	// (path, host spawn-point target). The target names WHICH machine's filesystem to browse.
 	onListDirs: suspend (String, String, String) -> DirListing = { _, _, _ -> DirListing(emptyList()) },
 	onVerifyEnroll: (() -> Unit)? = null,
 	onRouterEndpoint: (() -> Unit)? = null,
-	// The board's live line per session card; { null } keeps every card's ordinary ladder.
 	boardLine: (Team) -> BoardLiveLine? = { null },
 	boardBranch: (Team) -> com.atelier_nyaarium.switchboard.board.CardBranch? = { null },
-	// How many unfinished board entries this session holds, and the forget that first decides what
-	// becomes of them. Zero keeps the plain forget confirm.
 	undoneFor: (Team) -> Int = { 0 },
 	onForgetWithTasks: (String, Boolean) -> Unit = { _, _ -> },
 	modifier: Modifier = Modifier,
 ) {
-	// Long-press flow: action menu -> rename dialog or forget confirm.
 	var actionTeam by remember { mutableStateOf<Team?>(null) }
-	// Tapping a Gateway's Create button opens the new-session dialog with that Gateway's selectable
-	// projects (host first, then its catalog devcontainer projects). Carries the Gateway it was opened
-	// on, because a project name alone does not say WHICH machine to spawn on, and a bare target
 	var createDialogFor by remember { mutableStateOf<CreateDialogTarget?>(null) }
 	var renameTeam by remember { mutableStateOf<Team?>(null) }
 	var forgetTeam by remember { mutableStateOf<Team?>(null) }
-	// Per-Gateway accordion collapse state (default expanded). rememberSaveable, not remember: the
-	// pager disposes this page whenever the board tab is showing, and a plain remember would
-	// silently re-expand every section on the way back.
 	val collapsedGateways = rememberSaveable { mutableStateOf(setOf<String>()) }
 
 	actionTeam?.let { team ->
@@ -226,9 +156,6 @@ fun SessionsScreen(
 		)
 	}
 	forgetTeam?.let { team ->
-		// Forgetting a session with unfinished board work BLOCKS on a decision rather than offering
-		// an undo: an action button on a transient is too easy to double-tap into. Skipped entirely
-		// when nothing is undone, so the prompt always means something was actually at stake.
 		val undone = undoneFor(team)
 		if (undone > 0) {
 			BoardForgetDialog(
@@ -262,12 +189,7 @@ fun SessionsScreen(
 			gateway = opened.gatewayId,
 			projects = opened.projects,
 			pendingSpawns = state.pendingSpawns,
-			// Both the browse and the spawn are addressed to the Gateway the dialog was opened on, so
-			// the directory picker reads the filesystem the session will actually run against.
 			targetOf = opened::targetFor,
-			// The spawn point decides WHICH filesystem is browsed, so it rides the target the same
-			// way the eventual spawn does. Browsing `host` and then spawning `windows` would let the
-			// picker offer directories the launch refuses.
 				onListDirs = { path, spawn -> onListDirs(path, opened.targetFor(spawn), spawn) },
 			rememberedProject = state.lastProjectByGateway[opened.gatewayId],
 			onSpawn = { target, session, workdir ->
@@ -282,23 +204,11 @@ fun SessionsScreen(
 		val sessions = state.sessions()
 			val adminDomainId = state.domainId.orEmpty()
 			val local = localSessions(sessions, adminDomainId)
-			// sessions yet (see LinkedDomain's own doc - a just-linked friend must still show up). Must
-			// stay unconditional: a freshly-linked friend can be known purely through state.linkedPeerOwners
-			// (the trust roster) before this device has created its own first local session at all, i.e.
-			// exactly while adminDomainId is still "" - a guard here would hide every linked friend in
-			// that state, not just a hypothetically misclassified local one.
+			// Linked peers remain visible before local Domain discovery.
 			val linkedDomains = CrossDomainLink.mergeLinkedDomains(state.teams, state.linkedPeerOwners, adminDomainId)
-			// Session rows plus every admitted Gateway, so an enrolled machine that is merely idle is
-			// still drawn and still offers Create.
 			val byGateway = groupByGateway(local, state.admittedGateways, adminDomainId, state.homeGatewayId)
-			// EmptyBoard still wins whenever it has a real cause to name; an idle Gateway's section only
-			// replaces its bare "nothing here yet" fallback, which is a dead end with nothing to press.
-			// Reads `local` rather than `byGateway` on that second test: an idle section is not content
-			// EmptyBoard could contradict, so a stalled poll should still be reported.
 			val onboarding = (byGateway.isEmpty() && linkedDomains.isEmpty()) ||
 				(local.isEmpty() && linkedDomains.isEmpty() && emptyBoardHasCause(state))
-			// One status surface: while EmptyBoard is up it owns the whole message, so the health banner
-			// shows only ALONGSIDE real content and can never contradict the body.
 			if (!onboarding) HealthHeader(state)
 			if (state.gap) {
 				Surface(
@@ -315,8 +225,6 @@ fun SessionsScreen(
 				}
 			}
 			if (onboarding) {
-				// Offer the still-owed in-person compare only on the awaiting-host board (a freshly-rooted
-				// enrollee who has not finished the trust step); EmptyBoard gates the button on that state.
 				EmptyBoard(
 					state,
 					onManage,
@@ -327,26 +235,13 @@ fun SessionsScreen(
 					onRouterEndpoint = onRouterEndpoint,
 				)
 			} else {
-				// One shared sweep phase for every card's working/verifying pulse bar, instead of each
-				// card driving its own infinite animation.
 				val pulsePhase = rememberSessionsPulsePhase()
 				val order = sessionOrder(state)
-				// Ticks every 30s so a linked friend's freshness chip re-evaluates from elapsed time
-				// alone - otherwise it only recomputes when some OTHER ChatState field changes, and a
-				// friend who has gone fully quiet (no more pushes or backstop pulls landing) would
-				// freeze at its last-computed verdict indefinitely. Paused while backgrounded (mirroring
-				// this file's own visibility-driven pattern elsewhere): delay() is wall-clock scheduled,
-				// not frame-clock, so it keeps firing on schedule regardless of window visibility unless
-				// explicitly paused. Reads state.foreground (kept Compose-reactive by onForeground()/
-				// onBackground() for exactly this purpose) rather than opening a second, independent
-				// LocalLifecycleOwner subscription alongside the app-wide one that already drives it.
 				var freshnessNow by remember { mutableStateOf(System.currentTimeMillis()) }
 				LaunchedEffect(linkedDomains.isNotEmpty(), state.foreground) {
 					if (linkedDomains.isEmpty() || !state.foreground) return@LaunchedEffect
 					while (true) {
-						// Ticks immediately on (re)start, not just after the first 30s - otherwise a
-						// resume from background shows a verdict frozen at its pre-background value for
-						// up to 30s more, exactly when a liveness indicator is most likely checked.
+						// Refresh immediately when foreground monitoring starts.
 						freshnessNow = System.currentTimeMillis()
 						delay(30_000)
 					}
@@ -359,23 +254,9 @@ fun SessionsScreen(
 					for ((key, group) in byGateway) {
 						val composite = "${key.domainId}/${key.gatewayId}"
 						val collapsed = composite in collapsedGateways.value
-						// A peer Domain (a linked friend's) is labeled domain/gateway so a colliding
-						// gateway id reads distinctly; my own Domain shows the bare gateway id. Always
-						// false in practice now that `byGateway` groups `local` (peer rows already
-						// filtered out above) - left in place as a direct, defensive match of the same
-						// admin-domain test used to build localSessions, rather than assuming this loop
-						// can never see a non-local group.
 						val isPeer = key.domainId.isNotEmpty() && adminDomainId.isNotEmpty() && key.domainId != adminDomainId
 						val headerName = if (isPeer) composite else key.gatewayId
-						// Every Gateway in your own Domain offers Create, not just the one this device happens
-						// to poll: which machine that is, is an accident of setup. A peer Domain does not,
-						// since spawning on a linked friend's machine is meaningless.
-						//
-						// Any OTHER machine must still be admitted, because a section can outlive its
-						// admission: a revoked Gateway's session rows survive in the cached presence list
-						// is exempt so a keyring this device cannot read never costs it the only Create it
-						// has. Computed unconditionally (not gated on `collapsed`) so the button and its
-						// project list are correct even while the section is collapsed.
+						// Peer Gateways cannot be local spawn targets.
 						val showCreate =
 							!isPeer && (key.gatewayId == state.homeGatewayId || key.gatewayId in state.admittedGateways)
 						fun localName(t: Team) = t.shortName
@@ -391,10 +272,6 @@ fun SessionsScreen(
 							},
 								showCreate = showCreate,
 								onCreate = {
-									// This machine's shells first (always at least `host`, plus whatever its daemon
-									// detected), then catalog devcontainer projects. A real project named after a
-									// host spawn point is deduped against them, though the gateway's catalog scan
-									// refuses such a directory anyway.
 									createDialogFor = CreateDialogTarget(
 										domainId = key.domainId,
 										gatewayId = key.gatewayId,
@@ -403,29 +280,20 @@ fun SessionsScreen(
 											spawnPoints.map { localName(it) }.filterNot { it in HOST_SPAWN_IDS },
 									)
 								},
-								// Only for my own Domain: the Router's roster covers the machines I own, and a
-								// linked friend's Gateway not being in it says nothing about whether it is up.
 								reachable = if (isPeer) null else state.connectedGateways?.contains(key.gatewayId),
 							)
 						}
 						if (!collapsed) {
-							// Clean break: a devcontainer entry is a non-chat SPAWN-POINT (its bare project);
-							// each project.session is a loose chat that nests under its project's header. The
-							// remaining non-composite loose peers (host-loose, etc.) stay flat.
 							val composites = group.filter { it.kind != "devcontainer" && isComposite(localName(it)) }
 							val flatLoose =
 								group.filter { it.kind != "devcontainer" && !isComposite(localName(it)) }.sortedWith(order)
 							val byProject = composites.groupBy { parseSessionName(localName(it)).project }
 							val spawnKeys = spawnPoints.map { localName(it) }.toSet()
 
-							// A spawn-point header only shows once it has a session nested under it - an empty
-							// one adds nothing to look at, and every project (host included) is always still
-							// reachable as a Create option regardless of whether it currently has any sessions.
 							fun renderProject(projectKey: String, header: @Composable () -> Unit) {
 								val sessions = byProject[projectKey].orEmpty().sortedWith(order)
 								if (sessions.isEmpty()) return
-								// Keyed by gateway too: one LazyColumn spans every gateway, and a spawn name is
-								// unique only within one, so two gateways with a `host` spawn threw on a duplicate key.
+								// Spawn names are unique only within a Gateway.
 								item(key = "spawn:$composite/$projectKey") { header() }
 								items(sessions, key = { "team:${it.name}" }) { team ->
 									SessionCard(
@@ -441,9 +309,6 @@ fun SessionsScreen(
 								}
 							}
 
-							// The host machine is a spawn point too, but it is not in the catalog (and the
-							// daemon's reserved "host" slot is hidden), so it's shown synthetically for YOUR OWN
-							// gateway only. Rendered first, ahead of the devcontainer spawn-points.
 							if (showCreate) {
 								renderProject("host") {
 									SpawnPointHeader(project = "host", online = byProject["host"].orEmpty().any { it.isLive })
@@ -451,20 +316,14 @@ fun SessionsScreen(
 							}
 							for (sp in spawnPoints) {
 								val proj = localName(sp)
-								// Same exclusion the orphan loop below makes: a catalog project literally named
-								// "host" would otherwise render a second header under the key already used above.
 								if (showCreate && proj == "host") continue
 								renderProject(proj) {
 									SpawnPointHeader(
 										project = proj,
-										// A spawn-point is always available itself; its dot reflects whether any
-										// session nested under it is live.
 										online = byProject[proj].orEmpty().any { it.isLive },
 									)
 								}
 							}
-							// A composite whose spawn-point is not currently in the catalog still needs a home
-							// (excluding "host" when it was shown above, to avoid a duplicate header).
 							val orphanProjects = byProject.keys - spawnKeys - (if (showCreate) setOf("host") else emptySet())
 							for (proj in orphanProjects.sorted()) {
 								renderProject(proj) {

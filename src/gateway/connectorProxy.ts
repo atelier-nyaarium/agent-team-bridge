@@ -5,15 +5,10 @@ import type { WsData } from "./wsTypes.js";
 
 const upstreamMap = new Map<ServerWebSocket<WsData>, WebSocket>();
 
-// terminate() forces an error/close event even mid-CONNECTING, so the ordinary cleanup runs.
+// Termination triggers cleanup during CONNECTING.
 const CONNECT_DEADLINE_MS = 15_000;
 
-/**
- * Bridges a client WebSocket to the per-project connector at ws://<project>:20002/ws.
- * The caller MUST validate `project` against the trusted host catalog (offlineCatalog) first:
- * this dials the name verbatim, so an unvalidated value is an SSRF vector. That gate lives at the
- * /connector upgrade site in index.ts, not here.
- */
+/** Caller must validate project against the trusted host catalog. */
 export function setupProxy(
 	clientWs: ServerWebSocket<WsData>,
 	project: string,
@@ -23,8 +18,7 @@ export function setupProxy(
 	const url = `ws://${project}:20002/ws`;
 	const upstream = new WebSocket(url, { headers: authHeader ? { Authorization: authHeader } : {} });
 
-	// A dial that hangs in CONNECTING emits neither close nor error, and those are the only two
-	// cleanup paths - without a deadline the map retains both sockets forever.
+	// A stalled CONNECTING dial emits no cleanup event.
 	const connectDeadline = ambient.setTimer(() => {
 		console.log(`[proxy] upstream ${project} never connected, giving up`);
 		upstream.terminate();
@@ -47,7 +41,7 @@ export function setupProxy(
 				clientWs.send(Buffer.concat(data));
 			}
 		} catch {
-			// Client already closed
+			// Client may already be closed.
 		}
 	});
 
@@ -58,7 +52,7 @@ export function setupProxy(
 		try {
 			clientWs.close();
 		} catch {
-			// Already closed
+			// Client may already be closed.
 		}
 	});
 
@@ -69,7 +63,7 @@ export function setupProxy(
 		try {
 			clientWs.close();
 		} catch {
-			// Already closed
+			// Client may already be closed.
 		}
 	});
 
@@ -92,7 +86,7 @@ export function handleProxyClose(clientWs: ServerWebSocket<WsData>): void {
 			upstream.close();
 		}
 	} catch {
-		// Already closed
+		// Upstream may already be closed.
 	}
 }
 

@@ -10,9 +10,6 @@ import { resolveLiveIncarnation, type TeamRegistry, type WsData } from "../gatew
 import { processAmbient } from "../shared/ambient.js";
 import { SessionStore } from "../shared/session-store.js";
 
-////////////////////////////////
-//  Functions & Helpers
-
 function socket(boundToken?: string): { data: WsData } {
 	return { readyState: 1, data: { boundToken, handshakeConfirmed: true } as WsData } as { data: WsData };
 }
@@ -30,24 +27,18 @@ function setup() {
 	return { auth, sessionStore, registry };
 }
 
-/** A request carrying a session token. */
 function withToken(token: string): Request {
 	return new Request("http://gateway/blob/put", { headers: { "x-session-token": token } });
 }
 
-/** A registered socket under a team. */
 function goLive(registry: TeamRegistry, sessionStore: SessionStore, team: string, ws: { data: WsData }): void {
 	registry.set(team, new Map([["s1", ws as never]]));
 	sessionStore.bindBySegment(team, { live: { team, subId: "s1" } });
 }
 
-////////////////////////////////
-//  Tests
-
 describe("what the subject-less byte plane requires", () => {
 	it("is open while no local session is bound, matching what an unbound name already allows", () => {
-		// Not a weakening invented for blobs: satisfies(UNBOUND, anything) is already true, so a
-		// hand-launched tokenless deployment keeps working instead of silently losing attachments.
+		// UNBOUND satisfies every claim, preserving tokenless launches.
 		const { auth } = setup();
 
 		expect(auth.mayUseLocalPlane(NOTHING_PRESENTED)).toBe(true);
@@ -76,8 +67,7 @@ describe("what the subject-less byte plane requires", () => {
 	});
 
 	it("ignores a binding that was only minted, so a reattached session is not locked out", () => {
-		// The token for a launch that merely reattached was never delivered, so demanding it would
-		// refuse the very session it names - the same rule toClaim follows.
+		// Minted but undelivered tokens cannot lock out the named session.
 		const { auth, sessionStore } = setup();
 		const record = sessionStore.mint({ spawn: "recipe-app" });
 		sessionStore.ensureBindToken(record);

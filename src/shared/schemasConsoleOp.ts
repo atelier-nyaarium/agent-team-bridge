@@ -5,10 +5,6 @@ import { BlobGetOpSchema, BlobPutOpSchema, BlobStatOpSchema } from "./schemasBlo
 
 export { SealedEnvelopeSchema } from "./crypto.js";
 
-////////////////////////////////
-//  Console relay frames
-
-/** Trusted audience. */
 export const CrossDomainShareTargetSchema = z
 	.discriminatedUnion("kind", [
 		z.object({ kind: z.literal("domain"), domainId: z.string().min(1).max(64) }),
@@ -16,7 +12,6 @@ export const CrossDomainShareTargetSchema = z
 	])
 	.meta({ id: "CrossDomainShareTarget" });
 
-// Long-poll hold ceiling.
 export const MAX_POLL_HOLD_MS = 45_000;
 
 export const ConsoleOpSchema = z
@@ -79,8 +74,6 @@ export const ConsoleOpSchema = z
 		}),
 		z.object({
 			kind: z.literal("list_dirs"),
-			// Blank names the spawn point's OWN default directory, which only the machine can spell.
-			// The answer carries the path it resolved to.
 			path: z.string().max(512),
 			spawn: z.string().min(1).max(64).optional(),
 		}),
@@ -143,8 +136,6 @@ export const DELIVERY_OP_KINDS = new Set([
 	"wake",
 ]);
 
-// Delivery kinds a console older than a reclassification still sends. Empty since the peek shim
-// retired; the next reclassification names its kind here with a Remove-by line.
 export const TOLERATED_DELIVERY_OP_KINDS = new Set<string>();
 
 export const VALUE_OP_KINDS = new Set([
@@ -167,12 +158,6 @@ export const VALUE_OP_KINDS = new Set([
 	"cross_domain_unlink",
 	"cross_domain_untrust",
 ]);
-
-////////////////////////////////
-//  Console relay frame schema
-
-////////////////////////////////
-//  Mailbox entry schema
 
 export const MailboxEntrySchema = z
 	.object({

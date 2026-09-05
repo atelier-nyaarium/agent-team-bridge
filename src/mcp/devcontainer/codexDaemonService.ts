@@ -22,29 +22,16 @@ export type { AppServerSession } from "./codexAppServerSession.js";
 export type { CodexDaemonDeps } from "./codexDaemonTypes.js";
 export type { CodexDaemonEvent, CodexDaemonReceipt };
 
-////////////////////////////////
-//  Constants
-
-/** A frame this long after the last one is logged, since it is the silence the watchdog acts on. */
 const FRAME_GAP_LOG_MS = 60_000;
 
-////////////////////////////////
-//  Functions & Helpers
-
-/** A completed turn the tracker is holding for its final item, from the frame that announced it. */
 function heldTurn(message: unknown): { threadId: string; turnId: string } | null {
 	const parsed = CodexAppServerTurnCompletedSchema.safeParse(message);
 	if (!parsed.success) return null;
 	return { threadId: parsed.data.params.threadId, turnId: parsed.data.params.turn.id };
 }
 
-/**
- * The turn any frame names, whatever kind of frame it is.
- *
- * Deliberately not a schema: a turn that spends its life running commands emits no agent message, so
- * counting only the frames the tracker parses would interrupt work that is progressing perfectly.
- */
 function framedTurn(message: { params?: unknown }): { threadId: string; turnId: string } | null {
+	// Track named turn frames.
 	if (typeof message.params !== "object" || message.params === null) return null;
 	const params = message.params as { threadId?: unknown; turnId?: unknown; turn?: { id?: unknown } };
 	const turnId = typeof params.turnId === "string" ? params.turnId : params.turn?.id;
@@ -52,14 +39,6 @@ function framedTurn(message: { params?: unknown }): { threadId: string; turnId: 
 	return { threadId: params.threadId, turnId };
 }
 
-////////////////////////////////
-//  Class
-
-/**
- * One supervised App Server per target, and the reliable stream back to the gateway.
- *
- * Owns no policy: every guardrail is in the prompt, and every access decision was the gateway's.
- */
 export class CodexDaemonService {
 	private readonly core: AgentDaemonCore<TargetSession>;
 	private readonly sessions: CodexSessionLifecycle;
@@ -67,7 +46,7 @@ export class CodexDaemonService {
 	private readonly dispatchHost: CommandDispatchHost;
 	private stopped = false;
 	private inFlight = 0;
-	/** The DAEMON's quiet, stamped by commands alone. Not a session's `usedAt`; never merge them. */
+	// Track daemon-level quiet time.
 	private quietSince = 0;
 
 	constructor(private readonly deps: CodexDaemonDeps) {
@@ -123,13 +102,8 @@ export class CodexDaemonService {
 		return (this.deps.now ?? Date.now)();
 	}
 
-	/**
-	 * Held across every asynchronous stretch that touches a session, so a reap cannot land inside one.
-	 *
-	 * Counted for the daemon rather than per session: a lease taken after the session resolves leaves
-	 * the acquire itself unguarded, which is the gap the local runtime already learned a reaper fires in.
-	 */
 	private async lease<T>(run: () => Promise<T>): Promise<T> {
+		// Hold the lease across async operations.
 		this.inFlight += 1;
 		try {
 			return await run();
@@ -138,42 +112,31 @@ export class CodexDaemonService {
 		}
 	}
 
-	/**
-	 * A command under its lease, stamping the quiet clock the reaper measures from when it ends.
-	 *
-	 * Stamped at the END, since a command that outlasts the quiet period would otherwise leave its
-	 * target reapable the instant it finished. The daemon's own sweeps do not stamp it: measuring
-	 * from any leased work at all, the sweep resets the clock it is about to read and never reaps.
-	 */
 	private async serve(command: CodexDaemonCommand): Promise<void> {
 		try {
 			await this.lease(() => this.dispatch(command));
 		} finally {
+			// Refresh quiet time after work.
 			this.quietSince = this.now();
 		}
 	}
 
-	/** What this daemon is and which children are live. The gateway decides what needs reconciling. */
 	hello(): Record<string, unknown> {
 		return this.core.hello();
 	}
 
-	/** Oldest first, so an ordering the reducer depends on survives the reconnect. */
 	replay(): void {
 		this.core.replay();
 	}
 
-	/** Retire everything the gateway has durably committed for one generation. */
 	acknowledge(ack: AgentEventAck): void {
 		this.core.acknowledge(ack);
 	}
 
-	/** Serialized per agent: a racing steer and interrupt each read state the other is changing. */
 	handleCommand(raw: unknown): void {
 		const parsed = CodexDaemonCommandSchema.safeParse(raw);
 		if (!parsed.success) return;
 		const command = parsed.data;
-		// Dispatching would acquire a target and spawn the child a shutdown exists to stop spawning.
 		if (this.stopped) {
 			this.reject(command, `codex daemon is shutting down`);
 			return;
@@ -186,7 +149,6 @@ export class CodexDaemonService {
 		);
 	}
 
-	/** Retired before the clients close, so nothing a close settles still counts as live. */
 	shutdown(): void {
 		this.stopped = true;
 		this.watchdog.stop();
@@ -198,9 +160,7 @@ export class CodexDaemonService {
 		return dispatchCodexCommand(this.dispatchHost, command);
 	}
 
-	/** The thread id parks the thread whether a binding is held or not; `onTerminal` reaches the gateway. */
 	private onServerEvent(session: TargetSession, message: { method: string; params?: unknown }): void {
-		// A long gap is what the watchdog measures, so it is worth a line when it happens.
 		const gap = this.now() - session.usedAt;
 		if (gap > FRAME_GAP_LOG_MS) {
 			const named = framedTurn(message);
@@ -210,7 +170,6 @@ export class CodexDaemonService {
 		}
 		session.usedAt = this.now();
 		const outcome = session.tracker.accept(message);
-		// Named, so an interruption nobody here asked for is visible as such.
 		if (outcome?.status === "interrupted") {
 			console.error(
 				`[codex-daemon] ${session.targetId} turn ${outcome.turnId} interrupted (${message.method}, generation ${session.generation})`,
@@ -221,23 +180,18 @@ export class CodexDaemonService {
 			this.settle(session, outcome.threadId, outcome.turnId, terminalOf(outcome));
 			return;
 		}
-		// Any frame this turn produced is the progress the watchdog measures against.
 		const named = framedTurn(message);
 		if (named) session.turns.saw(named.threadId, named.turnId);
 		const held = heldTurn(message);
-		// Only a terminal actually waiting here; a redelivered one is already settled.
 		if (held && session.tracker.holding(held.threadId, held.turnId)) {
 			this.sessions.holdDeadline(session, held.threadId, held.turnId);
 		}
 	}
 
-	/** One read decides it; only a read that says nothing settles on what the tracker holds. */
 	private async settleHeld(session: TargetSession, threadId: string, turnId: string): Promise<void> {
 		const observed = await this.readOutcome(session, threadId, turnId);
-		// Replaced while the read was in flight.
 		if (!this.core.live(session)) return;
-		// A read still calling it in progress contradicts the terminal that armed this, so it is left
-		// held rather than answered from a guess; the Step 5 watchdog owns that turn.
+		// Running reads keep terminals held.
 		if (observed.known === "running") return;
 		const held = session.tracker.settlePending(threadId, turnId);
 		const terminal = observed.known === "settled" ? observed.outcome : held === null ? undefined : terminalOf(held);
@@ -259,22 +213,16 @@ export class CodexDaemonService {
 		});
 	}
 
-	/**
-	 * The turn's own binding when its thread agrees, the thread's otherwise.
-	 *
-	 * A binding whose thread disagrees belongs to another thread's turn, so neither its agent nor its
-	 * place among the live turns is this terminal's to take.
-	 */
 	private bindingFor(
 		session: TargetSession,
 		threadId: string,
 		turnId: string,
 	): { binding: TurnBinding | undefined; owned: boolean } {
+		// Mismatched bindings belong elsewhere.
 		const bound = session.turns.bindingOn(threadId, turnId);
 		return { binding: bound ?? session.threads.get(threadId), owned: bound !== undefined };
 	}
 
-	/** Retained before the lifecycle unloads anything. */
 	private publishTerminal(session: TargetSession, threadId: string, turnId: string, terminal: TerminalOutcome): void {
 		if (!this.core.live(session)) return;
 		const { binding, owned } = this.bindingFor(session, threadId, turnId);
@@ -314,7 +262,7 @@ export class CodexDaemonService {
 				this.emitEvent(session, {
 					...base,
 					state: "completed",
-					// A turn that only acted has an empty answer. Omitting it loses the terminal.
+					// Preserve completion for empty answers.
 					finalResponse: outcome.finalResponse ?? "",
 					finalItemId: outcome.finalItemId,
 				});
@@ -331,13 +279,8 @@ export class CodexDaemonService {
 		this.core.publish(session, { type: "codex_event", ...event }, CodexDaemonEventSchema);
 	}
 
-	/**
-	 * A receipt carries this generation's fence, which the gateway drops once it has retired it.
-	 *
-	 * So a command whose generation died mid-flight is refused instead: a refusal carries no
-	 * generation and is delivered, where an acceptance the gateway fences out hangs the caller.
-	 */
 	private emitReceipt(session: TargetSession, command: CodexDaemonCommand, receipt: Record<string, unknown>): void {
+		// Retire generation fences from delivered refusals.
 		if (!this.core.live(session)) {
 			this.reject(command, `codex generation was retired mid-command`);
 			return;
@@ -355,7 +298,6 @@ export class CodexDaemonService {
 		);
 	}
 
-	/** No generation, so it is sent once. A lost refusal leaves the operation unproven. */
 	private reject(command: CodexDaemonCommand, error: string): void {
 		const message = {
 			type: "codex_receipt",
@@ -368,7 +310,6 @@ export class CodexDaemonService {
 			operationId: command.kind === "reconcile" ? undefined : command.operationId,
 			error: sanitizeCodexErrorText(error) || `codex command failed`,
 		};
-		// Logged too: without it, an unavailable agent has no local trace of why.
 		console.error(`[codex-daemon] refused ${command.kind} for ${command.agentId}: ${message.error}`);
 		if (!CodexDaemonReceiptSchema.safeParse(message).success) return;
 		this.deps.send(message);

@@ -17,20 +17,14 @@ import {
 import type { Clock } from "../../shared/ambient.js";
 import { renameFileSync, writeFileAtomic } from "../../shared/atomic-write.js";
 
-////////////////////////////////
-//  Schemas
-
 const AllowlistFileSchema = z.object({
-	// The Domain root: the owner key everything verifies under. Null until enrolled.
+	// The owner root remains required to verify local revocations offline.
 	ownerSignPub: z.string().nullable(),
 	domainId: z.string().min(1).max(64).optional(),
 	admissions: z.array(SignedAdmissionSchema),
 	revocations: z.array(SignedRevocationSchema),
 });
 export type AllowlistFile = z.infer<typeof AllowlistFileSchema>;
-
-////////////////////////////////
-//  Class
 
 export const ALLOWLIST_FILE = "federation-allowlist.json";
 
@@ -44,10 +38,6 @@ export class AllowlistCorruptError extends Error {
 	}
 }
 
-/** The mirrored Domain allowlist on a Gateway: the owner root plus the
- * owner-signed admissions / revocations, persisted to the Gateway's volume so a
- * revocation bites even while the Router is unreachable. Resolution maps a Gateway id to
- * its admitted keys for sealing, and a sender key to its admission for unsealing. */
 export class Allowlist {
 	private file: string;
 	private state: AllowlistFile;
@@ -95,8 +85,6 @@ export class Allowlist {
 		return this.state.domainId ?? null;
 	}
 
-	/** The current owner-rooted snapshot, or null before rooting. Mirrors the Router's
-	 * canonical keyring (the Console syncs it through its route Gateway's poll reply). */
 	getSnapshot(): DomainSnapshot | null {
 		if (!this.state.ownerSignPub) return null;
 		return {
@@ -106,17 +94,12 @@ export class Allowlist {
 		};
 	}
 
-	/** A short stable version hash of the snapshot, for the Console's poll-based keyring
-	 * sync. "" before rooting. Content-addressed, so any admit/revoke changes it. 128 bits
-	 * so two distinct keyrings cannot collide and silently skip a revocation. */
 	version(): string {
 		const snap = this.getSnapshot();
 		if (!snap) return "";
 		return createHash("sha256").update(JSON.stringify(snap)).digest("hex").slice(0, 32);
 	}
 
-	/** Set the Domain root once, at enrollment. Refuses to silently re-root an
-	 * already-enrolled Gateway (recovery is a deliberate, separate path). */
 	setOwner(ownerSignPubB64: string): void {
 		if (this.state.ownerSignPub && this.state.ownerSignPub !== ownerSignPubB64) {
 			throw new Error("allowlist already rooted at a different owner key");
@@ -130,12 +113,8 @@ export class Allowlist {
 		this.persist();
 	}
 
-	/** Mirror the Domain state the Router pushed. Idempotent: replaces the
-	 * allowlist with the snapshot's owner-verified entries, so a re-sync converges
-	 * rather than accumulating duplicates. The first snapshot roots the Gateway
-	 * (trust-on-first-enroll); a later snapshot rooted at a different owner key is
-	 * ignored (recovery is a deliberate, separate path). Returns whether it applied. */
 	applySnapshot(snapshot: DomainSnapshot): boolean {
+		// A different owner root cannot replace the local trust domain.
 		if (this.state.ownerSignPub && this.state.ownerSignPub !== snapshot.ownerSignPub) {
 			console.warn(`[allowlist] ignoring domain sync rooted at a different owner key`);
 			return false;
@@ -147,8 +126,8 @@ export class Allowlist {
 		return true;
 	}
 
-	/** Record an owner-signed admission (verified before it is stored). */
 	addAdmission(s: SignedAdmission): boolean {
+		// Store admissions only after owner verification.
 		if (!this.state.ownerSignPub || !verifyAdmission(s, this.state.ownerSignPub)) return false;
 		this.state.admissions.push(s);
 		this.persist();
@@ -162,9 +141,8 @@ export class Allowlist {
 		return true;
 	}
 
-	/** This Gateway's own owner-signed admission (newest verified for its signing
-	 * key), to present at registration so the Router can gate it. Null pre-enrollment. */
 	selfAdmission(signPubB64: string): SignedAdmission | null {
+		// Registration presents the newest verified admission for this key.
 		if (!this.state.ownerSignPub) return null;
 		let best: SignedAdmission | null = null;
 		for (const s of this.state.admissions) {
@@ -175,15 +153,13 @@ export class Allowlist {
 		return best;
 	}
 
-	/** The admitted Admission for a sender signing key, or null. */
 	resolveBySignPub(signPubB64: string): Admission | null {
 		if (!this.state.ownerSignPub) return null;
 		return resolveAdmitted(this.state.admissions, this.state.revocations, this.state.ownerSignPub, signPubB64);
 	}
 
-	/** The admitted keys for a Gateway id (its newest non-revoked gateway admission), for
-	 * sealing a cross-Gateway frame to it. */
 	resolveGateway(gatewayId: string): { signPub: string; boxPub: string } | null {
+		// Resolve only the newest live gateway admission.
 		if (!this.state.ownerSignPub) return null;
 		const best = findAdmission(
 			this.state.admissions,
@@ -191,7 +167,6 @@ export class Allowlist {
 			(a) => a.kind === "gateway" && a.gatewayId === gatewayId,
 		);
 		if (!best) return null;
-		// Confirm it is not revoked (resolveAdmitted applies the revocation rule).
 		const live = resolveAdmitted(
 			this.state.admissions,
 			this.state.revocations,

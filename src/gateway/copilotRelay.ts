@@ -42,18 +42,13 @@ function streamKey(message: { daemonInstanceId: string; targetId: string; genera
 
 type CopilotAgent = ReturnType<CopilotAgentService["listOwnedAgents"]>[number];
 
-/** How many frames one agent may hold pending reconciliation. A stream this far out of step is being
- * repaired by reconciliation rather than by patience. */
+// Deferred frames are bounded per agent; reconciliation releases their holds.
 const MAX_DEFERRED_PER_AGENT = 128;
 
-/** Whether there is anything to ask the daemon ABOUT. A record with no session names nothing a
- * reconcile command could carry, so no answer can ever arrive for it. */
 function isAskable(agent: CopilotAgent): boolean {
 	return agent.sessionId !== undefined && agent.resolvedTarget !== undefined;
 }
 
-/** A record whose owner still believes work is outstanding. These are what the gateway asks about on
- * reconnect; an idle agent has nothing a restarted daemon could contradict. */
 function needsReconciliation(agent: CopilotAgent): boolean {
 	return isAskable(agent) && (agent.agentState === "working" || agent.agentState === "recovering");
 }
@@ -62,8 +57,7 @@ export class CopilotRelay {
 	private readonly sections = new Map<string, Promise<unknown>>();
 	private readonly streams = new Map<string, StreamProgress>();
 	private readonly listeners = new Map<string, Set<() => void>>();
-	// Time-bounded like CodexRelay's (see its field doc): a receipt is the only other clear, and a
-	// daemon that never answers must not hold the guard - and the frames behind it - forever.
+	// Reconciliation guards expire so a silent daemon cannot hold frames forever.
 	private readonly reconciling = new Map<string, number>();
 	private readonly deferred = new Map<string, Array<CopilotDaemonEvent | CopilotDaemonReceipt>>();
 
@@ -128,14 +122,10 @@ export class CopilotRelay {
 	private onHello(raw: Record<string, unknown>): void {
 		const hello = CopilotDaemonHelloSchema.safeParse(raw);
 		if (!hello.success) return;
-		// A hello supersedes every outstanding reconcile (see CodexRelay.onHello).
 		this.reconciling.clear();
 		for (const owner of this.deps.sessionStore.list()) {
 			const ownerKey = this.deps.sessionStore.teamOf(owner);
 			for (const agent of this.deps.service.listOwnedAgents(owner)) {
-				// A HELD frame is a reason to ask in its own right: only a completed reconciliation
-				// releases a hold, so an agent that has since gone idle would otherwise never be asked
-				// about again and its frame would cap the whole target's acknowledgement.
 				if (needsReconciliation(agent) || this.deferred.has(agentKey(ownerKey, agent.agentId))) {
 					this.requestReconciliation(ownerKey, agent);
 				}
@@ -170,8 +160,7 @@ export class CopilotRelay {
 	}
 
 	private settle(message: CopilotDaemonEvent | CopilotDaemonReceipt, application: CopilotApplication): void {
-		// A record nobody can ask about at all - no session yet - is genuinely decided: holding it
-		// would cap the acknowledgement for every agent on that target with nothing left to release it.
+		// Unaskable records are decided; only askable work can remain held.
 		const repairable =
 			application.disposition === "failed" ||
 			(application.disposition === "reconcile" && isAskable(application.agent));
@@ -219,8 +208,7 @@ export class CopilotRelay {
 		const lowestUndecided = progress.undecided.size === 0 ? Infinity : Math.min(...progress.undecided.keys());
 		const through = Math.min(progress.highestDecided, lowestUndecided - 1);
 		if (through <= progress.committedThrough) return;
-		// Named fields, never a spread: `advance` hands this a wider object, and the daemon's strict
-		// ack schema rejects any extra key, which silently stops the outbox from ever being pruned.
+		// Keep acknowledgements schema-exact; wider command objects are rejected.
 		const sent = this.deps.sendToHost({
 			type: "copilot_ack",
 			daemonInstanceId: message.daemonInstanceId,
@@ -251,15 +239,12 @@ export class CopilotRelay {
 	private defer(message: CopilotDaemonEvent | CopilotDaemonReceipt): void {
 		const key = agentKey(message.ownerKey, message.agentId);
 		const held = this.deferred.get(key) ?? [];
-		// The daemon replays every retained reliable frame on each reconnect, so without this the same
-		// frame accumulates a copy per reconnect and the cap is reached by churn rather than by news.
+		// Daemon replay makes event and receipt deduplication necessary across reconnects.
 		if (held.some((existing) => existing.type === message.type && existing.eventId === message.eventId)) return;
 		held.push(message);
 		this.deferred.set(key, held);
 		while (held.length > MAX_DEFERRED_PER_AGENT) {
-			// Activity goes first: the daemon sends it best-effort anyway, so dropping one costs a line
-			// of narration where dropping a receipt costs an outcome. The dropped frame stays UNDECIDED
-			// either way, so the acknowledgement it holds is released by reconciliation, not by eviction.
+			// Evict activity before receipts; reconciliation releases either hold.
 			const index = held.findIndex((candidate) => candidate.kind === "activity");
 			held.splice(index >= 0 ? index : 0, 1);
 		}
@@ -269,23 +254,19 @@ export class CopilotRelay {
 		const key = agentKey(ownerKey, agentId);
 		const held = this.deferred.get(key);
 		this.deferred.delete(key);
-		// A completed reconciliation is the authority on this agent, so every frame still undecided for
-		// it is superseded whether or not the queue still holds a copy to re-run. Releasing here is what
-		// keeps an evicted frame from capping its target's acknowledgement for good.
+		// Reconciliation supersedes every undecided frame for this agent.
 		for (const [streamId, progress] of this.streams) {
 			for (const [eventId, owner] of progress.undecided) if (owner === key) progress.undecided.delete(eventId);
 			this.releaseStream(streamId, progress);
 		}
 		if (!held?.length) return;
-		// Oldest first, so a terminal cannot be re-applied ahead of the activity that preceded it.
+		// Reapply deferred frames in event order.
 		for (const message of [...held].sort((left, right) => left.eventId - right.eventId)) {
 			if (message.type === "copilot_event") this.reduceEvent(message);
 			else this.reduceReceipt(message);
 		}
 	}
 
-	/** Send whatever acknowledgement a stream's release now permits. The stream key carries the three
-	 * fields the acknowledgement needs, so a release does not have to wait for the next frame. */
 	private releaseStream(streamId: string, progress: StreamProgress): void {
 		const [daemonInstanceId, targetId, generation] = streamId.split(" ");
 		if (!daemonInstanceId || !targetId || generation === undefined) return;

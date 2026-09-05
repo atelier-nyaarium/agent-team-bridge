@@ -5,14 +5,6 @@ import { type RouterClient, startRouterClient } from "../gateway/router/routerCl
 import { processAmbient } from "../shared/ambient.js";
 import type { RouterReach } from "../shared/router-reach.js";
 
-////////////////////////////////
-//  Functions & Helpers
-//
-//  The Gateway holds ONE socket, so its failover lives in the reconnect loop rather than per request:
-//  a candidate that will not open must be stepped past, and one that opens must be kept. Before this
-//  the client redialed a single fixed URL forever, and an address that stopped working was an outage
-//  no amount of reconnecting could clear.
-
 interface FakeRouter {
 	wss: WebSocketServer;
 	url: string;
@@ -74,9 +66,6 @@ function client(config: Omit<Parameters<typeof startRouterClient>[0], "ambient">
 	return startRouterClient({ ...config, ambient: processAmbient() });
 }
 
-////////////////////////////////
-//  Tests
-
 describe("routerClient reach failover", () => {
 	let live: RouterClient | null = null;
 	let router: FakeRouter | null = null;
@@ -88,13 +77,8 @@ describe("routerClient reach failover", () => {
 		router = null;
 	});
 
-	// A learned LAN address that is dead must not wedge the Gateway: the ring steps past it to the
-	// bootstrap, which is what a second machine hits the moment the Router's LAN IP changes.
 	it("steps past a learned address that will not open and reaches the bootstrap", async () => {
 		router = await startFakeRouter();
-		// RFC1918 and unassigned here, which is exactly the shape of a stale LAN address: the Router
-		// advertised it once, the machine has since moved, and it now answers nothing. Private, so it
-		// gets the short budget rather than the full connect timeout.
 		live = client({
 			url: router.url,
 			headers: {},
@@ -107,8 +91,7 @@ describe("routerClient reach failover", () => {
 		expect(router.registers).toBeGreaterThan(0);
 	}, 20_000);
 
-	// What the Router advertises is persisted through the callback, so a restart starts from the
-	// learned addresses instead of walking the ring again.
+	// Learned reach is persisted through the callback.
 	it("hands the advertised reach to onReach", async () => {
 		const advertised: RouterReach = { publicHost: "r.example.com", publicPort: 8443, lanAddresses: ["10.1.2.3"] };
 		router = await startFakeRouter(advertised);
@@ -126,8 +109,7 @@ describe("routerClient reach failover", () => {
 		expect(learned).toEqual(advertised);
 	});
 
-	// An older Router says nothing about its addresses, and that must leave the ring alone rather
-	// than blanking what the Gateway already knew.
+	// An absent advertisement leaves existing reach unchanged.
 	it("does not report a reach when the Router advertises none", async () => {
 		router = await startFakeRouter();
 		let calls = 0;

@@ -4,23 +4,17 @@ import type { Allowlist } from "./allowlist.js";
 import type { CrossDomainPeers } from "./crossDomainPeers.js";
 import type { ReplayGuard } from "./replayGuard.js";
 
-////////////////////////////////
-//  Interfaces & Types
-
-/** A local gateway id or an explicit `(domainId, gatewayId)` target. */
 export type SealTarget = string | { domainId: string; gatewayId: string };
 
-/** Opened body and verified source Domain. Never use the cleartext relay field for authorization. */
 export interface OpenedFrame {
 	body: unknown;
 	srcDomainId: string | null;
 }
 
-/** Resolves admitted peers, seals end to end, and reports a verified cross-Domain source. */
 export interface Sealer {
 	seal(dst: SealTarget, obj: unknown): SealedEnvelope;
 	open(srcGateway: string, env: SealedEnvelope, srcDomain?: string): unknown;
-	/** Uses courier acceptance time for queued frames. */
+	// Use courier acceptance time for queued frames.
 	openWithSource(
 		srcGateway: string,
 		env: SealedEnvelope,
@@ -29,20 +23,15 @@ export interface Sealer {
 	): OpenedFrame;
 }
 
-////////////////////////////////
-//  Functions & Helpers
-
-// Must exceed the Router's relay hold while bounding replay age.
+// Envelope age must exceed the Router relay hold.
 const SEAL_MAX_AGE_MS = 120_000;
 
-/** Resolves by `(domainId, gatewayId)`; an ambiguous legacy id is refused. */
 function resolveCrossByGateway(crossDomainPeers: CrossDomainPeers, gatewayId: string, srcDomain?: string) {
 	if (srcDomain) return crossDomainPeers.resolveByGateway(srcDomain, gatewayId);
 	const matches = crossDomainPeers.all().filter((p) => p.friendGatewayId === gatewayId);
 	return matches.length === 1 ? matches[0] : null;
 }
 
-/** Signed local frame. The seal binds source, destination, and timestamp. */
 interface SealedBodyV1 {
 	v: 1;
 	src: string;
@@ -51,7 +40,6 @@ interface SealedBodyV1 {
 	body: unknown;
 }
 
-/** Signed cross-Domain frame with both Domain and Gateway identities. */
 interface SealedBodyV2 {
 	v: 2;
 	src: string;
@@ -79,7 +67,6 @@ export function createSealer(
 		srcDomain?: string,
 		opts?: { sealedAt?: number },
 	): OpenedFrame {
-		// Resolve local peers first, then cross-Domain peers.
 		const localPeer = allowlist.resolveGateway(srcGateway);
 		const crossPeer = localPeer ? null : resolveCrossByGateway(crossDomainPeers, srcGateway, srcDomain);
 		const verifyKey = localPeer ? localPeer.signPub : crossPeer?.friendSignPub;
@@ -96,12 +83,12 @@ export function createSealer(
 		if (Math.abs((opts?.sealedAt ?? ambient.now()) - (wrapped.at ?? 0)) > SEAL_MAX_AGE_MS)
 			throw new Error(`seal: stale envelope`);
 		if (wrapped.v === 1) {
-			// Local peers must use v1 so Domain bindings cannot be stripped.
+			// Local frames use v1. Cross-Domain bindings require v2.
 			if (crossPeer) throw new Error(`seal: v1 frame from a cross-Domain Gateway`);
 			return { body: wrapped.body, srcDomainId: null };
 		}
 		if (wrapped.v === 2) {
-			// Cross-Domain peers must use v2 with the full identity pair.
+			// Cross-Domain frames bind both Domain and Gateway identities.
 			if (!crossPeer) throw new Error(`seal: v2 frame from a non-cross-Domain Gateway`);
 			if (wrapped.srcDomain !== crossPeer.friendDomainId) {
 				throw new Error(`seal: srcDomain mismatch (claimed "${wrapped.srcDomain}")`);
@@ -114,7 +101,7 @@ export function createSealer(
 
 	return {
 		seal(dst, obj) {
-			// Bare targets resolve locally and use v1.
+			// Bare local targets use v1. Explicit cross-Domain targets use v2.
 			const bareGateway = typeof dst === "string" ? dst : dst.gatewayId;
 			if (typeof dst === "string") {
 				const localPeer = allowlist.resolveGateway(dst);
@@ -123,7 +110,6 @@ export function createSealer(
 					return seal(Buffer.from(JSON.stringify(wrapped)), localPeer.boxPub, identity.sign.priv);
 				}
 			}
-			// Explicit targets resolve from the cross-Domain store and use v2.
 			if (typeof dst !== "string") {
 				const peer = crossDomainPeers.resolveByGateway(dst.domainId, dst.gatewayId);
 				if (peer) {

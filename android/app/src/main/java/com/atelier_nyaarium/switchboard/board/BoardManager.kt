@@ -10,7 +10,6 @@ import com.atelier_nyaarium.switchboard.proto.BoardEntry
 import com.atelier_nyaarium.switchboard.proto.BoardStoredEntry
 import kotlinx.serialization.json.Json
 
-/** Storage seam for tests. */
 interface BoardStore {
 	fun loadTaskBoard(): String?
 
@@ -19,7 +18,6 @@ interface BoardStore {
 	fun loadGatewayId(): String
 }
 
-/** `currentId` identifies the displayed branch. */
 data class BoardLiveLine(
 	val title: String,
 	val state: String,
@@ -28,7 +26,6 @@ data class BoardLiveLine(
 	val currentId: String? = null,
 )
 
-/** Pending edits overlay snapshots until accepted or refused. */
 class BoardManager(private val store: BoardStore) : ClearsOnReprovision {
 	private val json = Json { ignoreUnknownKeys = true }
 	private data class RenderMemo(
@@ -37,12 +34,11 @@ class BoardManager(private val store: BoardStore) : ClearsOnReprovision {
 		val rendered: BoardRendered,
 	)
 
-	/** Unreadable storage cannot authorize deletion. Declared before [blob] for [load]. */
 	@Volatile private var loadedCleanly = true
 	@Volatile private var blob: BoardBlob = load()
 	@Volatile private var memo: RenderMemo? = null
 
-	/** Guard every blob read-modify-write. */
+	// Guard every blob read-modify-write.
 	private val stateLock = Any()
 
 	private fun mutate(transform: (BoardBlob) -> BoardBlob) {
@@ -51,7 +47,6 @@ class BoardManager(private val store: BoardStore) : ClearsOnReprovision {
 
 	val revision = mutableLongStateOf(0L)
 
-	/** Persist notices from background drains. */
 	val refusals = mutableStateListOf<BoardRefusal>()
 
 	init {
@@ -67,8 +62,8 @@ class BoardManager(private val store: BoardStore) : ClearsOnReprovision {
 		notice(BoardRefusal(entryId, reason, BoardNoticeKind.REFUSED))
 	}
 
-	/** Durable key cleared first. */
 	override suspend fun clearInMemory() {
+		// Clear the durable key before dependent in-memory state.
 		synchronized(stateLock) {
 			blob = BoardBlob()
 			memo = null
@@ -81,7 +76,7 @@ class BoardManager(private val store: BoardStore) : ClearsOnReprovision {
 	val knownVersion: Long?
 		get() = null
 
-	/** Empty or incomplete state cannot authorize deletion. */
+	// Unreadable or incomplete state cannot authorize deletion.
 	val boardIsKnown: Boolean
 		get() = loadedCleanly && blob.routerRevision > 0
 
@@ -111,12 +106,10 @@ class BoardManager(private val store: BoardStore) : ClearsOnReprovision {
 
 	fun storedById(): Map<String, BoardStoredEntry> = snapshot().stored.associateBy { it.clear.id }
 
-	/** Null before the device roots a Domain. */
 	@Volatile var sealing: (() -> BoardSealing?)? = null
 
 	fun snapshot(): BoardBlob = synchronized(stateLock) { blob }
 
-	/** One decrypt per stored list and key set, outside the lock; the writers fill the memo first. */
 	private fun routerEntries(current: BoardBlob): List<BoardEntry> {
 		val open = sealing?.invoke() ?: return applyPending(emptyList(), current.pending)
 		val hit = memo?.takeIf { it.stored === current.stored && it.epochs == open.epochs }
@@ -134,7 +127,6 @@ class BoardManager(private val store: BoardStore) : ClearsOnReprovision {
 	private fun render(open: BoardSealing, stored: List<BoardStoredEntry>, cache: Map<String, BoardCachedText>) =
 		RenderMemo(stored, open.epochs, renderBoard(stored, open, cache))
 
-	/** Null without a sealing. Rendered before any lock. */
 	private fun renderIncoming(entries: List<BoardStoredEntry>): RenderMemo? =
 		sealing?.invoke()?.let { render(it, entries, snapshot().text) }
 
@@ -147,7 +139,7 @@ class BoardManager(private val store: BoardStore) : ClearsOnReprovision {
 		return opId
 	}
 
-	/** Settle and retire atomically. */
+	// Settle and retire the pending write atomically.
 	fun settleWrite(opId: String, revision: Long, entries: List<BoardStoredEntry>, at: Long = System.currentTimeMillis()) {
 		val next = renderIncoming(entries)
 		synchronized(stateLock) {
@@ -177,10 +169,10 @@ class BoardManager(private val store: BoardStore) : ClearsOnReprovision {
 		}
 	}
 
-	/** Ignore older revisions. */
 	fun applyRouterBoard(revision: Long, entries: List<BoardStoredEntry>, at: Long = System.currentTimeMillis()): Boolean {
 		val next = renderIncoming(entries)
 		synchronized(stateLock) {
+			// Ignore snapshots older than the current Router revision.
 			if (revision < blob.routerRevision) return false
 			persist(
 				blob.copy(
@@ -195,7 +187,6 @@ class BoardManager(private val store: BoardStore) : ClearsOnReprovision {
 		}
 	}
 
-	/** Include queued targets. */
 	fun sourceGatewayIds(homeGatewayId: String): List<String> = listOfNotNull(homeGatewayId.takeIf { it.isNotEmpty() })
 
 	fun lastSyncedAt(gatewayId: String): Long = snapshot().lastRouterSyncAt
@@ -205,10 +196,8 @@ class BoardManager(private val store: BoardStore) : ClearsOnReprovision {
 		mutate { it.copy(notices = it.notices.filter { n -> n != refusal }) }
 	}
 
-	/** Attachment buckets protected from sweeping. */
+	// Keep queued and stored entry buckets from sweeping.
 	fun attachmentBuckets(): Set<String>? {
-		// Include queued attachments.
-		// Keep every known entry bucket.
 		val current = snapshot()
 		if (!loadedCleanly || current.routerRevision <= 0 || sealing?.invoke() == null) return null
 		val fromEntries = routerEntries(current).map { Attachments.boardBucket(it.id) }
@@ -216,7 +205,6 @@ class BoardManager(private val store: BoardStore) : ClearsOnReprovision {
 		return (fromEntries + fromPending).toSet()
 	}
 
-	/** Convert team names to local keys. */
 	fun sessionKeyOf(team: String): String = localFieldOrSelf(team)
 
 	fun undoneCount(team: String): Int {
@@ -226,7 +214,6 @@ class BoardManager(private val store: BoardStore) : ClearsOnReprovision {
 		}
 	}
 
-	/** Select in-progress, then open, by rank. */
 	fun liveLine(team: String): BoardLiveLine? {
 		val key = sessionKeyOf(team)
 		val mine = routerEntries().filter { it.sessionId == key && it.trashedAt == null }

@@ -4,16 +4,10 @@ import type { CodexCatalogWriter, SessionRecord, SessionStore } from "../shared/
 import { replaceAt } from "./codexAgentReducers.js";
 import { type CodexApplication, CodexTransitionError, type CodexTransitionResult } from "./codexAgentTypes.js";
 
-////////////////////////////////
-//  Interfaces & Types
-
 export interface CodexCatalogDeps {
 	sessionStore: SessionStore;
 	catalogWriter: CodexCatalogWriter;
 }
-
-////////////////////////////////
-//  Functions & Helpers
 
 export function readCodexCatalog(deps: CodexCatalogDeps, owner: SessionRecord): CodexAgentCatalog {
 	return deps.sessionStore.codexCatalog(owner) ?? { version: 1, revision: 0, agents: [] };
@@ -75,8 +69,7 @@ export function applyCodexAgent(
 	try {
 		committed = deps.catalogWriter.commit(owner, catalog.revision, replaceAt(catalog.agents, index, next));
 	} catch {
-		// Deliberately NOT ignored: an unpersisted event must not be acknowledged, or the daemon
-		// retires the only copy of it.
+		// Unpersisted events remain unacknowledged, or the daemon retires them.
 		return { disposition: "reconcile", owner, agent: next };
 	}
 	if (!committed.committed) return { disposition: "reconcile", owner, agent: next };
@@ -100,10 +93,6 @@ export function replayCodexTransition(
 		owner,
 		agent: found.agent,
 		operation: found.operation,
-		// Not a mismatch either way: the operation exists and matches, the gateway just cannot
-		// always confirm it is durable or fenced. No `unresolved` here - this path never had a
-		// reader for one, and carrying it only made a dead field look like the live one the
-		// acceptance path owns. See CodexAcceptanceResult.
 		disposition: found.replayable ? "replayed" : "indeterminate",
 		catalogRevision: catalog.revision,
 	};

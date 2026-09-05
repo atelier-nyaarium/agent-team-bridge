@@ -34,7 +34,6 @@ export interface OwnerOpIntakeParams {
 	push: (domainId: string, address: string, rows: InboxRow[]) => boolean;
 	ambient: Clock;
 	leases?: Pick<LeaseService, "ready">;
-	/** Answers kept for re-posts; the oldest goes when full. */
 	maxCachedAnswers?: number;
 }
 
@@ -43,12 +42,11 @@ type DurableNonceStore = Pick<InboxService, "ownerOpNonce" | "acceptOwnerOpNonce
 const isMigrating = (result: unknown): boolean =>
 	!!result && typeof result === "object" && (result as { reason?: unknown }).reason === "migrating";
 
-/** An answer the console can keep; anything else it is expected to re-post. */
+// Retryable outcomes must not be cached as answers.
 const isSettled = (result: unknown): boolean =>
 	!isMigrating(result) &&
 	!(!!result && typeof result === "object" && (result as { outcome?: unknown }).outcome === "durability_uncertain");
 
-/** Handler error for a `refused` result. */
 export class OwnerOpRefused extends Error {
 	constructor(readonly reason: string) {
 		super(reason);
@@ -69,17 +67,14 @@ export class OwnerOpIntake {
 		this.registerInboxOps();
 	}
 
-	/** Register one handler per catalogued kind. */
 	register<Kind extends OwnerOpKind>(kind: Kind, handler: OwnerOpHandler<Kind>): void {
 		this.registry.register(kind, handler);
 	}
 
-	/** Catalogued kinds no handler serves. */
 	unregisteredKinds(): OwnerOpKind[] {
 		return this.registry.unregistered();
 	}
 
-	/** The inbox's own kinds land through the same registry as every service. */
 	private registerInboxOps(): void {
 		this.register("deliver", (op, value) => this.deliver(op, value));
 		this.register("consumer_register", (op, value) =>
@@ -111,7 +106,6 @@ export class OwnerOpIntake {
 		if (!parsed.success) return { malformed: true };
 		const op = parsed.data;
 		const domain = this.params.getDomain(op.domainId);
-		// A refusal is the console's only symptom, and it never carries a body.
 		const refused = (reason: string): OpResultEnvelope => {
 			console.log(`[owner-op] refused ${String(op.op.kind)} dev=${op.device}: ${reason}`);
 			return { opKey: { conversationId: op.conversationId, opId: op.opId }, outcome: "refused", reason };
@@ -126,14 +120,11 @@ export class OwnerOpIntake {
 		for (const [nonce, entry] of this.nonces)
 			if (this.now() - entry.at > REGISTER_MAX_SKEW_MS) this.nonces.delete(nonce);
 		const nonceKey = `${op.domainId}/${op.signerSignPub}/${op.nonce}`;
-		// One signed op gets one answer. The console re-posts the same op on reach failover, so a
-		// second copy, in flight or settled, reads the first answer instead of running or being refused.
 		const replay = this.nonces.get(nonceKey);
 		if (replay) return replay.answer;
+		// One signed operation reuses its settled answer on repost.
 		const nonceStore = this.params.inbox as InboxService & Partial<DurableNonceStore>;
 		if (nonceStore.ownerOpNonce?.(op.domainId, op.signerSignPub, op.nonce)) return refused("replay");
-		// Only a settled answer stays cached. An outcome the console should retry is forgotten once it
-		// lands, so the re-post runs the op again instead of reading the failure back.
 		const answer = this.settle(op, nonceStore, refused).then(
 			(result) => {
 				if (!isSettled(result)) this.nonces.delete(nonceKey);
@@ -195,7 +186,7 @@ export class OwnerOpIntake {
 		const schema = entry.answer;
 		if (!schema) return answered;
 		return Promise.resolve(answered).then((result) => {
-			// An unsettled outcome belongs to the intake, not to the handler's answer.
+			// Validate only settled handler answers.
 			if (!isSettled(result)) return result;
 			const checked = schema.safeParse(result);
 			if (!checked.success)
@@ -204,7 +195,6 @@ export class OwnerOpIntake {
 		});
 	}
 
-	/** Console writes stay in their Domain and use their opKey. */
 	private deliver(op: OwnerOp, value: OwnerOpValue<"deliver">) {
 		const address = parseInboxAddress(value.address);
 		if (!address || address.domainId !== op.domainId) throw new OwnerOpRefused("domain");
@@ -224,7 +214,7 @@ export class OwnerOpIntake {
 			row.data.envelope.kind === "console_op" &&
 			(this.gatewayProtocol?.(op.domainId, address.gatewayId) ?? 0) < FEDERATION_VALUE_PROTOCOL_VERSION
 		) {
-			// A gateway below the value protocol cannot open a console op.
+			// Older gateways cannot open console-op envelopes.
 			throw new OwnerOpRefused("unsupported");
 		}
 		const result = this.params.inbox.appendRow({

@@ -45,25 +45,19 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-////////////////////////////////
-//  Functions & Helpers
-
 internal fun readClipboard(context: Context): String? {
 	val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return null
 	return cm.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(context)?.toString()
 }
 
-/** True once the text is a JSON object with the fields a Provisioning needs. */
+// The precheck only accepts JSON carrying both Router fields.
 internal fun looksProvisionable(s: String): Boolean = runCatching {
 	val j = org.json.JSONObject(s.trim())
 	j.has("routerUrl") && j.has("routerCertFp")
 }.getOrDefault(false)
 
-/** A provisioning blob is small JSON; anything larger is a mis-picked file. */
+// Bound picker reads before parsing untrusted files.
 internal const val MAX_PROVISION_BLOB_BYTES = 1_000_000L
-
-////////////////////////////////
-//  Composables
 
 @Composable
 fun LockScreen(onUnlock: () -> Unit) {
@@ -92,13 +86,6 @@ fun DomainConnectingScreen(onSettings: () -> Unit) {
 	}
 }
 
-/**
- * The neutral fresh-open: one "Scan your setup code" screen.
- *
- * The SAME import handles both an admin provisioning blob and a friend invite. The app distinguishes
- * them on connect, so the human never picks a path and no path labels appear. Host-setup
- * instructions live behind a tucked link a friend never needs.
- */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ProvisionScreen(
@@ -106,8 +93,7 @@ fun ProvisionScreen(
 	state: ChatState,
 	onProvision: (String) -> Unit,
 	onSettings: () -> Unit,
-	// The Federation screen, reachable before any blob: a phone can point itself at a Router and
-	// confirm the pin with nothing else set up, since /health needs no token.
+	// Federation health is reachable before any provisioning blob.
 	onFederation: () -> Unit = onSettings,
 ) {
 	val context = LocalContext.current
@@ -115,12 +101,9 @@ fun ProvisionScreen(
 	var scanning by remember { mutableStateOf(false) }
 	var showHostHelp by remember { mutableStateOf(false) }
 	var addDevice by remember { mutableStateOf(false) }
-	// A blob that passes looksProvisionable() but fails the strict parse inside provision() leaves us
-	// here with provisioned=false and the real cause on state.error. Tracked so we can swap the local
-	// "Connecting..." for that cause instead of stalling on it.
+	// Preserve strict parse errors instead of leaving the screen in a spinner.
 	var provisionAttempted by remember { mutableStateOf(false) }
-	// Touch the owner key up front so it exists before any first-root. Non-throwing: a corrupt stored
-	// key must not crash app start, and the connect path surfaces it as a terminal cause.
+	// Ensure the owner key exists before first-root without crashing startup.
 	LaunchedEffect(Unit) { repo.ownerFacts.ownerKeysForDisplay() }
 
 	fun tryProvision(text: String?, source: String) {
@@ -135,11 +118,9 @@ fun ProvisionScreen(
 		}
 	}
 
-	// arrayOf("*/*") so a .json with any reported MIME type is selectable.
 	val fileLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
 		if (uri == null) return@rememberLauncherForActivityResult
-		// The picker is `*/*`, so without a bound a mis-picked video is read whole into memory before
-		// anyone looks at it.
+		// The wildcard picker requires a size bound before reading.
 		val text = runCatching {
 			val length = context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { it.length } ?: -1
 			if (length < 0 || length > MAX_PROVISION_BLOB_BYTES) return@runCatching null
@@ -199,8 +180,6 @@ fun ProvisionScreen(
 					modifier = Modifier.weight(1f),
 				) { Text("Open file") }
 			}
-			// A strict-parse rejection lands on state.error while we are still here, so prefer it over
-			// the stale local "Connecting..." or a malformed blob reads as an endless spinner.
 			val parseError = state.error?.takeIf { provisionAttempted && it.isNotBlank() }
 			val shown = parseError ?: status
 			if (shown.isNotEmpty()) {
@@ -221,14 +200,7 @@ fun ProvisionScreen(
 	}
 }
 
-/**
- * NEW device side of "Add a device": a fresh, unprovisioned app joining an existing owner's Domain.
- *
- * It scans the held device's authorize-console QR, generates its own console identity, joins the
- * public rendezvous, and polls for the held device's biometric-gated approval. On approval it
- * unseals the console transport, verifying the owner signPub pinned from the QR. No owner key and no
- * SA token ever cross the QR.
- */
+// The QR carries no owner key or SA token.
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun NewDeviceScreen(repo: ChatRepository, onBack: () -> Unit) {
@@ -239,8 +211,6 @@ fun NewDeviceScreen(repo: ChatRepository, onBack: () -> Unit) {
 	var busy by remember { mutableStateOf(false) }
 	var waiting by remember { mutableStateOf(false) }
 
-	// On arrival the sealed reply installs and flips provisioned, and the App leaves this screen. A
-	// terminal failure (an expired window) stops the loop and surfaces the cause.
 	LaunchedEffect(waiting) {
 		val s = scan
 		if (!waiting || s == null) return@LaunchedEffect
@@ -326,9 +296,6 @@ fun NewDeviceScreen(repo: ChatRepository, onBack: () -> Unit) {
 	}
 }
 
-/** The tucked, text-only host-setup manual: run setup.sh on a computer, paste back the setup blob it
- * emits. No QR and no key prompt, since the owner key is generated silently and the script reads the
- * public keys. Also reached from the empty board when a friend has first-rooted but has no host. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HostSetupHelpScreen(onBack: () -> Unit) {

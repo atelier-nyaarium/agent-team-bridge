@@ -13,7 +13,6 @@ import { fakeAmbient } from "../testing/fakeAmbient.js";
 const WINDOW = HANDSHAKE_REPUSH_DEDUPE_MS;
 const TTL = HANDSHAKE_PENDING_TTL_MS;
 
-/** The handshake rules, exercised without a socket: id ownership, throttles, caps, lead memory. */
 describe("HandshakeGate", () => {
 	function makeGate() {
 		let now = 1_000_000;
@@ -26,7 +25,6 @@ describe("HandshakeGate", () => {
 		};
 	}
 
-	/** Drive one successful repush (decide must answer send; the caller's send succeeded). */
 	function repushOnce(gate: HandshakeGate, team: string, subId: string) {
 		const d = gate.decideRepush(team, subId);
 		expect(d.kind).toBe("send");
@@ -55,7 +53,7 @@ describe("HandshakeGate", () => {
 	it("a re-push reuses the minted id byte-identically, and a failed send charges nothing", () => {
 		const { gate, advance } = makeGate();
 		const minted = gate.mint("app.dev", "s1");
-		// Same-instant double-trigger collapses even on a first attempt.
+		// Same-instant duplicate triggers are throttled.
 		expect(gate.decideRepush("app.dev", "s1").kind).toBe("throttled");
 
 		advance(WINDOW);
@@ -65,7 +63,7 @@ describe("HandshakeGate", () => {
 		expect(d.hsId).toBe(minted.hsId);
 		expect(d.push).toBe(minted.push);
 		expect(d.attempt).toBe(1);
-		// The send failed, so nothing was committed: the same first attempt is still owed.
+		// Failed sends do not consume attempts.
 		const retry = gate.decideRepush("app.dev", "s1");
 		expect(retry.kind === "send" && retry.attempt === 1).toBe(true);
 	});
@@ -76,7 +74,6 @@ describe("HandshakeGate", () => {
 		gate.mint("app.dev", "s2");
 		advance(WINDOW);
 		repushOnce(gate, "app.dev", "s1");
-		// A sibling's FIRST shot lands inside the team window the commit above just opened.
 		expect(gate.decideRepush("app.dev", "s2").kind).toBe("send");
 	});
 
@@ -84,19 +81,16 @@ describe("HandshakeGate", () => {
 		const { gate, advance } = makeGate();
 		gate.mint("app.dev", "s1");
 		advance(WINDOW);
-		repushOnce(gate, "app.dev", "s1"); // s1 now has one committed attempt
+		repushOnce(gate, "app.dev", "s1");
 		advance(WINDOW);
 		gate.mint("app.dev", "s2");
 		advance(WINDOW);
-		repushOnce(gate, "app.dev", "s2"); // the team window reopens NOW
+		repushOnce(gate, "app.dev", "s2");
 		advance(WINDOW - 1);
-		// s1's own window has long elapsed; only the team-wide gate can be holding it.
 		expect(gate.decideRepush("app.dev", "s1").kind).toBe("throttled");
-		// A sweep before the window elapses is pure cleanup and must not lift the throttle.
 		expect(gate.sweep()).toBe(0);
 		expect(gate.decideRepush("app.dev", "s1").kind).toBe("throttled");
 		advance(1);
-		// The window elapsed: the entry now throttles nothing and the sweep reclaims it.
 		expect(gate.decideRepush("app.dev", "s1").kind).toBe("send");
 		expect(gate.sweep()).toBe(1);
 	});
@@ -113,9 +107,6 @@ describe("HandshakeGate", () => {
 	});
 
 	it("a capped entry stops BLOCKING once its TTL passes, so the lockout self-heals (issue #251)", () => {
-		// The two bounds have different jobs: the attempt cap stops pushing, the TTL stops blocking.
-		// Without the second, a session that missed all five prompts was refused for the life of its
-		// socket, told to restart, with no way to learn its own hs- id.
 		const { gate, advance } = makeGate();
 		gate.mint("app.dev", "s1");
 		for (let i = 0; i < HANDSHAKE_REPUSH_MAX_ATTEMPTS; i++) {
@@ -123,20 +114,15 @@ describe("HandshakeGate", () => {
 			repushOnce(gate, "app.dev", "s1");
 		}
 		expect(gate.decideRepush("app.dev", "s1").kind).toBe("capped");
-		// Still enforced right up to the TTL: the last push it received is answerable until then.
 		expect(gate.pendingIdFor("app.dev", "s1")).toBeDefined();
 
 		advance(TTL);
-		// Now the BLOCKING readers treat it as absent, which is the gate's own fail-open case.
+		// Expiry stops blocking but preserves answerability.
 		expect(gate.pendingIdFor("app.dev", "s1")).toBeUndefined();
 		expect(gate.decideRepush("app.dev", "s1").kind).toBe("no-pending");
 	});
 
 	it("an expired handshake stops blocking but stays ANSWERABLE, so a late answer still confirms", () => {
-		// Expiry ends what the entry may do to OTHERS, never what its own socket may do with it: the
-		// challenge's authenticity does not decay, and refusing a late answer would trade the old
-		// lockout for a session stuck "verifying" until reconnect. Boundedness needs no sweep - the
-		// map is held to live unconfirmed sockets by forget() on close.
 		const { gate, advance } = makeGate();
 		const { hsId } = gate.mint("app.dev", "s1");
 
@@ -157,7 +143,6 @@ describe("HandshakeGate", () => {
 
 	it("remembers which binding confirmed a team's lead, opaquely", () => {
 		const { gate } = makeGate();
-		// A real binding value from the sole authority; the gate passes it through untouched.
 		const auth = createSessionAuthority({
 			sessionStore: new SessionStore({ ambient: processAmbient() }),
 			registry: new Map(),

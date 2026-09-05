@@ -1,5 +1,3 @@
-// The phone as the Router sees it.
-
 import { randomBytes as nodeRandomBytes } from "node:crypto";
 import type { z } from "zod";
 import type { RouterReachAnswer } from "../federation-server/consoleSurface.js";
@@ -32,15 +30,11 @@ import {
 import { type FixtureDraws, FixtureWorld } from "./fixtureWorld.js";
 import type { IdentitySet } from "./identitySet.js";
 
-////////////////////////////////
-//  Interfaces & Types
-
 export type MailboxEntry = z.infer<typeof MailboxEntrySchema>;
 
 export interface PhoneDriverDeps {
 	world?: FixtureWorld;
 	set?: IdentitySet;
-	/** The Router's HTTP surface, socket-free. */
 	handle: (request: Request) => Promise<Response>;
 	now?: () => number;
 	draws?: FixtureDraws;
@@ -59,23 +53,18 @@ export interface ReachAnswer extends RouterReachAnswer {
 
 export interface ValueAnswer {
 	envelope: OpResultEnvelope;
-	/** The opened result, or the clear refusal the gateway sent instead. */
 	result: unknown;
 }
 
 export interface PhoneDriver {
 	ownerOp(op: Record<string, unknown>, opId?: string): OwnerOp;
 	post(op: OwnerOp): Promise<PostAnswer>;
-	/** Any console-surface body under the app token: firstRoot, trustHandshake, consoleApproval. */
 	console(body: Record<string, unknown>): Promise<PostAnswer>;
-	/** The Router's enroll answer with whatever else it carried, such as an invite nonce. */
 	enroll(op: EnrollOp): Promise<EnrollResult & Record<string, unknown>>;
 	reach(): Promise<ReachAnswer>;
-	/** Signs and posts; answers the response body. */
 	send(op: Record<string, unknown>, opId?: string): Promise<unknown>;
 	value(consoleOp: ConsoleOp, opId?: string): Promise<ValueAnswer>;
 	deliver(sessionId: string, consoleOp: ConsoleOp, opId?: string): Promise<OpResultEnvelope>;
-	/** Registers this console as the mailbox consumer; reads do it on first use. */
 	consumerRegister(): Promise<{ cursor: number; cursorEpoch: number }>;
 	inboxRead(fromSeq?: number, limit?: number): Promise<InboxRow[]>;
 	inboxAdvance(cursor: number): Promise<unknown>;
@@ -84,15 +73,10 @@ export interface PhoneDriver {
 	): Promise<{ planes: Array<{ name: string; version: number; payload?: unknown }> }>;
 	seal(plaintext: string, kind: ContentAad["kind"]): ContentEnvelope;
 	openText(envelope: ContentEnvelope, kind: ContentAad["kind"]): string;
-	/** Opens a sealed row body, or answers a clear one as it stands. */
 	open(row: InboxRow): unknown;
 	boardRead(): Promise<BoardReadResult>;
-	/** The mailbox entries among `rows`, opened and decoded. */
 	entries(rows: InboxRow[]): MailboxEntry[];
 }
-
-////////////////////////////////
-//  Functions & Helpers
 
 const ENTRY_KINDS = new Set(["message", "reply", "notice", "sent", "peer", "plugin_action"]);
 
@@ -182,6 +166,7 @@ export function createPhoneDriver(deps: PhoneDriverDeps): PhoneDriver {
 		openContent(envelope, key, aad(kind, envelope.epoch)).toString("utf8");
 
 	async function value(consoleOp: ConsoleOp, opId = newOpId()): Promise<ValueAnswer> {
+		// Value answers may be clear refusals, not result envelopes.
 		const body = await send(
 			{
 				kind: "gateway_value",
@@ -269,7 +254,6 @@ export function createPhoneDriver(deps: PhoneDriverDeps): PhoneDriver {
 		seal,
 		openText,
 		open,
-		// Not an op-result envelope.
 		boardRead: async () => BoardReadResultSchema.parse(await send({ kind: "board_read" })),
 		entries: (rows) =>
 			rows.filter((row) => ENTRY_KINDS.has(row.envelope.kind)).map((row) => MailboxEntrySchema.parse(open(row))),

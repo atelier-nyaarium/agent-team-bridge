@@ -6,16 +6,10 @@ import {
 } from "../shared/admission.js";
 import type { GatewayRegisterParams } from "../shared/router-protocol.js";
 
-////////////////////////////////
-//  Interfaces & Types
-
 export interface FederationTrust {
 	ownerSignPub: string;
 	revocations?: SignedRevocation[];
 }
-
-////////////////////////////////
-//  Functions & Helpers
 
 export function verifyRegistrationClaim(
 	params: GatewayRegisterParams,

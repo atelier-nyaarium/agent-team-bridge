@@ -4,16 +4,10 @@ import type { CopilotCatalogWriter, SessionRecord, SessionStore } from "../share
 import { replaceAt } from "./copilotAgentReducers.js";
 import { type CopilotApplication, CopilotTransitionError, type CopilotTransitionResult } from "./copilotAgentTypes.js";
 
-////////////////////////////////
-//  Interfaces & Types
-
 export interface CopilotCatalogDeps {
 	sessionStore: SessionStore;
 	catalogWriter: CopilotCatalogWriter;
 }
-
-////////////////////////////////
-//  Functions & Helpers
 
 export function readCopilotCatalog(deps: CopilotCatalogDeps, owner: SessionRecord): CopilotAgentCatalog {
 	return deps.sessionStore.copilotCatalog(owner) ?? { version: 1, revision: 0, agents: [] };
@@ -74,8 +68,7 @@ export function applyCopilotAgent(
 	try {
 		committed = deps.catalogWriter.commit(owner, catalog.revision, replaceAt(catalog.agents, index, next));
 	} catch {
-		// Deliberately NOT ignored: an unpersisted event must not be acknowledged, or the daemon
-		// retires the only copy of it. Reconcile rather than fail, so the record self-heals.
+		// Reconcile unpersisted events; never acknowledge them.
 		return { disposition: "reconcile", owner, agent: next };
 	}
 	if (!committed.committed) return { disposition: "reconcile", owner, agent: next };

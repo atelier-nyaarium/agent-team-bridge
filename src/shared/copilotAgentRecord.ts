@@ -1,6 +1,3 @@
-// Copilot delegation: one agent's durable history - its turns, its operations, and the persisted
-// agent record that ties them together.
-
 import { z } from "zod";
 import { agentFingerprintVerdict, agentTurnHistoryIssues } from "./agent-record.js";
 import { CopilotStoredActivitiesSchema } from "./copilotAgentActivities.js";
@@ -14,9 +11,6 @@ import {
 } from "./copilotAgentIdentity.js";
 import { CopilotAgentStateSchema } from "./copilotAgentState.js";
 import { CopilotExecutionTargetSchema, CopilotResolvedTargetSchema } from "./copilotAgentTargets.js";
-
-////////////////////////////////
-//  Durable agent state
 
 export const CopilotStoredTurnSchema = z.discriminatedUnion("state", [
 	z
@@ -60,10 +54,7 @@ export const CopilotStoredOperationSchema = z
 		operationId: CopilotOperationIdSchema,
 		kind: z.enum(["start", "message", "stop"]),
 		prompt: CopilotPromptSchema.optional(),
-		/** Start only. Copilot has always folded the model INTO its fingerprint but never stored it,
-		 * so its records could not be re-checked at all; this is what makes the check below possible.
-		 * Optional, so every pre-existing record still parses and is treated as unverifiable rather
-		 * than dropped. */
+		/** Optional for legacy records. Required to recheck start fingerprints. */
 		model: z.string().min(1).max(128).optional(),
 		fingerprint: z.string().regex(/^[0-9a-f]{64}$/),
 		state: z.enum(["requested", "accepted", "indeterminate"]),
@@ -128,10 +119,7 @@ export const CopilotPersistedAgentSchema = z
 			if (operation.createdAt < value.createdAt || operation.updatedAt > value.updatedAt) {
 				ctx.addIssue({ code: "custom", message: "stored operation timestamp is outside its agent lifetime" });
 			}
-			// The check Copilot never had. Codex's record has self-validated its fingerprints since it
-			// shipped, so each backend held half of one guarantee: Codex recomputed a fingerprint that
-			// was missing the model, Copilot computed one WITH the model and never recomputed it.
-			// `unverifiable` is not an issue - see agentFingerprintVerdict for which record that is.
+			// Unverifiable legacy fingerprints are tolerated. Mismatches are rejected.
 			if (
 				agentFingerprintVerdict(
 					operation.fingerprint,

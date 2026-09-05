@@ -10,17 +10,8 @@ import com.atelier_nyaarium.switchboard.proto.XDomainLinkRevocation
 import com.atelier_nyaarium.switchboard.proto.XDomainUntrust
 import com.atelier_nyaarium.switchboard.proto.Protocol
 
-/**
- * Owner-signed cross-Domain link edge / revocation, the byte-exact Kotlin counterpart
- * of switchboard's `src/shared/federation-lifecycle.ts`. The owner device (this console) signs the
- * edge that opens a cross-Domain relay affinity and the revocation that withdraws it, and
- * the Router verifies both against the rooted owner key, so the canonical signing bytes - a
- * versioned, newline-joined, fixed-order encoding - must reproduce exactly. The
- * cross-platform vector in XDomainLinkTest pins it. The edge and the revocation use
- * DISTINCT version prefixes so a captured edge signature can never be replayed as a
- * revocation (or the reverse). Never sign raw JSON.
- */
 object XDomainLinkCrypto {
+	// Signing bytes mirror federation-lifecycle.ts exactly; edge and revocation tags differ.
 	fun edgeSigningBytes(edge: XDomainLinkEdge, ownerSignPub: String): ByteArray =
 		listOf(
 			Protocol.Wire.SIGNING_TAG_XDOMAIN_RELAY_GATE,
@@ -63,13 +54,7 @@ object XDomainLinkCrypto {
 		s.ownerSignPub == expectedOwnerSignPub &&
 			Crypto.verify(revocationSigningBytes(s.revocation, expectedOwnerSignPub), s.signature, expectedOwnerSignPub)
 
-	/**
-	 * The full cross-Domain link side (the trust artifact the handshake confirm binds): an
-	 * owner's attestation that names the FRIEND gateway's keys + ids it will seal to. Distinct
-	 * from the relay-affinity edge above (which the Router reads): the link is gateway-to-gateway
-	 * vocabulary the Router never sees. Its signing bytes mirror federation-protocol.ts's
-	 * xDomainLinkSigningBytes byte-for-byte, so a phone-signed side verifies on the gateway.
-	 */
+	// Link signing bytes mirror federation-protocol.ts exactly for phone and Gateway verification.
 	fun linkSigningBytes(link: XDomainLink): ByteArray =
 		listOf(
 			Protocol.Wire.SIGNING_TAG_XDOMAIN_LINK,
@@ -94,13 +79,7 @@ object XDomainLinkCrypto {
 		s.ownerSignPub == expectedOwnerSignPub &&
 			Crypto.verify(linkSigningBytes(s.link), s.signature, expectedOwnerSignPub)
 
-	/**
-	 * The owner-keyed untrust tombstone: withdraws trust in a friend OWNER (every gateway under
-	 * that root), signed by MY owner key. Mirrors federation-protocol.ts xDomainUntrustSigningBytes
-	 * byte-for-byte. A distinct version prefix from the link so neither signature replays as the
-	 * other. `revokedAt` floors out any trust link issued at or before it (a replayed stale link
-	 * stays dead); a genuine re-trust issued AFTER it is honored.
-	 */
+	// revokedAt floors links issued at or before it while allowing later re-trust.
 	fun untrustSigningBytes(u: XDomainUntrust): ByteArray =
 		listOf(
 			Protocol.Wire.SIGNING_TAG_XDOMAIN_UNTRUST,

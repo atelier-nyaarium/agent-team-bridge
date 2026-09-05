@@ -1,9 +1,6 @@
 import type { Clock } from "../shared/ambient.js";
 import type { EnrollHandshakeOp, EnrollHandshakeResult, EnrollReveal } from "../shared/federation-lifecycle.js";
 
-////////////////////////////////
-//  Interfaces & Types
-
 type Role = "ADMIN" | "ENROLLEE";
 
 interface RoleSlot {
@@ -17,15 +14,9 @@ interface HandshakeWindow {
 	slots: { ADMIN: RoleSlot | null; ENROLLEE: RoleSlot | null };
 }
 
-////////////////////////////////
-//  Constants
-
 const DEFAULT_TTL_MS = 600_000;
 const DEFAULT_MAX_ATTEMPTS = 10;
 const DEFAULT_MAX_WINDOWS = 256;
-
-////////////////////////////////
-//  Class
 
 export class EnrollHandshakeCoordinator {
 	private readonly windows = new Map<string, HandshakeWindow>();
@@ -53,9 +44,6 @@ export class EnrollHandshakeCoordinator {
 				return { ok: true };
 		}
 	}
-
-	////////////////////////////////
-	//  Functions & Helpers
 
 	private peerRole(role: Role): Role {
 		return role === "ADMIN" ? "ENROLLEE" : "ADMIN";

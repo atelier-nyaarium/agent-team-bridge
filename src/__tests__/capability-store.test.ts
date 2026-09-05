@@ -4,10 +4,6 @@ import { processAmbient } from "../shared/ambient.js";
 import type { DurableStore } from "../shared/durable-store.js";
 import { fakeAmbient } from "../testing/fakeAmbient.js";
 
-////////////////////////////////
-//  Functions & Helpers
-
-/** A DurableStore standing in for the file, so persistence is observable without touching disk. */
 function fakeDurable(seed: unknown = null): DurableStore & { saved: unknown } {
 	const box = {
 		saved: seed,
@@ -25,9 +21,6 @@ function atClock(start = 1_000_000) {
 	let now = start;
 	return { now: () => now, advance: (ms: number) => (now += ms) };
 }
-
-////////////////////////////////
-//  Tests
 
 describe("what the gateway serves", () => {
 	it("has no opinion until a device reports, so a caller can tell silence from an empty answer", () => {
@@ -53,8 +46,6 @@ describe("what the gateway serves", () => {
 		store.report("tablet", [{ id: "designer" }], "7.14.1");
 		store.report("laptop", [{ id: "designer" }]);
 
-		// Deduped and sorted, and the silent device is absent rather than represented: a caller
-		// reading this to decide something must be able to tell "old" from "did not say".
 		expect(store.snapshot().clientVersions).toEqual(["7.14.1", "7.15.0"]);
 	});
 
@@ -64,7 +55,6 @@ describe("what the gateway serves", () => {
 		store.report("phone", undefined, "7.15.0");
 
 		expect(store.snapshot().clientVersions).toEqual(["7.15.0"]);
-		// The plugin list it never re-stated still stands.
 		expect(store.snapshot().capabilities.map((c) => c.id)).toEqual(["designer"]);
 	});
 
@@ -91,9 +81,6 @@ describe("what the gateway serves", () => {
 		expect(store.snapshot().capabilities.map((c) => c.id)).toEqual(["designer"]);
 	});
 
-	// Discarding the entry is what actually happened: guidance longer than the wire allowed took the
-	// whole capability with it, so a plugin the owner had switched on was invisible to every session
-	// with nothing logged anywhere. Guidance is the expendable half, never the id.
 	it("keeps a capability whose guidance the wire refuses, rather than dropping it entirely", () => {
 		const store = new CapabilityStore(fakeDurable(), processAmbient());
 		store.report("phone", [{ id: "references", instructions: "x".repeat(200_000) }]);
@@ -116,7 +103,6 @@ describe("whose guidance wins", () => {
 		store.report("chatty", [{ id: "designer", instructions: "stale" }]);
 		clock.advance(1000);
 		store.report("quiet", [{ id: "designer", instructions: "fresh" }]);
-		// The chatty device keeps polling long after it last said anything.
 		clock.advance(1000);
 		store.touch("chatty");
 
@@ -138,7 +124,6 @@ describe("going quiet", () => {
 		const clock = atClock();
 		const store = new CapabilityStore(fakeDurable(), fakeAmbient({ now: clock.now }), 14 * DAY);
 		store.report("phone", [{ id: "designer" }]);
-		// Polls once a week without ever re-registering.
 		for (let i = 0; i < 4; i++) {
 			clock.advance(7 * DAY);
 			store.touch("phone");
@@ -206,7 +191,6 @@ describe("surviving a restart", () => {
 		const durable = fakeDurable();
 		const first = new CapabilityStore(durable, fakeAmbient({ now: clock.now }), 14 * DAY);
 		first.report("phone", [{ id: "designer" }]);
-		// Three weeks of daily polling and no re-register, with the gateway's own tick running.
 		for (let i = 0; i < 21; i++) {
 			clock.advance(1 * DAY);
 			first.touch("phone");

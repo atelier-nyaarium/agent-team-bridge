@@ -61,15 +61,9 @@ describe("GatewayBootstrap.resolve", () => {
 	});
 });
 
-////////////////////////////////
-//  Boot phase decision
-//
-//  The full input space, pinned. The two subtle rows: transport-without-Domain never self-arms
-//  (re-enroll only), and nonce-with-transport stays put so re-arming cannot fork identity.
-
 describe("decideBootPhase", () => {
 	it.each([
-		// [hasTransport, hasDomainId, hasEnrollNonce, expected]
+		// Transport without Domain stays standalone; a nonce does not re-arm it.
 		[true, true, true, "activate"],
 		[true, true, false, "activate"],
 		[true, false, true, "standalone"],

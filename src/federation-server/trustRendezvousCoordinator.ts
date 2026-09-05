@@ -6,9 +6,6 @@ import type {
 	TrustPendingEntry,
 } from "../shared/federation-lifecycle.js";
 
-////////////////////////////////
-//  Interfaces & Types
-
 type Side = "INITIATOR" | "TARGET";
 
 interface SideSlot {
@@ -24,16 +21,10 @@ interface Rendezvous {
 	slots: { INITIATOR: SideSlot | null; TARGET: SideSlot | null };
 }
 
-////////////////////////////////
-//  Constants
-
 const DEFAULT_TTL_MS = 600_000;
 const DEFAULT_MAX_ATTEMPTS = 10;
 const DEFAULT_MAX_RENDEZVOUS = 512;
 const DEFAULT_MAX_PER_TARGET = 32;
-
-////////////////////////////////
-//  Class
 
 export class TrustRendezvousCoordinator {
 	private readonly rendezvous = new Map<string, Rendezvous>();
@@ -79,9 +70,6 @@ export class TrustRendezvousCoordinator {
 		}
 		return out;
 	}
-
-	////////////////////////////////
-	//  Functions & Helpers
 
 	private peerSide(side: Side): Side {
 		return side === "INITIATOR" ? "TARGET" : "INITIATOR";

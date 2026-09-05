@@ -9,9 +9,6 @@ function constantTimeBearerEquals(provided: string | null, expected: string): bo
 	return left.length === right.length && timingSafeEqual(left, right);
 }
 
-////////////////////////////////
-//  Interfaces & Types
-
 export type ConnectionId = string;
 
 export interface ToolProvider {
@@ -22,18 +19,12 @@ export interface ToolProvider {
 	onDisconnect?(connId: ConnectionId): void;
 }
 
-////////////////////////////////
-//  Parameters
-
 export interface GatewayTransportParams {
 	port: number;
 	authToken: string;
 	provider: ToolProvider;
 	label?: string;
 }
-
-////////////////////////////////
-//  Class
 
 export const WS_MAX_PAYLOAD_BYTES = 67_108_864;
 
@@ -135,7 +126,7 @@ export class GatewayTransport {
 			const errorMessage = error instanceof Error ? error.message : String(error);
 			frame = JSON.stringify({ type: "tool_error", callId, error: errorMessage });
 		}
-		// A send on a closing socket throws, and this call is launched unobserved.
+		// Closing sockets can throw during unobserved sends.
 		try {
 			ws.send(frame);
 		} catch (error) {

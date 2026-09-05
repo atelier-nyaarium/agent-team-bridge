@@ -7,7 +7,6 @@ import {
 	PendingDeliveryStore,
 } from "../shared/pending-delivery-store.js";
 
-/** A snapshot sink that keeps what it was handed, so persistence is observable without disk. */
 function fakeDurable(seed?: unknown): { store: DeliverySnapshotSink; read: () => unknown } {
 	let saved: unknown = seed;
 	return {
@@ -45,12 +44,10 @@ describe("PendingDeliveryStore", () => {
 		s.enqueue(delivery("d1"));
 		expect(s.acknowledge("d1")).toBe(true);
 		expect(s.listForTeam("proj.alpha")).toHaveLength(0);
-		// A receiver that acknowledges twice is not an error; the row is simply already gone.
 		expect(s.acknowledge("d1")).toBe(false);
 	});
 
 	it("refuses when a team is full rather than evicting somebody's older message", () => {
-		// Silently dropping the oldest would break the same promise the store exists to keep.
 		const s = new PendingDeliveryStore(undefined, processAmbient(), undefined, 2);
 		expect(s.enqueue(delivery("d1"))).toBe("enqueued");
 		expect(s.enqueue(delivery("d2"))).toBe("enqueued");
@@ -71,7 +68,6 @@ describe("PendingDeliveryStore", () => {
 		s.enqueue(delivery("d2"));
 		expect((s.failTeam("proj.alpha") as PendingDelivery[]).map((d) => d.deliveryId)).toEqual(["d1", "d2"]);
 		expect(s.size).toBe(0);
-		// And the ids are free again, so the same message could legitimately be re-accepted later.
 		expect(s.enqueue(delivery("d1"))).toBe("enqueued");
 	});
 
@@ -94,7 +90,6 @@ describe("PendingDeliveryStore", () => {
 		const second = new PendingDeliveryStore(d.store, processAmbient());
 		expect(second.listForTeam("proj.alpha").map((x) => x.deliveryId)).toEqual(["d1"]);
 		expect(second.listForTeam("proj.beta").map((x) => x.deliveryId)).toEqual(["d2"]);
-		// And the restored ids still dedupe, or a retry after a restart would deliver twice.
 		expect(second.enqueue(delivery("d1"))).toBe("duplicate");
 	});
 
@@ -128,8 +123,6 @@ describe("PendingDeliveryStore", () => {
 	});
 
 	it("carries the reply anchor and awareness with the message, not around it", () => {
-		// Both are needed to deliver later. An anchor rebuilt from live state, or awareness taken at
-		// delivery time, would not survive the restart this store exists for.
 		const d = fakeDurable();
 		const first = new PendingDeliveryStore(d.store, processAmbient());
 		const riding = { from: "task-board", body: "an entry changed", act: "no_act" as const };

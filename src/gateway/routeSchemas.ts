@@ -10,19 +10,12 @@ import { isSlug } from "../shared/session-id.js";
 import type { ChannelFile, ConnectionMode } from "../shared/types.js";
 import type { WsData } from "./wsTypes.js";
 
-// Interfaces & Types.
-
-/** An entry as an AGENT sees it: attachments carry the display facts and none of the fetch plumbing.
- * A distinct type rather than a mutated `BoardEntry`, so dropping the ids cannot be mistaken for
- * blanking them and the compiler keeps the two views apart. */
+/** Agent projections omit fetchable bearer references. */
 export type AgentBoardEntry = Omit<BoardEntry, "attachments"> & {
 	attachments?: { filename: string; mime: string; size: number }[];
 };
 
-// Schemas.
-
-/** The caller's own id, so its retries are one ledger operation. Optional: the gateway mints one
- * when absent. Bounded to the opKey grammar. */
+// Stable producer ids make retries one operation.
 const producerOpId = z
 	.string()
 	.min(1)
@@ -31,26 +24,21 @@ const producerOpId = z
 	.optional();
 
 export const SendRequestSchema = z.object({
+	// `from` is the caller identity, not a target.
 	from: z.string(),
 	opId: producerOpId,
 	fromConversationId: z.string().regex(CONVERSATION_ID_RE).max(MAX_CONVERSATION_ID_LEN).optional(),
 	to: z.string(),
-	// Present only when `to` names a session on a linked friend Domain.
 	targetDomainId: z.string().optional(),
 	body: z.string().optional(),
-	// Only used when the target has no id yet; the gateway mints one.
 	displayLabel: z.string().min(1).max(64).optional(),
-	// Agent sends declare the expected reply convention.
 	disposition: z.enum(["asking", "informing", "closing"]).optional(),
 	session_id: z.string().optional(),
 	debug: z.boolean().optional(),
 	files: ChannelFilesSchema.optional(),
-	// Console sends may require the target already be in channel mode.
 	channelOnly: z.boolean().optional(),
-	// Cross-Gateway INBOUND send (the gateway-relay handler): use this exact session id.
 	sessionId: z.string().optional(),
 	returnRoute: ReturnRouteSchema.optional(),
-	// The verified origin Domain of a cross-Domain inbound send, set ONLY by the gateway-relay.
 	dstDomainId: z.string().optional(),
 });
 
@@ -59,9 +47,7 @@ export const RespondBodySchema = z.object({
 	opId: producerOpId,
 	status: z.string().optional(),
 	response: z.string().optional(),
-	// The MCP process's own stable conversationId (see mcp/bridge/helpers.ts's bridgeConversationId).
 	conversationId: z.string().regex(CONVERSATION_ID_RE).max(MAX_CONVERSATION_ID_LEN).optional(),
-	// Optional notice-style tiers on a reply: title, summary, full, and spoken variants.
 	...NoticeTierWireFields,
 	replyAsJson: z.record(z.string(), z.unknown()).optional(),
 	question: z.string().optional(),
@@ -72,23 +58,18 @@ export const RespondBodySchema = z.object({
 	files: ChannelFilesSchema.optional(),
 });
 
-// Per-payload total across a message's files, and DERIVED rather than restated: an independently.
 export const MAX_RESPONSE_FILE_BYTES = MAX_BLOB_BYTES;
 
-// Registration is instant, but the woken agent needs a moment to attach.
 export const POST_WAKE_SETTLE_MS = 3_000;
 
-// A plugin-action payload is meant to carry a small, action-specific value (e.g. a filename), never.
 export const MAX_PLUGIN_ACTION_PAYLOAD_BYTES = 32_768;
 
-/** Roughly a session's working set of recent board writes, times a handful of sessions. */
 export const MAX_BOARD_REPLIES = 512;
 
 export const PollRequestSchema = z.object({
 	session_id: z.string(),
 });
 
-// title, summary, and full are REQUIRED: a notice must always carry a headline.
 export const HumanNotifySchema = z.object({
 	from: z.string().min(1).max(128),
 	title: NoticeTitle,
@@ -98,18 +79,13 @@ export const HumanNotifySchema = z.object({
 	files: ChannelFilesSchema.optional(),
 });
 
-// The one board route's request: `action` dispatches, `from` is the caller's own session (hardcoded.
 export const BoardRouteRequestSchema = z
 	.object({
 		from: z.string().min(1).max(128),
 		action: z.enum(["list", "claim", "release", "create", "update", "clear", "attachments"]),
-		// list only. Defaults to "all"; never returns another session's entries at any scope.
 		scope: z.enum(["unclaimed", "session", "all"]).optional(),
-		// claim / release / update / attachments.
 		id: z.string().min(1).max(64).optional(),
-		// create only: the entry id derives from this, so an HTTP retry replays the same entry.
 		operationId: z.string().min(1).max(128).optional(),
-		// create only, REQUIRED there, deliberately without a default: whichever way one pointed.
 		assignTo: z.enum(["self", "backlog"]).optional(),
 		title: z.string().min(1).max(500).optional(),
 		body: z.string().max(BOARD_BODY_MAX).nullable().optional(),
@@ -118,7 +94,6 @@ export const BoardRouteRequestSchema = z
 	})
 	.strict();
 
-// `from` is the ONLY identity field, naming the CALLING agent's own session, the same network-level.
 export const PluginActionRequestSchema = z
 	.object({
 		from: z.string().min(1).max(128),
@@ -133,45 +108,23 @@ export const PluginActionRequestSchema = z
 	})
 	.strict();
 
-// Functions & Helpers.
-
-/** The total a payload's files CLAIM to be. Sender-stated and never re-measured here, because the
- * bytes are not here: they travel the blob plane, where the write path counts what actually lands
- * against MAX_BLOB_BYTES. This is only a cheap sanity check on an obviously absurd manifest, not a
- * memory-safety bound: nothing here caps how much a caller may claim before the blob plane counts it. */
+// Sender claims are checked here. Blob writes enforce actual bytes.
 export function fileBytes(files: ChannelFile[]): number {
 	let n = 0;
 	for (const f of files) n += f.size;
 	return n;
 }
 
-/**
- * Drop the reference that makes a file's bytes fetchable, keeping everything that describes it.
- *
- * For the persistent store only. `blobId` names content to anyone holding it, and a channel entry
- * lives forever, so a stored reference outlives every judgement made when the message was sent.
- * The store withholds whatever makes bytes fetchable regardless of who may read the entry; only
- * the field carrying that changes.
- */
+// Persistent entries retain metadata but lose fetchable references.
 export function stripFileRefs(files: ChannelFile[]): ChannelFile[] {
 	return files.map(({ blobId: _omit, blobGateway: _also, ...meta }) => meta);
 }
 
-/**
- * Record which Gateway holds a file's bytes, for files that do not already say.
- *
- * A blobId names WHAT; without a companion saying WHERE, a message that routes to another Gateway
- * names bytes its receiver cannot reach. Only ever fills a blank: a stamp already present belongs to
- * whoever actually holds the bytes, and overwriting it with ours would point every receiver at a
- * Gateway that never had them.
- */
 export function stampBlobHolder(files: ChannelFile[], gatewayId: string): ChannelFile[] {
+	// Never overwrite the Gateway that already holds the blob.
 	return files.map((f) => (f.blobId && !f.blobGateway ? { ...f, blobGateway: gatewayId } : f));
 }
 
-/** The one measurement of a plugin-action payload's size, so the schema-level check and the
- * consolePush landing-side check (the two enforcement sites) can never independently drift on HOW
- * size is measured, mirroring fileBytes()'s role for MAX_RESPONSE_FILE_BYTES. */
 export function payloadBytes(payload: Record<string, unknown>): number {
 	return JSON.stringify(payload).length;
 }
@@ -183,9 +136,7 @@ export function jsonResponse(data: unknown, status = 200): Response {
 	});
 }
 
-/** Get the mode of a team, preferring real sockets over virtual console peers. Every bridge
- * connection is channel mode, so this is effectively always "channel"; kept as the single
- * source the teams listing and the send paths read. */
+// Real sockets take precedence over virtual peers.
 export function getTeamMode(subs: Map<string, ServerWebSocket<WsData>>): ConnectionMode {
 	let virtualMode: ConnectionMode | null = null;
 	for (const [, ws] of subs) {

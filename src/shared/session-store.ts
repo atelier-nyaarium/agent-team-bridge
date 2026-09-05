@@ -16,32 +16,20 @@ import { composeSessionName, isComposite, isSlug, parseSessionName } from "./ses
 import { LABEL_MAX, sanitizeLabel, sanitizeWorkdirPath } from "./session-sanitize.js";
 import { bindingTokensEqual, randomBindToken, randomId } from "./session-tokens.js";
 
-////////////////////////////////
-//  Interfaces & Types
-
-/** Volatile - never persisted. */
 export interface LiveRef {
 	team: string;
 	subId: string;
 }
 
-/** `id` need only be unique WITHIN its spawn. */
 export interface SessionRecord {
 	id: string;
 	sessionLabel: string;
 	spawn: string;
-	// Host: drives ~/projects/<hint> inference.
 	workdirHint?: string;
-	// Host: the console-picked path, taking precedence.
 	workdirPath?: string;
-	// Bound at handshake-confirm: the dedup key.
 	claudeSessionId?: string;
-	// Set only for a gateway-minted id. Lets a retry find its own prior record.
 	mintedFrom?: string;
-	// Minted once, never rotated: a reattach never re-runs the launch command.
 	bindToken?: string;
-	// Inert until a register presents bindToken, or a reattach binds a name its own session can
-	// never claim.
 	bindActiveAt?: number;
 	liveTeam?: LiveRef;
 	confirmedAt?: number;
@@ -63,9 +51,7 @@ export type AgentCatalogCheckpointResult<Catalog> =
 
 export interface AgentCatalogWriter<Catalog, Agent> {
 	commit(owner: SessionRecord, expectedRevision: number, agents: readonly Agent[]): AgentCatalogCommitResult<Catalog>;
-	/** Crossed the checked persistence barrier. */
 	isDurable(owner: SessionRecord, revision: number): boolean;
-	/** Confirms an installed or restored snapshot. */
 	checkpoint(owner: SessionRecord, expectedRevision: number): AgentCatalogCheckpointResult<Catalog>;
 }
 
@@ -76,10 +62,8 @@ export type CopilotCatalogCommitResult = AgentCatalogCommitResult<CopilotAgentCa
 export type CopilotCatalogCheckpointResult = AgentCatalogCheckpointResult<CopilotAgentCatalog>;
 export type CopilotCatalogWriter = AgentCatalogWriter<CopilotAgentCatalog, CopilotPersistedAgent>;
 
-/** Catalog names and reserved sessions live in gateway state, injected by the gateway. */
 export type ClashPredicate = (id: string) => boolean;
 
-/** Liveness is the socket registry's answer, which the store does not hold. */
 export interface SweepCap {
 	maxEntries: number;
 	isLive: (team: string) => boolean;
@@ -109,10 +93,6 @@ interface CreateOpts {
 	mintedFrom?: string;
 }
 
-////////////////////////////////
-//  Class
-
-/** One instance per backend, so CAS discipline cannot drift between them. */
 class AgentCatalogStore<Catalog extends { revision: number }, Agent> {
 	private readonly catalogs = new WeakMap<SessionRecord, Catalog>();
 	private readonly unconfirmed = new WeakMap<SessionRecord, number>();
@@ -122,7 +102,6 @@ class AgentCatalogStore<Catalog extends { revision: number }, Agent> {
 		private readonly ownerAlive: (owner: SessionRecord) => boolean,
 	) {}
 
-	/** Callers cannot mutate the stored nested objects. */
 	get(owner: SessionRecord): Catalog | undefined {
 		if (!this.ownerAlive(owner)) return undefined;
 		const catalog = this.catalogs.get(owner);
@@ -186,15 +165,12 @@ class AgentCatalogStore<Catalog extends { revision: number }, Agent> {
 		return { confirmed: true, catalog: this.parseCatalog(catalog) };
 	}
 
-	/** Readable at once, but the revision starts unconfirmed until a new save. */
 	install(record: SessionRecord, catalog: Catalog): void {
 		this.catalogs.set(record, catalog);
 		this.unconfirmed.set(record, catalog.revision);
 	}
 }
 
-/** Keyed by the composite `spawn.id`. Liveness POLICY stays with callers: the store only carries
- * liveTeam data. */
 export class SessionStore {
 	private readonly records = new Map<string, SessionRecord>();
 	private readonly codexCatalogStore = new AgentCatalogStore<CodexAgentCatalog, CodexPersistedAgent>(
@@ -205,7 +181,6 @@ export class SessionStore {
 		(candidate) => CopilotAgentCatalogSchema.parse(candidate),
 		(owner) => this.records.get(this.teamOf(owner)) === owner,
 	);
-	// O(1) dedup, not a full-store scan.
 	private readonly labels = new Map<string, Set<string>>();
 	private readonly clash: ClashPredicate;
 	private readonly now: () => number;
@@ -239,7 +214,7 @@ export class SessionStore {
 		}
 	}
 
-	/** An unknown or ambiguous token resolves to nothing, treated as unbound. */
+	// Unknown or ambiguous binding tokens resolve to nothing.
 	recordByBindToken(token: string): SessionRecord | undefined {
 		let found: SessionRecord | undefined;
 		for (const record of this.records.values()) {
@@ -250,19 +225,17 @@ export class SessionStore {
 		return found;
 	}
 
-	/** Called only where the daemon is about to launch: a hand-launched session must stay tokenless.
-	 * "Mint once" for free, since a reattach never re-runs the launch command. */
 	ensureBindToken(record: SessionRecord): string {
+		// Mint once because reattach never reruns the launch command.
 		if (!record.bindToken) record.bindToken = this.tokenGen();
 		return record.bindToken;
 	}
 
-	/** A minted-but-undelivered token must not lock its own session out. */
 	isBindingActive(record: SessionRecord): boolean {
+		// A minted token stays inert until the launch binding is armed.
 		return !!record.bindToken && record.bindActiveAt !== undefined;
 	}
 
-	/** Arms the binding from here on. */
 	activateBinding(record: SessionRecord): void {
 		if (record.bindToken && record.bindActiveAt === undefined) record.bindActiveAt = this.now();
 	}
@@ -275,14 +248,12 @@ export class SessionStore {
 		return [...this.records.values()];
 	}
 
-	/** Its store key. */
 	teamOf(record: SessionRecord): string {
 		return composeSessionName(record.spawn, record.id);
 	}
 
-	/** hint before label is load-bearing: rename() mutates only the label, so workdir must stay
-	 * pinned to the original. */
 	hostWorkdirHint(record: SessionRecord): string {
+		// Preserve the chosen path across label renames.
 		return record.workdirPath ?? record.workdirHint ?? record.sessionLabel;
 	}
 
@@ -306,8 +277,6 @@ export class SessionStore {
 		return this.copilotCatalogStore.get(owner)?.agents ?? [];
 	}
 
-	/** Re-rolls on clash. The retry cap is unreachable in practice; it exists to make a broken idGen
-	 * loud. */
 	mint(opts: CreateOpts): SessionRecord {
 		for (let i = 0; i < 64; i++) {
 			const id = this.idGen();
@@ -316,15 +285,12 @@ export class SessionStore {
 		throw new Error("session id space exhausted");
 	}
 
-	/** Null when the id is taken or reserved: the caller decides bind vs mint. */
 	adoptById(id: string, opts: CreateOpts): SessionRecord | null {
 		if (!isSlug(id) || this.clash(id)) return null;
 		if (this.records.has(composeSessionName(opts.spawn, id))) return null;
 		return this.create(id, opts);
 	}
 
-	/** Adopts, else REATTACHes an already-taken id (a retry). Null when neither works: the caller
-	 * refuses rather than launch a recordless session. */
 	adoptOrReattach(id: string, opts: CreateOpts): { record: SessionRecord; created: boolean } | null {
 		const created = this.adoptById(id, opts);
 		if (created) return { record: created, created: true };
@@ -332,21 +298,17 @@ export class SessionStore {
 		return existing ? { record: existing, created: false } : null;
 	}
 
-	/** The no-caller-supplied-id counterpart to adoptOrReattach: reattaches by provenance when
-	 * `mintedFrom` is set, else mints fresh. */
 	mintOrReattach(opts: CreateOpts): { record: SessionRecord; created: boolean } {
 		const existing = opts.mintedFrom ? this.findByMintedFrom(opts.mintedFrom, opts.spawn) : undefined;
 		if (existing) return { record: existing, created: false };
 		return { record: this.mint(opts), created: true };
 	}
 
-	/** Confirm tier 1. */
 	bindBySegment(team: string, extra: { claudeSessionId?: string; live?: LiveRef } = {}): SessionRecord | null {
 		const record = this.getByTeam(team);
 		return record ? this.bind(record, extra) : null;
 	}
 
-	/** Read-only, so a caller can apply first-binding-holds before binding. */
 	resumeRecord(claudeSessionId: string): SessionRecord | undefined {
 		for (const record of this.records.values()) {
 			if (record.claudeSessionId === claudeSessionId) return record;
@@ -354,7 +316,7 @@ export class SessionStore {
 		return undefined;
 	}
 
-	/** Two records sharing a mintedFrom is ambiguous, not trusted either way. */
+	// Ambiguous provenance resolves to nothing.
 	findByMintedFrom(mintedFrom: string, spawn: string): SessionRecord | undefined {
 		let found: SessionRecord | undefined;
 		for (const record of this.records.values()) {
@@ -365,7 +327,6 @@ export class SessionStore {
 		return found;
 	}
 
-	/** Confirm tier 2: a manual `--resume` re-incarnation. */
 	bindResume(claudeSessionId: string, extra: { live?: LiveRef } = {}): SessionRecord | null {
 		const record = this.resumeRecord(claudeSessionId);
 		return record ? this.bind(record, { claudeSessionId, live: extra.live }) : null;
@@ -381,13 +342,6 @@ export class SessionStore {
 		return record;
 	}
 
-	/**
-	 * One record per Claude transcript. A bare spawn-point team returns undefined.
-	 *  1. own segment names an existing record
-	 *  2. the resume id matches a record
-	 *  3. the segment is free -> adopt it
-	 *  4. else mint a fresh id
-	 */
 	establishOnConfirm(
 		team: string,
 		{
@@ -420,7 +374,6 @@ export class SessionStore {
 		return this.confirm(this.teamOf(record), live);
 	}
 
-	/** Null when the record is gone or nothing safe remained. */
 	rename(team: string, label: string): string | null {
 		const record = this.records.get(team);
 		const clean = sanitizeLabel(label);
@@ -439,7 +392,6 @@ export class SessionStore {
 		return this.records.delete(team);
 	}
 
-	/** So the TTL sweep never deletes a live session. */
 	touchLive(team: string): void {
 		const record = this.records.get(team);
 		if (record) record.lastSeen = this.now();
@@ -449,15 +401,13 @@ export class SessionStore {
 		return this.records.get(team)?.liveTeam;
 	}
 
-	/** Matches BOTH fields, or a sibling sub-session could clear a still-live pointer. */
 	clearLive(team: string, subId: string): void {
 		for (const record of this.records.values()) {
 			if (record.liveTeam?.team === team && record.liveTeam.subId === subId) record.liveTeam = undefined;
 		}
 	}
 
-	/** Caller-driven, so the gateway can sweep BEFORE snapshot(): the persisted file never carries a
-	 * just-expired record. Returns the removed keys, for end-of-life hooks. */
+	// Sweep before snapshot so expired records never persist.
 	sweep(ttlMs: number, cap?: SweepCap): string[] {
 		const cutoff = this.now() - ttlMs;
 		const removed: string[] = [];
@@ -469,7 +419,6 @@ export class SessionStore {
 			}
 		}
 		if (!cap || this.records.size <= cap.maxEntries) return removed;
-		// Least-recently-seen first, since insertion order says nothing about which record is idle.
 		const evictable = [...this.records]
 			.filter(([team]) => !cap.isLive(team))
 			.sort((left, right) => left[1].lastSeen - right[1].lastSeen);
@@ -482,7 +431,6 @@ export class SessionStore {
 		return removed;
 	}
 
-	/** Live pointers stripped: a liveTeam stamp must never survive its sockets. */
 	snapshot(): Record<string, PersistedSessionRecord> {
 		const out: Record<string, PersistedSessionRecord> = {};
 		for (const record of this.records.values()) {
@@ -506,15 +454,11 @@ export class SessionStore {
 		return out;
 	}
 
-	/** Migrates the legacy `{claudeSessionId, lastSeen}` resume-map shape into a full record. Labels
-	 * are re-sanitized and re-deduped. */
 	restore(raw: unknown): void {
 		if (!raw || typeof raw !== "object") return;
-		// TODO(post-upgrade cleanup): drop the `!persisted` legacy branch once every gateway has
-		// re-written session-resume.json in the new shape.
+		// TODO(post-upgrade cleanup): drop the `!persisted` legacy branch once every gateway re-writes session-resume.json in the new shape.
 		for (const [team, value] of Object.entries(raw as Record<string, unknown>)) {
 			if (!value || typeof value !== "object") continue;
-			// Never a valid chat.
 			if (!isComposite(team) || this.records.has(team)) continue;
 			const { project: spawn, session: segment } = parseSessionName(team);
 			if (!isSlug(spawn) || !isSlug(segment)) continue;
@@ -531,7 +475,7 @@ export class SessionStore {
 				workdirPath: persisted ? (sanitizeWorkdirPath(v.workdirPath) ?? undefined) : undefined,
 				claudeSessionId: typeof v.claudeSessionId === "string" ? v.claudeSessionId : undefined,
 				mintedFrom: persisted && typeof v.mintedFrom === "string" ? v.mintedFrom : undefined,
-				// Never re-minted here, or it binds a name its live session could never present.
+				// Restored records never mint a token for an unbound session.
 				bindToken: persisted && typeof v.bindToken === "string" ? v.bindToken : undefined,
 				bindActiveAt: persisted && typeof v.bindActiveAt === "number" ? v.bindActiveAt : undefined,
 				confirmedAt: persisted ? (typeof v.confirmedAt === "number" ? v.confirmedAt : undefined) : lastSeen,
@@ -579,13 +523,11 @@ export class SessionStore {
 		this.labels.get(record.spawn)?.delete(record.sessionLabel);
 	}
 
-	/** Per-spawn only: two spawns may reuse a label. */
 	private dedupLabel(spawn: string, label: string): string {
 		const taken = this.labels.get(spawn);
 		if (!taken?.has(label)) return label;
 		for (let n = 2; ; n++) {
 			const suffix = `-${n}`;
-			// Code points, so an astral char at the boundary stays well-formed.
 			const candidate = `${[...label].slice(0, LABEL_MAX - suffix.length).join("")}${suffix}`;
 			if (!taken.has(candidate)) return candidate;
 		}

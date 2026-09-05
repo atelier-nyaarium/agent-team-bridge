@@ -8,9 +8,6 @@ import { addClient, type ClientData, getAllClients, getClient, getClientByInstan
 
 const TAG = "[connector]";
 
-////////////////////////////////
-//  Interfaces & Types
-
 export interface ListenerState {
 	mode: "http" | "https";
 	hostname: string;
@@ -25,7 +22,7 @@ interface PendingInvocation {
 	clientHash: string;
 }
 
-/** A client opens one by sending a single frame, so count and size must both be refused. */
+// Bound both stream count and aggregate bytes.
 const MAX_CHUNK_STREAM_PARTS = 4096;
 const MAX_CHUNK_STREAM_BYTES = 16_000_000;
 
@@ -36,17 +33,11 @@ interface ChunkStream {
 	bytes: number;
 }
 
-////////////////////////////////
-//  State
-
 let state: ListenerState | null = null;
 let authToken: string | null = null;
 const pendingInvocations = new Map<string, PendingInvocation>();
 const chunkStreams = new Map<string, ChunkStream>();
 let requestCounter = 0;
-
-////////////////////////////////
-//  Functions & Helpers
 
 export function setAuthToken(token: string | null): void {
 	authToken = token;
@@ -159,9 +150,6 @@ export function invokeResolved(
 	return invokeOnClient(client.shortHash, tool, args);
 }
 
-////////////////////////////////
-//  Internal
-
 function acceptChunk(hash: string, streamId: string, seq: number, total: number, payload: string): string | null {
 	if (!hash || !streamId || total <= 0 || seq < 0 || seq >= total) {
 		console.error(`${TAG} Invalid chunk frame from ${hash}: id=${streamId} seq=${seq} total=${total}`);
@@ -178,7 +166,7 @@ function acceptChunk(hash: string, streamId: string, seq: number, total: number,
 		chunkStreams.set(key, stream);
 	}
 	if (stream.parts[seq] == null) {
-		// Bounded, or a client that keeps sending parts grows this map without limit.
+		// Without this cap, a client can grow one stream without limit.
 		if (stream.bytes + payload.length > MAX_CHUNK_STREAM_BYTES) {
 			console.error(`${TAG} Dropping stream from ${hash}: over the ${MAX_CHUNK_STREAM_BYTES}-byte cap`);
 			chunkStreams.delete(key);
@@ -257,7 +245,7 @@ function createServer({ hostname, port, mode, cert, key }: CreateServerParams): 
 				const upgraded = server.upgrade(req, {
 					data: { shortHash: "", instance },
 				});
-				// Bun expects undefined after upgrade; types require the cast.
+				// Bun requires undefined after upgrade. The type requires a cast.
 				if (upgraded) return undefined as unknown as Response;
 				return new Response(`WebSocket upgrade failed`, { status: 400 });
 			}

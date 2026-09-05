@@ -7,13 +7,10 @@ import { resolveRefs } from "../mcp/references/refResolve.js";
 import { scanRefs } from "../mcp/references/refScanner.js";
 import type { WorkspaceRoot } from "../mcp/references/refWorkspace.js";
 
-////////////////////////////////
-//  Functions & Helpers
-
 let root: string;
 let workspace: WorkspaceRoot;
 
-/** Never opened. */
+/** Deliberately fails if the daemon is opened. */
 const unopened = async () => {
 	throw new Error("the daemon was asked");
 };
@@ -28,9 +25,6 @@ beforeEach(() => {
 afterEach(() => {
 	fs.rmSync(root, { recursive: true, force: true });
 });
-
-////////////////////////////////
-//  Tests
 
 describe("resolving before the daemon is reached", () => {
 	it("degrades as warming, without opening a session, once the reply's budget is spent", async () => {

@@ -15,8 +15,6 @@ export {
 const CONTENT_SALT = Buffer.from("switchboard-content-salt-v1", "utf8");
 const CONTENT_INFO_PREFIX = "switchboard-content-v1\n";
 
-// Sole AAD derivation owner.
-
 function assertContentEpoch(epoch: number): void {
 	if (!Number.isInteger(epoch) || epoch < 1 || epoch > 2147483647) {
 		throw new Error("content epoch must be an integer from 1 to 2147483647");
@@ -48,7 +46,6 @@ export function assertNewlineFree(...values: readonly string[]): void {
 	if (values.some((value) => /[\r\n]/.test(value))) throw new Error("AAD fields must be newline-free");
 }
 
-/** Board kinds require entry IDs. */
 export function boardTextAadKind(
 	kind: BoardTextKind,
 	entryId: string,
@@ -60,7 +57,6 @@ export function boardTextAadKind(
 		.join("\n") as `${BoardTextKind}\n${string}`;
 }
 
-/** Inbox kinds require row IDs. */
 export function inboxBodyAadKind(conversationId: string, opId: string): `inbox.body\n${string}` {
 	assertNewlineFree(conversationId, opId);
 	return `inbox.body\n${conversationId}\n${opId}`;
@@ -91,8 +87,7 @@ export interface ContentAad {
 	domainId: string;
 	ownerSignPub: string;
 	epoch: number;
-	// Owner key is the domain root key.
-	// Kind is an AAD input, never wire data.
+	// Kind is authenticated as AAD, not serialized wire data.
 	kind:
 		| Exclude<ContentKind, BoardTextKind | "inbox.body">
 		| `${BoardTextKind}\n${string}`
@@ -102,8 +97,7 @@ export interface ContentAad {
 }
 
 export function contentAad({ domainId, ownerSignPub, epoch, kind }: ContentAad): Buffer {
-	// Revision absent so untouched halves survive edits.
-	// BoardSealing.kt is the byte-for-byte twin.
+	// Omit revision so untouched content survives edits. BoardSealing.kt must match these bytes exactly.
 	return Buffer.from(`${CONTENT_INFO_PREFIX}${domainId}\n${ownerSignPub}\n${String(epoch)}\n${kind}`, "utf8");
 }
 

@@ -44,9 +44,7 @@ describe("PlaneRegistry", () => {
 		const reg = new PlaneRegistry(processAmbient());
 		reg.registerPlane({
 			name: "presence",
-			// identityOf deliberately ignores `churny` - the ambient-field exclusion, so ambient
-			// timestamp-like fields never trigger a version bump (lastActive-class timestamps ride
-			// the payload but not the identity).
+			// Identity excludes ambient churn from version bumps.
 			snapshot: () => ({ stable: "x", churny }),
 			identityOf: (s) => stableHash({ stable: s.stable }),
 		});
@@ -101,16 +99,7 @@ describe("PlaneRegistry", () => {
 	});
 
 	it("lock-ordering: a waiter is registered before waitForBump ever yields, so a same-tick bump can never be lost", async () => {
-		// The prior test's 10ms gap between registering and bumping would still pass even if a
-		// regression inserted a yield point (an await, a setTimeout(0), a .then()) between
-		// waitForBump's version-compare and its waiter registration - 10ms is plenty of time for a
-		// deferred push to land first. This test instead bumps with ZERO delay, in the exact same
-		// synchronous tick as the waitForBump() call itself (no await between them on the caller's
-		// side either) - relying on `new Promise(executor)` running its executor synchronously, so
-		// the waiter is already in `this.waiters` by the time waitForBump() returns control to this
-		// line, before any bump can possibly race it. If a future change made waitForBump genuinely
-		// async (or deferred the push via any microtask/macrotask), the waiter would not yet be
-		// registered when markDirty runs here, and this test would fail.
+		// The zero-delay bump requires synchronous waiter registration.
 		let content = { x: 1 };
 		const reg = new PlaneRegistry(processAmbient());
 		reg.registerPlane({ name: "presence", snapshot: () => content, identityOf: stableHash });
@@ -139,16 +128,15 @@ describe("PlaneRegistry", () => {
 		reg.registerPlane({ name: "presence", snapshot: () => presenceContent, identityOf: stableHash });
 		reg.registerPlane({ name: "domain", snapshot: () => domainContent, identityOf: stableHash });
 
-		// Presenting only "domain" (omitting the also-registered "presence") is itself already
-		// behind, so this resolves at once via the fast path rather than holding.
 		const partial = reg.waitForBump(new Map([["domain", reg.version("domain")!]]), 5_000);
+		// Omitting a registered plane is already behind without scope.
 		expect(await partial).toBe(true);
 
-		// Fully caught up on both: this one genuinely holds.
 		const full = new Map([
 			["presence", reg.version("presence")!],
 			["domain", reg.version("domain")!],
 		]);
+		// Presenting every current version genuinely holds.
 		let resolved: boolean | undefined;
 		const held = reg.waitForBump(full, 5_000).then((w) => {
 			resolved = w;
@@ -163,11 +151,6 @@ describe("PlaneRegistry", () => {
 	});
 
 	it("without scope, changedSince/waitForBump treat every OTHER registered plane's absence from the presented map as changed too", () => {
-		// Documents the behavior `scope` exists to opt out of (see the next test): a caller with no
-		// scope asking about "domain" alone (caught up on it - the exact current version is
-		// presented), on a registry that ALSO has "presence" registered, still gets "presence"
-		// reported as changed - the bulk check has no way to tell "not tracked" apart from "unknown,
-		// ship it" without a scope to say which planes it is even asking about.
 		const reg = new PlaneRegistry(processAmbient());
 		reg.registerPlane({ name: "presence", snapshot: () => ({ x: 1 }), identityOf: stableHash });
 		reg.registerPlane({ name: "domain", snapshot: () => ({ y: 1 }), identityOf: stableHash });
@@ -176,18 +159,13 @@ describe("PlaneRegistry", () => {
 	});
 
 	it("scope narrows changedSince/waitForBump to exactly the planes a caller is asking about", async () => {
-		// A caller scoped to ONLY "linked-peers" must never see "presence"
-		// (a different, ALSO-registered plane) reported as changed just because its own presented map
-		// has no key for it - the exact false-positive a naive multi-plane poll handler hits once a
-		// second plane joins a shared registry (see consoleHandler.ts's own presence+linked-peers split).
+		// Scope excludes unrelated registered planes.
 		let linkedPeersContent = { peers: ["alice"] };
 		const reg = new PlaneRegistry(processAmbient());
 		reg.registerPlane({ name: "presence", snapshot: () => ({ x: 1 }), identityOf: stableHash });
 		reg.registerPlane({ name: "linked-peers", snapshot: () => linkedPeersContent, identityOf: stableHash });
 
 		const scope = new Set(["linked-peers"]);
-		// Caught up on linked-peers, and presenting NOTHING for presence - scoped out, so this must
-		// hold rather than resolve immediately on presence's absence.
 		const presented = new Map([["linked-peers", reg.version("linked-peers")!]]);
 		expect(reg.changedSince(presented, scope)).toEqual([]);
 
@@ -209,9 +187,7 @@ describe("PlaneRegistry", () => {
 	});
 
 	it("a waiter presenting a version AHEAD of current still wakes on a bump - no special-casing", async () => {
-		// Deliberate design (see PollWaitHub): "ahead" is never distinguished from
-		// "behind" - any difference means "send current truth." A console can present a version
-		// ahead of what its new route gateway currently holds after a federation failover.
+		// Any version mismatch sends current truth.
 		let content = { x: 1 };
 		const reg = new PlaneRegistry(processAmbient());
 		reg.registerPlane({ name: "presence", snapshot: () => content, identityOf: stableHash });
@@ -241,10 +217,8 @@ describe("PlaneRegistry", () => {
 	});
 
 	it("tripwireTick isolates a throwing plane - it never aborts the tick or escapes to the caller", () => {
+		// Registration must succeed before the later tripwire throw.
 		const reg = new PlaneRegistry(processAmbient());
-		// Registration itself calls snapshotFn() once (to seed the initial hash), so it must succeed
-		// there - only the LATER tripwire recompute should hit the throw, isolating this test to the
-		// tripwire's own exception handling rather than construction's.
 		let calls = 0;
 		reg.registerPlane({
 			name: "broken",
@@ -263,8 +237,7 @@ describe("PlaneRegistry", () => {
 		const error = vi.spyOn(console, "error").mockImplementation(() => {});
 		expect(() => reg.tripwireTick()).not.toThrow(); // must never propagate to the setInterval caller
 		expect(error).toHaveBeenCalledWith(expect.stringContaining("broken"), expect.anything());
-		// The plane registered AFTER the broken one still gets checked this same tick - one plane's
-		// bug does not blind the tripwire to every plane that happens to iterate after it.
+		// A broken plane must not skip later planes.
 		expect(reg.version("healthy")?.counter).toBe(healthyBefore.counter + 1);
 		error.mockRestore();
 	});
@@ -300,8 +273,6 @@ describe("PlaneRegistry", () => {
 	});
 
 	it("reconcileOnBoot bumps exactly once when live-derived content differs from the persisted hash", () => {
-		// Simulates a session that was "online" at a clean SIGTERM (no socket survives the exit) and
-		// reads "available" the instant the fresh process boots - a real content change, not a bug.
 		let statusAtBoot = "online";
 		const regBeforeExit = new PlaneRegistry(processAmbient());
 		regBeforeExit.registerPlane({
@@ -319,9 +290,9 @@ describe("PlaneRegistry", () => {
 		);
 		const before = regAfterBoot.version("presence")!;
 		regAfterBoot.reconcileOnBoot();
+		// Reconciliation bumps once until content changes again.
 		expect(regAfterBoot.version("presence")?.counter).toBe(before.counter + 1);
 
-		// A second reconcile with nothing further changed must NOT bump again.
 		const afterOneBump = regAfterBoot.version("presence");
 		regAfterBoot.reconcileOnBoot();
 		expect(regAfterBoot.version("presence")).toEqual(afterOneBump);
@@ -427,9 +398,7 @@ describe("PlaneRegistry", () => {
 		reg.registerPlane({ name: "friend-a", snapshot: () => ({ x: 1 }), identityOf: stableHash });
 		reg.registerPlane({ name: "friend-b", snapshot: () => ({ y: 1 }), identityOf: stableHash });
 		const presented = new Map([["friend-b", reg.version("friend-b")!]]);
-		// Scoped to ONLY friend-b - without a scope, friend-a's mere absence from `presented` would
-		// already read as "changed" per changedSince's own documented no-scope behavior (see the
-		// "without scope..." test above), unrelated to unregisterPlane entirely.
+		// Scope keeps friend-a absence unrelated.
 		const scope = new Set(["friend-b"]);
 
 		let resolved: boolean | undefined;

@@ -1,15 +1,9 @@
-////////////////////////////////
-//  Interfaces & Types
-
 import type { Ambient, TimerHandle } from "./ambient.js";
 
 export interface ReconnectorOptions {
 	maxDelayMs?: number;
 	initialDelayMs?: number;
-	/**
-	 * Absent for the MCP host daemon, whose only live handle between connections is this timer, so
-	 * its fallback must hold the loop open rather than unref like a graph's ambient.
-	 */
+	/** Omit for host-daemon timers that must keep the process alive. */
 	ambient?: Pick<Ambient, "setTimer" | "clearTimer">;
 }
 
@@ -18,9 +12,6 @@ export interface Reconnector {
 	reset(): void;
 	cancel(): void;
 }
-
-////////////////////////////////
-//  Functions & Helpers
 
 export function createReconnector(connectFn: () => void, options: ReconnectorOptions = {}): Reconnector {
 	const maxDelayMs = options.maxDelayMs ?? 30000;

@@ -1,15 +1,10 @@
-////////////////////////////////
-//  Interfaces & Types
-
 import type { Ambient, IntervalHandle, TimerHandle } from "./ambient.js";
 import type { ReturnRoute } from "./federation-protocol.js";
 import { type Address, parseStoreKey } from "./session-id.js";
 
 export type JobState = "waiting" | "timed_out" | "stored";
 
-/** The chat address a job's store-key id resolves to, or null if the id is not a conv key. The job
- * id is the origin-set, trusted store key, so its address segments are the share-match and forge-guard
- * inputs (never a friend-controlled wire field). */
+/** Store keys provide trusted share-match inputs. */
 function jobAddress(id: string): Address | null {
 	const k = parseStoreKey(id);
 	return k?.kind === "conv" ? k.address : null;
@@ -20,13 +15,7 @@ interface JobEntry<T> {
 	from: string;
 	to: string;
 	fromConversationId: string | null;
-	// On a destination Gateway's job for a cross-Gateway send: where the reply must be
-	// forwarded (the origin Gateway's session). Null for a local job, so `respond` delivers
-	// locally instead of forwarding.
 	returnRoute: ReturnRoute | null;
-	// The cryptographically-verified remote Domain this cross-Domain job is bound to, or null
-	// for a local / same-Domain job. The relay handler's reply and collision gates key on this,
-	// never on the bare friend-controlled gateway id (which is not unique across Domains).
 	dstDomainId: string | null;
 	persistent: boolean;
 	state: JobState;
@@ -39,8 +28,6 @@ interface JobEntry<T> {
 export interface WaitResult<T> {
 	delivered: boolean;
 	result?: T;
-	// Set when an active expiry (the job's remote Domain link was pulled) settled the wait
-	// rather than a delivery or plain TTL timeout, so the waiter can report a clear reason.
 	error?: string;
 }
 
@@ -48,23 +35,16 @@ export interface CreateOptions {
 	persistent?: boolean;
 	fromConversationId?: string;
 	returnRoute?: ReturnRoute;
-	// The verified remote Domain a cross-Domain job is bound to (see JobEntry.dstDomainId).
 	dstDomainId?: string;
 }
 
-/** The cross-Domain binding of a job, read by the relay handler's reply and collision gates.
- * `dstDomainId` is the verified remote Domain the job is bound to (null for a local /
- * same-Domain job). `keyGateway` is the destination gateway parsed from the job's own
- * origin-set, trusted session key; the reply gate requires the verified sender to match it.
- * `returnGateway` is the origin gateway recorded on the job's return-route (null on an origin
- * anchor); the inbound-send collision gate requires it to match the verified sender. */
 export interface CrossDomainBinding {
+	/** Verified bindings gate replies, never bare friend gateway ids. */
 	dstDomainId: string | null;
 	keyGateway: string | null;
 	returnGateway: string | null;
 }
 
-/** The metadata `deliver` hands back so the caller can route the reply. */
 export interface DeliverMeta {
 	delivered: boolean;
 	from: string;
@@ -72,15 +52,9 @@ export interface DeliverMeta {
 	fromConversationId: string | null;
 	returnRoute: ReturnRoute | null;
 	persistent: boolean;
-	// The verified friend Domain a cross-Domain job is bound to (null for a local / same-Domain
-	// job). On a destination job (returnRoute set) the reply forward re-checks the session is
-	// still shared to this Domain before relaying back, so a withdrawn share drops an
-	// already-accepted send's in-flight reply.
 	dstDomainId: string | null;
 }
 
-/** A persistent entry in serializable form, for surviving a gateway restart. The transient
- * waiter (resolve/timer) is omitted; it re-arms when a client retries. */
 export interface PersistentJobSnapshot<T> {
 	id: string;
 	from: string;
@@ -92,9 +66,6 @@ export interface PersistentJobSnapshot<T> {
 	createdAt: number;
 	storedResult: T | null;
 }
-
-////////////////////////////////
-//  Class
 
 export class PendingJobStore<T> {
 	private entries = new Map<string, JobEntry<T>>();
@@ -135,21 +106,16 @@ export class PendingJobStore<T> {
 		return this.entries.has(id);
 	}
 
-	/**
-	 * Create a new job entry. If one already exists for this id, refresh its metadata; for
-	 * persistent channel-mode conversations this keeps the stored result while resetting the TTL.
-	 */
 	create(id: string, from: string, to: string, opts: CreateOptions = {}): void {
 		const { persistent = false, fromConversationId = null, returnRoute = null, dstDomainId } = opts;
 		const existing = this.entries.get(id);
 		if (existing) {
+			// Refreshes preserve omitted route and Domain bindings.
 			const wasCrossDomain = existing.persistent && existing.returnRoute !== null;
 			existing.from = from;
 			existing.to = to;
 			existing.fromConversationId = fromConversationId;
-			// Keep an existing return-route if this refresh did not carry one.
 			if (returnRoute) existing.returnRoute = returnRoute;
-			// Keep an existing Domain binding if this refresh did not carry one.
 			if (dstDomainId !== undefined) existing.dstDomainId = dstDomainId;
 			existing.persistent = persistent || existing.persistent;
 			existing.createdAt = this.ambient.now();
@@ -187,13 +153,10 @@ export class PendingJobStore<T> {
 		});
 	}
 
-	/** The team a job is addressed to, or undefined for an unknown id. Read-only, so a caller can
-	 * check who owns a reply before delivering it. */
 	targetOf(id: string): string | undefined {
 		return this.entries.get(id)?.to;
 	}
 
-	/** The team waiting on a job. Kept apart from `poll`: the read is authorized before it consumes. */
 	askerOf(id: string): string | undefined {
 		return this.entries.get(id)?.from;
 	}
@@ -213,12 +176,10 @@ export class PendingJobStore<T> {
 		});
 
 		if (entry.state === "waiting" && entry.resolve) {
-			// Synchronous delivery: someone is waiting via waitForResult()
 			if (entry.timer) this.ambient.clearTimer(entry.timer);
 			entry.timer = null;
 			entry.resolve({ delivered: true, result });
 			entry.resolve = null;
-			// Persistent entries stay in the store even after a sync delivery.
 			if (!entry.persistent) {
 				this.entries.delete(id);
 			} else {
@@ -231,7 +192,6 @@ export class PendingJobStore<T> {
 		}
 
 		if (entry.state === "waiting" && !entry.resolve) {
-			// Async delivery: channel mode, no one called waitForResult(). Store for polling.
 			entry.state = "stored";
 			entry.storedResult = result;
 			entry.createdAt = this.ambient.now();
@@ -248,7 +208,6 @@ export class PendingJobStore<T> {
 		}
 
 		if (entry.state === "stored") {
-			// Re-delivery: channel sessions may receive multiple replies
 			entry.storedResult = result;
 			entry.createdAt = this.ambient.now();
 			this.notifyCrossDomainJobChange(entry);
@@ -265,19 +224,11 @@ export class PendingJobStore<T> {
 		this.notifyCrossDomainJobChange(entry);
 	}
 
-	/**
-	 * Actively expire and remove every open job bound to `dstDomainId`, returning the count.
-	 * Used when a cross-Domain link is pulled: those jobs would otherwise stall their waiter
-	 * until the TTL fires, since no reply can arrive once the sealer refuses the unlinked peer.
-	 * A waiting `waitForResult` is resolved with `{ delivered: false, error }`. Local and other
-	 * Domains' jobs are untouched.
-	 */
+	// Unlink expiry settles waiters immediately and removes jobs.
 	expireByDomain(dstDomainId: string, error = "cross-domain link unlinked"): number {
 		let expired = 0;
 		for (const [id, entry] of this.entries) {
 			if (entry.dstDomainId !== dstDomainId) continue;
-			// The TTL timeout's settle path (see waitForResult), but with an explicit reason and
-			// the entry removed outright (an unlinked job has no reply to poll for later).
 			if (entry.timer) this.ambient.clearTimer(entry.timer);
 			entry.timer = null;
 			entry.state = "timed_out";
@@ -291,15 +242,7 @@ export class PendingJobStore<T> {
 		return expired;
 	}
 
-	/**
-	 * The per-session counterpart of expireByDomain, used when a single session's share to a
-	 * friend Domain is withdrawn: expire every job whose `dstDomainId` matches AND whose session
-	 * id resolves to the canonical `sessionTarget` (`domain.gateway.spawn.session`). Match is on the job's own
-	 * session-id target, not `entry.to`: a destination job stores `entry.to` as the bare local
-	 * name while its id (the origin-set session key) carries the canonical address the share is
-	 * keyed by. Each match is settled through the TTL-timeout not-delivered path and removed, so an
-	 * in-flight reply the sealer would still forward cannot strand its waiter.
-	 */
+	// Session expiry matches the canonical store-key address.
 	expireBySession(sessionTarget: string, dstDomainId: string, error = "cross-domain session unshared"): number {
 		let expired = 0;
 		for (const [id, entry] of this.entries) {
@@ -318,17 +261,13 @@ export class PendingJobStore<T> {
 		return expired;
 	}
 
-	/**
-	 * Non-destructive peek: returns the latest stored result for persistent entries without
-	 * removing them. Non-persistent entries are consumed on poll (CLI-mode waiting clients).
-	 */
+	// Persistent results remain available after polling.
 	poll(id: string): T | null | undefined {
 		const entry = this.entries.get(id);
 		if (!entry) return undefined;
 
 		if (entry.state === "stored" && entry.storedResult !== null) {
 			const result = entry.storedResult;
-			// No notify: only a persistent job is cross-Domain, and this branch is the other kind.
 			if (!entry.persistent) this.entries.delete(id);
 			return result;
 		}
@@ -348,10 +287,6 @@ export class PendingJobStore<T> {
 		return ids;
 	}
 
-	/** The cross-Domain binding of a job by its id, or undefined if no such job. The relay
-	 * handler reads it to gate a cross-Domain reply (origin anchor) and to refuse a cross-Domain
-	 * inbound send that would hijack an unrelated job (destination job). Both gates compare the
-	 * verified sender against this binding, never the bare gateway id the friend put on the wire. */
 	crossDomainBinding(id: string): CrossDomainBinding | undefined {
 		const entry = this.entries.get(id);
 		if (!entry) return undefined;
@@ -362,13 +297,6 @@ export class PendingJobStore<T> {
 		};
 	}
 
-	/** Whether a recently-active persistent cross-Domain thread targets `sessionTarget` (the
-	 * canonical `domain.gateway.spawn.session`). Matches when a returnRoute-bearing job resolves to
-	 * `sessionTarget`, its returnRoute's origin Gateway is a linked cross-Domain peer
-	 * (`isCrossDomainPeer`), and it was touched within `maxAgeMs`. The share auto-forget sweep
-	 * uses this to keep a session with live cross-Domain traffic; the recency bound stops a
-	 * long-dead anchor from suppressing the forget forever. */
-	/** Live thread ids for share attestation. */
 	liveCrossDomainJobIds(
 		sessionTarget: string,
 		isCrossDomainPeer: (gatewayId: string) => boolean,
@@ -410,8 +338,6 @@ export class PendingJobStore<T> {
 		}));
 	}
 
-	/** The persistent entries (the only ones worth surviving a restart) in serializable
-	 * form. A timed-out persistent anchor restores as waiting so a later respond delivers. */
 	snapshot(): PersistentJobSnapshot<T>[] {
 		const out: PersistentJobSnapshot<T>[] = [];
 		for (const e of this.entries.values()) {
@@ -431,9 +357,8 @@ export class PendingJobStore<T> {
 		return out;
 	}
 
-	/** Re-hydrate persistent entries on boot. A live entry that beat the load wins (never
-	 * clobber a registration that raced the restore). */
 	restore(rows: PersistentJobSnapshot<T>[]): void {
+		// Missing Domain bindings restore fail-closed as null.
 		for (const r of rows) {
 			if (this.entries.has(r.id)) continue;
 			this.entries.set(r.id, {
@@ -442,8 +367,6 @@ export class PendingJobStore<T> {
 				to: r.to,
 				fromConversationId: r.fromConversationId,
 				returnRoute: r.returnRoute,
-				// A snapshot missing the Domain binding restores as null, so the reply gate
-				// hard-denies a cross-Domain reply into it (fail-closed).
 				dstDomainId: r.dstDomainId ?? null,
 				persistent: true,
 				state: r.state,

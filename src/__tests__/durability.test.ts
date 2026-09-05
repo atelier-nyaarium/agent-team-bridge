@@ -19,15 +19,14 @@ afterEach(() => {
 	for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 
-////////////////////////////////
-//  Delivery-state durability
-
 describe("delivery-state durability", () => {
 	it("persistent job anchors (and their stored result) survive snapshot/restore", () => {
 		const a = new PendingJobStore<string>(600_000, processAmbient());
 		a.create("conv:c1:host/team", "Aqua", "host/team", { persistent: true, fromConversationId: "c1" });
-		a.deliver("conv:c1:host/team", "hello"); // async (channel) delivery -> stored
-		a.create("transient", "x", "y"); // non-persistent: must NOT survive
+		// Async delivery stores the result.
+		a.deliver("conv:c1:host/team", "hello");
+		// Non-persistent jobs do not survive restore.
+		a.create("transient", "x", "y");
 
 		const snap = a.snapshot();
 		expect(snap.length).toBe(1);
@@ -35,7 +34,7 @@ describe("delivery-state durability", () => {
 
 		const b = new PendingJobStore<string>(600_000, processAmbient());
 		b.restore(snap);
-		expect(b.poll("conv:c1:host/team")).toBe("hello"); // anchor + result survived
+		expect(b.poll("conv:c1:host/team")).toBe("hello");
 		expect(b.has("transient")).toBe(false);
 	});
 
@@ -47,9 +46,11 @@ describe("delivery-state durability", () => {
 
 		const b = new PendingJobStore<string>(600_000, processAmbient());
 		b.create("conv:x", "from", "to", { persistent: true });
-		b.deliver("conv:x", "fresh"); // a registration raced the restore
+		// Live registration races restore.
+		b.deliver("conv:x", "fresh");
 		b.restore(snap);
-		expect(b.poll("conv:x")).toBe("fresh"); // the live entry wins
+		// The live entry wins restore.
+		expect(b.poll("conv:x")).toBe("fresh");
 	});
 });
 

@@ -20,9 +20,6 @@ import { CONTENT_KEYS_FILE, ContentKeyStore } from "./contentKeyStore.js";
 const STAGING_DIR = "staging";
 const ARTIFACTS = [ALLOWLIST_FILE, CONTENT_KEYS_FILE, "transport.json"] as const;
 
-////////////////////////////////
-//  Functions & Helpers
-
 export function stageBootstrap(
 	federationDir: string,
 	bundle: GatewayBootstrapBundle,
@@ -185,29 +182,17 @@ export function recoverStaging(federationDir: string, ambient: Clock): void {
 	} else fs.rmSync(stagingDir, { recursive: true, force: true });
 }
 
-//  A creds-less Gateway receives its enrollment as a sealed GatewayBootstrapFrame over the
-//  LAN (or pasted). The trust chain, in order, before anything is installed:
-//   1. The seal opens with THIS Gateway's box key (wrong-recipient or tampered -> fails).
-//      Only a party that scanned this Gateway's QR (which carried its box pub) could seal
-//      to it, so opening proves proximity + write-once via the nonce.
-//   2. The nonce equals the one this Gateway's listener showed (anti-replay across windows).
-//   3. The enclosed admission is owner-signed under the bundle's own Domain root AND binds
-//      THIS Gateway's exact keys + id + a gateway kind. The owner key is trusted on first
-//      use here, gated by the SAS the human confirmed and LAN proximity.
-
-/** Open + fully validate a received bootstrap frame. Returns the trusted bundle, or
- * throws with a short reason (the caller keeps the listener open on a soft failure). */
 export function openBootstrapBundle(
 	frame: unknown,
 	gatewayIdentity: Identity,
 	expectedNonce: string,
 	gatewayId: string,
 ): GatewayBootstrapBundle {
+	// Validate the sealed bundle before installing any artifact.
 	const parsedFrame = GatewayBootstrapFrameSchema.safeParse(frame);
 	if (!parsedFrame.success) throw new Error("bootstrap frame is invalid");
 	const parsed = parsedFrame.data;
-	// Unseal verifies the sender's signature (against the carried console signing key) and
-	// decrypts with this Gateway's box key; throws on tamper / wrong sender / wrong recipient.
+	// Unsealing authenticates the carried sender key and recipient.
 	const plain = unseal(parsed.sealed, gatewayIdentity.box.priv, parsed.signerSignPub);
 	let rawBundle: unknown;
 	try {
@@ -219,12 +204,15 @@ export function openBootstrapBundle(
 	if (!parsedBundle.success) throw new Error("bootstrap bundle is invalid");
 	const bundle = parsedBundle.data;
 
+	// The nonce binds the bundle to this enrollment window.
 	if (bundle.nonce !== expectedNonce) throw new Error("bootstrap: nonce does not match this enrollment window");
 
 	const owner = bundle.domain.ownerSignPub;
 	const admission: SignedAdmission = bundle.admission;
+	// Admission signature must use the Domain owner key.
 	if (!verifyAdmission(admission, owner)) throw new Error("bootstrap: admission is not signed by the Domain owner");
 	const a = admission.admission;
+	// Admission binds this Gateway's exact identity and kind.
 	if (
 		a.kind !== "gateway" ||
 		a.gatewayId !== gatewayId ||

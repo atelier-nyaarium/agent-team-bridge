@@ -13,9 +13,6 @@ import com.atelier_nyaarium.switchboard.proto.Protocol
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.decodeFromJsonElement
 
-////////////////////////////////
-//  Per-session ops
-//
 
 suspend fun ConsoleClient.respond(
 	target: String,
@@ -43,14 +40,9 @@ suspend fun ConsoleClient.reloadPlugins(gatewayId: String, opId: String = ambien
 		Protocol.Wire.ConsoleOpKind.RELOAD_PLUGINS,
 	)
 
-/** Capture the target's visible tmux pane for the terminal view. Pass the last hash so the
- * Gateway returns unchanged=true (no ansi) for an idle pane. */
 suspend fun ConsoleClient.peek(target: String, sinceHash: String? = null): ConsolePeekResult =
 	valueResult(sendValueOp(transport.targetGatewayOf(target), ConsoleOp.Peek(target = target, sinceHash = sinceHash)), Protocol.Wire.ConsoleOpKind.PEEK)
 
-/** Send literal text OR a named control key to the target's tmux pane. `submit` (text only, default
- * true) controls the trailing Enter: false types into the composer without submitting. Idempotent
-  */
 suspend fun ConsoleClient.tmuxSend(
 	target: String,
 	text: String? = null,
@@ -64,11 +56,6 @@ suspend fun ConsoleClient.tmuxSend(
 	)
 }
 
-/** Forget a session: kill its tmux and drop its resume record. Idempotent per opId; the Gateway
- * rejects a bare spawn-point (a composite session is required). */
-/** Returns the disposition the Gateway actually APPLIED, or null when it did not say. Null means
- * a Gateway that predates the field: it stripped the request's copy and released the session's
- * work, so a caller that asked to cancel has to be told its choice did not happen. */
 suspend fun ConsoleClient.forget(
 	target: String,
 	boardDisposition: String? = null,
@@ -78,19 +65,10 @@ suspend fun ConsoleClient.forget(
 	return deliveryResult<ConsoleForgetResult>(sendDeliveryOp(sessionAddressOf(target), op, opId), Protocol.Wire.ConsoleOpKind.FORGET).boardDisposition
 }
 
-/** Close a session: kill its tmux but KEEP its resume record (a restart / mop-up), so it stays
- * listed as available. Idempotent per opId; the Gateway rejects a bare spawn-point, refuses while
- * a wake is in flight, and reports a user-launched session rather than a false success. */
 suspend fun ConsoleClient.closeSession(target: String, opId: String = ambient.newOpId()) {
 	requireDelivery(sendDeliveryOp(sessionAddressOf(target), ConsoleOp.CloseSession(target = target), opId), Protocol.Wire.ConsoleOpKind.CLOSE_SESSION)
 }
 
-/** Spawn a new session in a spawn-point project. A `displayLabel` lets the gateway mint the id
- * (the minted id is the tmux name) and returns it; a `sessionName` is adopted as the id (the
- * old form, against a gateway that does not mint). `workdir` is a picked host working directory
- * (absolute or ~-rooted; host target only) - absent keeps the label-derived default. Idempotent
- * per opId (reattaches if it already exists). Returns the gateway's reply; `id` is absent from
- * an older gateway. */
 suspend fun ConsoleClient.createSession(
 	target: String,
 	sessionName: String? = null,
@@ -100,19 +78,10 @@ suspend fun ConsoleClient.createSession(
 ): ConsoleCreateSessionResult =
 	valueResult(sendValueOp(transport.targetGatewayOf(target), ConsoleOp.CreateSession(target = target, sessionName = sessionName, displayLabel = displayLabel, workdir = workdir), opId), Protocol.Wire.ConsoleOpKind.CREATE_SESSION)
 
-/** List the immediate subdirectories of one host directory (the create-session directory
- * picker's type-ahead). Read-only, fresh each call, like peek. The path must be absolute or
- * ~-rooted; an unreadable or missing one returns empty entries rather than an error.
- *
- * `hostTarget` names WHICH machine's filesystem to browse, and is the qualified host spawn point when
- * creating on another gateway. Required rather than defaulted to a bare "host": a bare target resolves
- * to the home gateway, so an omitted one lists THIS machine's filesystem and hands back a path that
- * does not exist on the one the session will run on. */
+// Resolve paths on the host target.
 suspend fun ConsoleClient.listDirs(path: String, hostTarget: String, spawn: String): ConsoleListDirsResult =
 	valueResult(sendValueOp(transport.targetGatewayOf(hostTarget), ConsoleOp.ListDirs(path = path, spawn = spawn)), Protocol.Wire.ConsoleOpKind.LIST_DIRS)
 
-/** Rename a session: set the gateway-authoritative sessionLabel on its record. Idempotent per
- * opId. Returns the label the gateway actually applied (after its sanitize + per-spawn dedup). */
 suspend fun ConsoleClient.renameSession(
 	target: String,
 	sessionLabel: String,
@@ -120,7 +89,6 @@ suspend fun ConsoleClient.renameSession(
 ): ConsoleRenameSessionResult =
 	deliveryResult(sendDeliveryOp(sessionAddressOf(target), ConsoleOp.RenameSession(target = target, sessionLabel = sessionLabel), opId), Protocol.Wire.ConsoleOpKind.RENAME_SESSION)
 
-/** Idempotent per opId. */
 suspend fun ConsoleClient.reportRead(
 	team: String,
 	anchor: ReadAnchor,

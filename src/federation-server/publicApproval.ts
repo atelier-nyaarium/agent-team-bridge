@@ -5,11 +5,7 @@ import {
 	type ConsoleApprovalResult,
 } from "../shared/federation-lifecycle.js";
 
-////////////////////////////////
-//  Interfaces & Types
-
 export interface PublicApprovalParams {
-	// Public join/fetch only.
 	port: number;
 	onApproval: (op: ConsoleApprovalOp) => ConsoleApprovalResult | Promise<ConsoleApprovalResult>;
 	maxBodyBytes?: number;
@@ -19,18 +15,10 @@ export interface PublicApprovalParams {
 	ambient: Clock;
 }
 
-////////////////////////////////
-//  Constants
-
-// Small public body cap.
 const DEFAULT_MAX_BODY_BYTES = 8 * 1024;
-// Fixed-window request caps.
 const DEFAULT_MAX_GLOBAL_PER_WINDOW = 600;
 const DEFAULT_MAX_PER_ID_PER_WINDOW = 60;
 const DEFAULT_RATE_LIMIT_WINDOW_MS = 60_000;
-
-////////////////////////////////
-//  Class
 
 const _MAX_PUBLIC_BODY_BYTES = 65_536;
 
@@ -103,9 +91,6 @@ export class PublicApproval {
 		return json(result, 200);
 	}
 
-	////////////////////////////////
-	//  Functions & Helpers
-
 	private rollWindow(): void {
 		const now = this.now();
 		if (now - this.windowStartedAt >= this.rateLimitWindowMs) {
@@ -127,9 +112,6 @@ export class PublicApproval {
 		return next > this.maxPerIdPerWindow;
 	}
 }
-
-////////////////////////////////
-//  Functions & Helpers
 
 function json(data: unknown, status: number): Response {
 	return new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json" } });

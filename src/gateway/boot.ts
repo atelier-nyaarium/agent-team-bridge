@@ -1,7 +1,3 @@
-// The gateway's boot lifecycle as ONE value: Standalone (no mesh), Arming (enrollment window
-// open), FederationActive (Router connection up). The phase is a value a reader receives, never a
-// null check each site re-derives.
-
 import fs from "node:fs";
 import path from "node:path";
 import type { Ambient } from "../shared/ambient.js";
@@ -26,25 +22,18 @@ import { loadRouterReach, loadRouterTransport, type RouterTransport } from "./ro
 type BoardClient = ReturnType<typeof createBoardClient>;
 type BlobUploader = ReturnType<typeof createBlobUploader>;
 
-////////////////////////////////
-//  Interfaces & Types
-
-/** This Gateway's Domain lifecycle metadata, learned from the Router's register reply. */
 export interface DomainMeta {
 	domainStatus?: string;
 	displayName?: string | null;
 	isAdminDomain?: boolean;
 }
 
-/** What the gateway answers a Router frame with. A frame arriving before these land on the slice
- * is dropped (the console re-polls). */
 export interface RouterFrameHandlers {
 	gatewayRelay: (frame: unknown) => void;
 	valueOp: (frame: unknown) => void;
 	crossDomainHandshake: (frame: unknown) => void;
 }
 
-/** The cross-Domain presence pipeline's own lifecycle, separate from frame dispatch. */
 export interface RouterPresenceHandlers {
 	presenceSource: CrossDomainPresenceSource;
 	stopPresencePushes: () => void;
@@ -55,8 +44,6 @@ export interface RouterHandlers {
 	presence: RouterPresenceHandlers;
 }
 
-/** Everything FederationActive owns. Only domainMeta (the Router's first register reply) and
- * handlers (built against the rebuilt routes) populate after construction. */
 export interface FederationSlice {
 	allowlist: Allowlist;
 	crossDomainPeers: CrossDomainPeers;
@@ -72,10 +59,8 @@ export interface FederationSlice {
 	handlers: RouterHandlers | null;
 }
 
-/** The open enrollment window. Leaving the arming phase is what closes it: both fields die with
- * the state, so install and payload cannot outlive each other. */
 export interface ArmingSlice {
-	/** Opens the sealed bootstrap bundle and installs credentials; returns this gateway's id. */
+	/** Enrollment state owns install and payload together. */
 	install: (frame: unknown) => string;
 	admitPayload: AdmitGatewayPayload;
 }
@@ -87,7 +72,6 @@ export type BootState =
 
 export type BootPhaseDecision = "activate" | "arm" | "standalone";
 
-/** The active gateway's identity facts; `resolve` is the one assembler. */
 export class GatewayBootstrap {
 	private constructor(
 		readonly identity: Identity,
@@ -154,16 +138,12 @@ function resolveDomainId(federationDir: string, allowlist: Allowlist, domainIdEn
 	return raw ? sanitizeDomainId(raw) : null;
 }
 
-////////////////////////////////
-//  Functions & Helpers
-
-/** The whole boot-time decision. Arming requires NO installed transport, since re-arming over one
- * would fork the gateway's identity; a transport with no Domain id boots standalone (re-enroll only). */
 export function decideBootPhase(input: {
 	hasTransport: boolean;
 	hasDomainId: boolean;
 	hasEnrollNonce: boolean;
 }): BootPhaseDecision {
+	// Arming requires no transport to prevent identity forks.
 	if (input.hasTransport && input.hasDomainId) return "activate";
 	if (input.hasEnrollNonce && !input.hasTransport) return "arm";
 	return "standalone";

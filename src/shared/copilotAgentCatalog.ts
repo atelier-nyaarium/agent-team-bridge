@@ -1,6 +1,3 @@
-// Copilot delegation: the owner-scoped catalog of persisted agents, restoring a catalog from
-// durable storage, and the public list projection of one agent's history.
-
 import { z } from "zod";
 import { restoreAgentCatalog } from "./agent-record.js";
 import { CopilotAgentIdSchema, CopilotOpaqueIdSchema } from "./copilotAgentIdentity.js";
@@ -48,16 +45,6 @@ export const CopilotListAgentsResultSchema = z.object({ agents: z.array(CopilotL
 export type CopilotListAgent = z.infer<typeof CopilotListAgentSchema>;
 export type CopilotListAgentsResult = z.infer<typeof CopilotListAgentsResultSchema>;
 
-/**
- * What a producer must supply to be listed, which is deliberately NARROWER than any record it holds.
- *
- * Two producers feed this list and they name their history differently: the gateway's persisted
- * agent calls it `operations`, the session's own runtime calls it `exchanges` and carries the richer
- * Codex shape beside it. Both used to map to the public shape by hand, in their own file, against
- * a `.parse(unknown)` seam the compiler could not see through - so one of them silently stopped
- * matching and `copilotListAgents` threw on every non-empty list, which is what makes a spawned
- * agent's id unrecoverable. Naming the input here is what makes a mismatch a compile error.
- */
 export interface CopilotListAgentSource {
 	agentId: string;
 	agentState: z.infer<typeof CopilotAgentStateSchema>;
@@ -66,8 +53,8 @@ export interface CopilotListAgentSource {
 	operations: ReadonlyArray<{ kind: "start" | "message" | "stop"; state: string; prompt?: string }>;
 }
 
-/** Builds the caller-visible row by explicitly copying only public fields. Sole owner of that set. */
 export function projectCopilotListAgent(agent: CopilotListAgentSource): CopilotListAgent {
+	// Public rows copy only explicitly exposed fields.
 	return CopilotListAgentSchema.parse({
 		agentId: agent.agentId,
 		agentState: agent.agentState,

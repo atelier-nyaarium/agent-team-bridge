@@ -4,9 +4,6 @@ import { safeName, uniqueName } from "../mcp/references/artifactNames.js";
 import type { Resolution } from "../mcp/references/refCoordinates.js";
 import { REF_META_MAX_KEYS } from "../shared/channel-file.js";
 
-////////////////////////////////
-//  Functions & Helpers
-
 function ref(refPath: string, text: string, resolution: Partial<Resolution> = {}): ResolvedRef {
 	const key = `ref://${refPath}${resolution.startLine ? `:S${resolution.startLine}` : ""}`;
 	return {
@@ -21,13 +18,9 @@ function lines(count: number, prefix = "line"): string {
 	return Array.from({ length: count }, (_, i) => `${prefix} ${i + 1}`).join("\n");
 }
 
-/** A file comfortably over the per-file cap. */
 function hugeFile(): string {
 	return lines(Math.ceil(MAX_FILE_BYTES / 10) + 500, "x".repeat(20));
 }
-
-////////////////////////////////
-//  Tests
 
 describe("building the artifact set", () => {
 	it("ships snapshots only - no manifest file exists to adopt or forge", () => {

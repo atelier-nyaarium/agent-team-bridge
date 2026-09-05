@@ -5,7 +5,6 @@ import { sanitizeLabel, sanitizeWorkdirPath } from "../shared/session-sanitize.j
 import { type CopilotCatalogWriter, SessionStore } from "../shared/session-store.js";
 import { fakeAmbient } from "../testing/fakeAmbient.js";
 
-// Scripted ids, then unique fillers.
 function scriptedIds(...ids: string[]) {
 	let extra = 0;
 	return () => ids.shift() ?? `fill${extra++}`;
@@ -120,7 +119,6 @@ describe("SessionStore migration", () => {
 		});
 		const labels = [store.getByTeam("host.aaa111")?.sessionLabel, store.getByTeam("host.bbb222")?.sessionLabel];
 		expect(new Set(labels).size).toBe(2);
-		// The freed label is truly free after a forget (index stayed consistent).
 		store.forget("host.aaa111");
 		expect(store.mint({ spawn: "host", sessionLabel: "dup" }).sessionLabel).not.toBe(
 			store.getByTeam("host.bbb222")?.sessionLabel,
@@ -133,7 +131,6 @@ describe("SessionStore composite keying", () => {
 		const store = new SessionStore({ ambient: processAmbient() });
 		store.adoptById("abc123", { spawn: "host", claudeSessionId: "t-1" });
 		expect(store.getByTeam("host.abc123")).toMatchObject({ id: "abc123", spawn: "host", claudeSessionId: "t-1" });
-		// A reconnect re-confirms the same team; one record, resume id refreshed.
 		store.bindBySegment("host.abc123", { claudeSessionId: "t-2" });
 		expect(store.size).toBe(1);
 		expect(store.getByTeam("host.abc123")?.claudeSessionId).toBe("t-2");
@@ -171,7 +168,6 @@ describe("SessionStore mint / adopt", () => {
 		expect(store.adoptById("mywork", { spawn: "host" })).toBeNull();
 		expect(store.adoptById("host-daemon", { spawn: "host" })).toBeNull();
 		expect(store.adoptById("Bad Name", { spawn: "host" })).toBeNull();
-		// The SAME id under a different spawn is a different session and is allowed.
 		expect(store.adoptById("mywork", { spawn: "recipe-app" })?.id).toBe("mywork");
 	});
 
@@ -179,11 +175,9 @@ describe("SessionStore mint / adopt", () => {
 		const store = new SessionStore({ ambient: processAmbient(), clash: (id) => id === "host-daemon" });
 		const first = store.adoptOrReattach("work", { spawn: "host", sessionLabel: "Work" });
 		expect(first).toMatchObject({ created: true, record: { id: "work", sessionLabel: "Work" } });
-		// A re-dispatch of the same id reattaches (no duplicate, no new label).
 		const again = store.adoptOrReattach("work", { spawn: "host", sessionLabel: "ignored" });
 		expect(again).toMatchObject({ created: false, record: { id: "work", sessionLabel: "Work" } });
 		expect(store.size).toBe(1);
-		// A reserved/clashing id with no record is refused.
 		expect(store.adoptOrReattach("host-daemon", { spawn: "host" })).toBeNull();
 	});
 
@@ -214,13 +208,12 @@ describe("SessionStore mint / adopt", () => {
 		const store = new SessionStore({ ambient: processAmbient(), idGen: scriptedIds("minted1", "minted2") });
 		const first = store.mintOrReattach({ spawn: "host", sessionLabel: "Work", mintedFrom: "conv:op1" });
 		expect(first).toMatchObject({ created: true, record: { id: "minted1", sessionLabel: "Work" } });
-		// A retry with the same provenance reattaches - a fresh mintOpts.sessionLabel is ignored, the
-		// established record's own label wins, same precedent as adoptOrReattach's reattach path.
+		// Matching provenance preserves the label.
 		const retry = store.mintOrReattach({ spawn: "host", sessionLabel: "ignored", mintedFrom: "conv:op1" });
 		expect(retry).toMatchObject({ created: false, record: { id: "minted1", sessionLabel: "Work" } });
 		expect(store.size).toBe(1);
-		// A DIFFERENT provenance under the same spawn mints its own, separate record.
 		const other = store.mintOrReattach({ spawn: "host", sessionLabel: "Other", mintedFrom: "conv:op2" });
+		// Different provenance separates records under one spawn.
 		expect(other).toMatchObject({ created: true, record: { id: "minted2", sessionLabel: "Other" } });
 		expect(store.size).toBe(2);
 	});
@@ -241,7 +234,6 @@ describe("SessionStore confirm-time binding", () => {
 		const store = new SessionStore({ ambient: processAmbient() });
 		store.adoptById("aaa111", { spawn: "host" });
 		store.adoptById("bbb222", { spawn: "host" });
-		// Two records whose live sockets share a team but differ by subId (alias-bound incarnations).
 		store.bindBySegment("host.aaa111", { live: { team: "host.zzz", subId: "s1" } });
 		store.bindBySegment("host.bbb222", { live: { team: "host.zzz", subId: "s2" } });
 		store.clearLive("host.zzz", "s1");
@@ -382,12 +374,15 @@ describe("SessionStore labels and paths", () => {
 	it("hostWorkdirHint pins the workdir to the original label across a rename, else falls back to the label", () => {
 		const store = new SessionStore({ ambient: processAmbient(), idGen: scriptedIds("id1", "id2") });
 		const rec = store.mint({ spawn: "host", sessionLabel: "app", workdirHint: "app" });
-		store.rename("host.id1", "renamed"); // rename mutates only the label
+		// Rename changes only the label.
+		store.rename("host.id1", "renamed");
 		expect(rec.sessionLabel).toBe("renamed");
-		expect(store.hostWorkdirHint(rec)).toBe("app"); // workdir stays pinned to the original
+		// Original workdir stays pinned.
+		expect(store.hostWorkdirHint(rec)).toBe("app");
 		const bare = store.mint({ spawn: "host", sessionLabel: "solo" });
 		expect(bare.workdirHint).toBeUndefined();
-		expect(store.hostWorkdirHint(bare)).toBe("solo"); // no hint -> current label
+		// No hint uses the current label.
+		expect(store.hostWorkdirHint(bare)).toBe("solo");
 	});
 
 	it("a picked workdirPath wins hostWorkdirHint over the label hint and survives a restore", () => {
@@ -454,7 +449,8 @@ describe("SessionStore TTL", () => {
 
 		clock = 100;
 		store.touchLive("host.live01");
-		expect(store.sweep(50)).toEqual(["host.stale1"]); // names exactly what it removed
+		// Returns removed names.
+		expect(store.sweep(50)).toEqual(["host.stale1"]);
 		expect(store.getByTeam("host.live01")).toBeDefined();
 		expect(store.getByTeam("host.stale1")).toBeUndefined();
 	});
@@ -482,7 +478,6 @@ describe("SessionStore TTL", () => {
 
 		const removed = store.sweep(1_000_000, { maxEntries: 2, isLive: (team) => team === "host.oldest" });
 
-		// Live is skipped even though it is the least recently seen, so the next-oldest goes instead.
 		expect(removed).toEqual(["host.middle", "host.newest"]);
 		expect(store.getByTeam("host.oldest")).toBeDefined();
 		expect(store.getByTeam("host.livest")).toBeDefined();

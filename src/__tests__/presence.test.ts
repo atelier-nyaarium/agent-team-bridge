@@ -145,8 +145,7 @@ describe("PresenceFacade offline catalog", () => {
 	});
 
 	it("seen guards only an exact same-name collision, never a project-vs-its-sessions pairing", () => {
-		// A live loose session whose team name happens to literally equal a catalog project's bare
-		// name must not double-list - the one real case `seen` exists for.
+		// `seen` guards exact bare-name collisions only.
 		const registry = makeRegistry({ proj: { readyState: 1, data: { mode: "channel", handshakeConfirmed: true } } });
 		const offlineCatalog = new Map([["proj", "/path/to/proj"]]);
 		const { facade } = makeFacade({ registry, offlineCatalog });
@@ -242,9 +241,7 @@ describe("PresenceFacade class-kill lock: every mutator bumps the plane", () => 
 		expect(facade.snapshot().find((r) => r.team === "proj.main")?.status).toBe("online");
 
 		const before = planeRegistry.version("presence")!.counter;
-		// clearLive is keyed by the DISCONNECTING socket's own (team, subId) - the alias's, not the
-		// record's - matching close()/evictSocket()'s own call shape (sessionStore.clearLive(teamName, subId)
-		// for whichever socket just dropped).
+		// clearLive keys the disconnecting socket's alias.
 		facade.clearLive("proj.alias", "sub-1");
 		expect(planeRegistry.version("presence")!.counter).toBeGreaterThan(before);
 		expect(facade.snapshot().find((r) => r.team === "proj.main")?.status).toBe("available");
@@ -267,9 +264,7 @@ describe("PresenceFacade class-kill lock: every mutator bumps the plane", () => 
 	});
 
 	it("wakeStart alone (no record) marks dirty but produces no visible bump - nothing to show yet", () => {
-		// This is the pre-mint window doWakeTeam describes: a wake attempt in flight for a
-		// send-triggered creation whose record does not exist until the host connectivity check
-		// passes. Nothing regresses - there is genuinely no tile to render until then.
+		// A pre-mint wake has no tile to update.
 		const { facade, planeRegistry } = makeFacade();
 		const before = planeRegistry.version("presence")!.counter;
 		facade.wakeStart("proj.brand-new");
@@ -278,11 +273,7 @@ describe("PresenceFacade class-kill lock: every mutator bumps the plane", () => 
 	});
 
 	it("confirm bumps when it produces a visible status change (a manual --resume re-incarnation)", () => {
-		// confirm()'s liveTeam alias is only consulted by resolveLiveIncarnation when there is no
-		// CANONICAL (directly registered) confirmed socket for the team - the manual `claude
-		// --resume` re-incarnation case (confirm's own doc comment). Registering the alias's own
-		// (team, subId) socket as confirmed makes the alias path resolvable, exercising the real
-		// effect confirm() exists for rather than a no-op call with no matching live registry entry.
+		// confirm resolves an alias only without a canonical socket.
 		const registry = makeRegistry({
 			"proj.alias": { readyState: 1, data: { mode: "channel", handshakeConfirmed: true } },
 		});

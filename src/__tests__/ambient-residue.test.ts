@@ -2,13 +2,9 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { filesUnder, linesMatching } from "./helpers/residue.js";
 
-////////////////////////////////
-//  Constants
-
 const ROOT = path.resolve(import.meta.dirname, "..");
 const FENCED = ["gateway", "federation-server", "shared"];
 
-/** A direct read of the process clock, entropy, ids, or timers. */
 const DIRECT =
 	/\b(Date\.now|performance\.now|crypto\.randomUUID|randomUUID|crypto\.randomBytes|Math\.random)\b|(^|[^.\w"'])randomBytes\b|\bnew Date\(\s*\)|\bnodeRandomBytes\b/;
 const TIMERS = /(^|[^.\w])(setTimeout|setInterval|clearTimeout|clearInterval)\s*\(/;
@@ -24,9 +20,6 @@ const ALLOWED: ReadonlyArray<{ file: string; why: string }> = [
 	{ file: "shared/tmp-files.ts", why: "only the MCP process sweeps a tmp directory" },
 	{ file: "federation-server/owner/ownerLock.ts", why: "heartbeat compared against another process's clock" },
 ];
-
-////////////////////////////////
-//  Tests
 
 describe("ambient residue", () => {
 	const allowed = new Set(ALLOWED.map((entry) => entry.file));

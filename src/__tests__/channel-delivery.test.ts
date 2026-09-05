@@ -10,8 +10,6 @@ interface FakeSocket {
 	ws: ServerWebSocket<WsData>;
 }
 
-/** A socket that records what it was written. `deliveryProtocol` is what separates a plugin that can
- * acknowledge from one that cannot. */
 function socket(deliveryProtocol?: number): FakeSocket {
 	const sent: string[] = [];
 	const ws = {
@@ -63,7 +61,7 @@ describe("ChannelDeliveryCoordinator", () => {
 
 		expect(c.accept(delivery("d1"))).toBe("delivered");
 		expect(s.sent).toHaveLength(1);
-		// The write is not the proof. Only the acknowledgement retires it.
+		// Only acknowledgement retires a held delivery.
 		expect(store.listForTeam("proj.alpha")).toHaveLength(1);
 
 		expect(c.acknowledge("d1")).toBe(true);
@@ -78,9 +76,8 @@ describe("ChannelDeliveryCoordinator", () => {
 	});
 
 	it("retires immediately for a plugin that cannot acknowledge, rather than re-sending forever", () => {
-		// An old plugin never acks. Holding its rows would re-offer them on every reconnect and
-		// duplicate the message, so it keeps exactly the guarantee it has today and no more.
 		const store = new PendingDeliveryStore(undefined, processAmbient());
+		// Legacy listeners cannot provide acknowledgement proof.
 		const legacy = socket(undefined);
 		const c = new ChannelDeliveryCoordinator({ store, registry: registryWith(legacy) });
 
@@ -120,14 +117,11 @@ describe("ChannelDeliveryCoordinator", () => {
 		const c = new ChannelDeliveryCoordinator({ store, registry: registryWith(s) });
 
 		c.accept(delivery("d1"));
-		// The session never acknowledged; a reconnect drains it again.
 		expect(c.drain("proj.alpha")).toBe(1);
 		expect(s.sent).toHaveLength(2);
 	});
 
 	it("refuses rather than accepting a message it cannot hold", () => {
-		// Refusing is honest. Saying "accepted" and then dropping it is the thing this store exists
-		// to stop.
 		const store = new PendingDeliveryStore(undefined, processAmbient(), undefined, 1);
 		const c = new ChannelDeliveryCoordinator({ store, registry: new Map() });
 		expect(c.accept(delivery("d1"))).toBe("queued");

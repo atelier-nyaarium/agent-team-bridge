@@ -17,40 +17,19 @@ import java.util.UUID
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
-////////////////////////////////
-//  Interfaces & Types
-
-/**
- * Credential blob the console holds. Reaches the console bridge through the leaf-pinned Router,
- * which the app token authenticates to.
- *
- * Every field is named and required, so nothing a reader depends on can be absent. [parse] is the
- * one builder over the optional `Provisioning` wire shape, and the one place its optionality is
- * resolved: the device name, the conversation id, and trailing-slash normalization.
- */
 data class ConsoleCredentials(
-	/** The Router endpoint and the leaf fingerprint pinned against it. */
 	val routerUrl: String,
 	val routerCertFp: String,
 	val appToken: String,
 	val device: String,
 	val conversationId: String,
-	/** Present on a friend invite blob: the pending Domain id + one-time invite nonce the app
-	 * first-roots with. Its presence is what distinguishes an invite from an already-rooted admin blob. */
 	val pendingTenant: PendingTenantRef?,
-	/** Present alongside pendingTenant on an enroll invite: the admin's owner keys + Domain and the
-	 * handshakeId + pin seeding the in-person trust compare. The enrollee reads it after first-rooting
-	 * to run the ceremony as enrollee. */
 	val enrollHandshake: EnrollHandshakeRef?,
-	/** The Router's public nonce-gated device-approval ingress. A held device stamps it into the
-	 * authorize-console QR so a fresh device can reach the Router with no creds; absent means this
-	 * network has no public ingress and the Add-a-device entry is disabled. */
 	val deviceApprovalReach: String?,
 ) {
 	companion object {
 		private val DEVICE_DISALLOWED = Regex("[/\\r\\n]")
 
-		/** Reads the store; [PhoneIdentity] persists what a written blob resolves to. */
 		fun parse(blob: String, store: AppStateStore): ConsoleCredentials {
 			val wire = wireJson.decodeFromString<Provisioning>(blob)
 			return ConsoleCredentials(
@@ -65,8 +44,8 @@ data class ConsoleCredentials(
 			)
 		}
 
-		/** Transport may change freely; the credential and the Domain are what identify this console. */
 		internal fun conversationIdFor(wire: Provisioning, store: AppStateStore): String {
+			// The credential and Domain identify the console across transport changes.
 			wire.conversationId?.let { return it }
 			val stored = store.load()?.let { runCatching { wireJson.decodeFromString<Provisioning>(it) }.getOrNull() }
 			val sameConsole = stored != null && stored.appToken == wire.appToken && stored.pendingTenant == wire.pendingTenant
@@ -83,7 +62,6 @@ data class ConsoleCredentials(
 
 data class SendResult(val ok: Boolean, val status: String, val error: String?)
 
-/** The owner enroll envelope: `enrollOp` routes to the Router's enrollment coordinator. */
 @Serializable
 internal data class EnrollEnvelope(
 	val device: String,
@@ -92,68 +70,44 @@ internal data class EnrollEnvelope(
 	val enrollOp: EnrollOp,
 )
 
-/** A retryable bounce body (offline / malformed), distinct from an EnrollResult. */
 @Serializable
-// internal, not private: an inline fn's body cannot see a private-in-file type.
+// Internal for inline function visibility.
 internal data class BounceBody(val error: String? = null, val retryable: Boolean = false)
 
-/** First-root POST body: a top-level `firstRoot` field routes to the Router's first-root intake. */
 @Serializable
 internal data class FirstRootEnvelope(val firstRoot: SignedFirstRoot)
 
-/** Enroll-handshake POST body: a top-level `enrollHandshake` field routes to the Router's broker. */
 @Serializable
 internal data class EnrollHandshakeEnvelope(val enrollHandshake: EnrollHandshakeOp)
 
-/** Roster POST body: a top-level `roster` field routes to the Router's cross-tenant roster handler,
- * which aggregates across Domains a gateway cannot see and answers itself. */
 @Serializable
 internal data class RosterEnvelope(val roster: RosterRequest)
 
-/** Transport-request POST body: a top-level `transport` field routes to the Router's console-bridge
- * transport intake, which holds the gateway-bridge Secret and answers itself. */
 @Serializable
 internal data class TransportEnvelope(val transport: TransportRequest)
 
-/** Device-approval POST body for the AUTHENTICATED held device: a top-level `consoleApproval` field
- * routes to the Router's console-bridge device-approval coordinator (arm/poll/approve/cancel). The
- * public join/fetch steps go to the credential-less ingress instead (see postPublicApproval). */
 @Serializable
 internal data class ConsoleApprovalEnvelope(val consoleApproval: ConsoleApprovalOp)
 
-/** Trust-rendezvous POST bodies: top-level fields routing to the Router's trust broker and pending query. */
 @Serializable
 internal data class TrustHandshakeEnvelope(val trustHandshake: TrustHandshakeOp)
 
 @Serializable
 internal data class TrustPendingEnvelope(val trustPending: TrustPendingRequest)
 
-/** The Router's reply to a provision_tenant enroll op. Mirrors EnrollResult but also carries the minted
- * one-time invite `nonce` the admin's app builds the friend's QR from. The wire EnrollResult schema
- * omits `nonce`, so this is a richer local decode. */
 @Serializable
 data class ProvisionTenantResult(val ok: Boolean, val error: String? = null, val nonce: String? = null)
 
-/** Decode tolerates unknown fields (additive protocol). Encode omits null-defaulted optionals,
- * which is what the gateway's schemas accept. */
+// Unknown fields are tolerated for additive protocol changes.
 internal val wireJson = Json { ignoreUnknownKeys = true }
 
-/** The gateway's marker for a decision that will never apply, as opposed to a failure that might
- * succeed later. Mirrors the prefix consoleHandler.ts stamps on a refusal. */
 const val BOARD_REFUSED_PREFIX = "refused:"
 
-/** A board op the gateway itself decided will never apply. The ONE outcome that retires a queued
- * action; every other failure retries. */
+/** A refusal retires the queued action; other failures retry. */
 class BoardRefused(val reason: String) : Exception(reason)
 
-////////////////////////////////
-//  Functions & Helpers
-
-/** Map a Crypto.SealedEnvelope to the proto.SealedEnvelope wire type. Fields are identical by
- * design; the mapper avoids coupling the two class hierarchies. */
 internal fun Crypto.SealedEnvelope.toProto(): SealedEnvelope =
 	SealedEnvelope(ephemeralPub, nonce, ciphertext, signature)
 
-/** Map a proto.SealedEnvelope to Crypto.SealedEnvelope for unseal calls. */
 internal fun SealedEnvelope.toCrypto(): Crypto.SealedEnvelope =
 	Crypto.SealedEnvelope(ephemeralPub, nonce, ciphertext, signature)

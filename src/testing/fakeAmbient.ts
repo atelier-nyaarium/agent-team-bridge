@@ -1,24 +1,14 @@
-// The harness's ambient: a clock the scenario moves, and timers it can hold.
-
 import crypto from "node:crypto";
 import type { Ambient, IntervalHandle, TimerHandle } from "../shared/ambient.js";
 
-////////////////////////////////
-//  Interfaces & Types
-
 export interface FakeAmbientOptions {
-	/** The clock this one is offset from. Defaults to the process clock. */
 	now?: () => number;
-	/** "real" rides the process timers; "manual" holds every timer until `advance` reaches it. */
 	drive?: "real" | "manual";
-	/** Fixes the entropy stream. Defaults to a fresh draw, so two instances never collide. */
 	seed?: Buffer;
 }
 
 export interface FakeAmbient extends Ambient {
-	/** Runs each timer the move passes at its own deadline, yielding between, and rejects on a throw. */
 	advance(ms: number): Promise<void>;
-	/** Timers still scheduled under manual drive. */
 	scheduled(): number;
 }
 
@@ -28,9 +18,6 @@ interface Scheduled {
 	everyMs: number | null;
 	run: () => void;
 }
-
-////////////////////////////////
-//  Functions & Helpers
 
 const ADVANCE_STEP_LIMIT = 20_000;
 
@@ -85,7 +72,7 @@ export function fakeAmbient(options: FakeAmbientOptions = {}): FakeAmbient {
 		running.delete(id);
 	};
 
-	// Never runs backwards, so a real base drifting under a manual scenario cannot rewind it.
+	// Manual time never moves backwards.
 	const setClock = (to: number): void => {
 		offset = Math.max(offset, to - base());
 	};
@@ -128,7 +115,7 @@ export function fakeAmbient(options: FakeAmbientOptions = {}): FakeAmbient {
 				try {
 					entry.run();
 				} catch (error) {
-					// The rest of the due timers still run, the way real time would have run them.
+					// One timer failure must not stop other due timers.
 					if (failed) console.error(`[fake-ambient] timer threw: ${(error as Error).message}`);
 					else {
 						failed = true;

@@ -11,9 +11,6 @@ import type { TeamInfo } from "../../shared/types.js";
 import type { ConsoleTargets } from "./consoleTargets.js";
 import type { ConsoleRoutes, CrossDomainConsoleHandlers, CrossDomainShareHandlers } from "./consoleTypes.js";
 
-////////////////////////////////
-//  Interfaces & Types
-
 export interface CrossDomainOpsDeps {
 	routes: Pick<ConsoleRoutes, "teams">;
 	targets: ConsoleTargets;
@@ -23,9 +20,6 @@ export interface CrossDomainOpsDeps {
 	unlinkDomain?: (domainId: string) => CrossDomainUnlinkResult;
 	untrustOwner?: (ownerSignPub: string) => CrossDomainUnlinkResult;
 }
-
-////////////////////////////////
-//  Functions & Helpers
 
 function sameTarget(a: CrossDomainShareTarget, b: CrossDomainShareTarget): boolean {
 	if (a.kind !== b.kind) return false;
@@ -72,8 +66,8 @@ export function createCrossDomainHandlers({
 
 		async request(op: Extract<ConsoleOp, { kind: "cross_domain_request" }>) {
 			if (!crossDomain) throw new Error("cross-Domain linking is not available on this Gateway");
-			// The Domain root, not the device.
 			const root = domain?.()?.snapshot.ownerSignPub;
+			// Cross-Domain requests are signed by the Domain root, not the device.
 			if (!root) throw new Error("this Gateway has no Domain owner yet");
 			return crossDomain.request({
 				listeningToken: op.listeningToken,
@@ -102,7 +96,6 @@ export function createCrossDomainHandlers({
 			return { cancelled: crossDomain.cancel({ listeningToken: op.listeningToken, pin: op.pin }) };
 		},
 
-		// The mirror lands first, so a Router record never outlives it; a refused record removes a new mirror.
 		async share(op: Extract<ConsoleOp, { kind: "cross_domain_share" }>) {
 			if (!crossDomainShare) throw new Error("cross-Domain sharing is not available on this Gateway");
 			const canonicalTarget = await assertShareable(op.sessionTarget, op.target);
@@ -110,6 +103,7 @@ export function createCrossDomainHandlers({
 				.listShares()
 				.some((share) => share.sessionTarget === canonicalTarget && sameTarget(share.target, op.target));
 			if (!crossDomainShare.share(canonicalTarget, op.target)) throw new Error(MIGRATING);
+			// Land the mirror before posting its Router record.
 			try {
 				await crossDomainShare.postRecord("cross_domain_share", canonicalTarget, op.target);
 			} catch (error) {

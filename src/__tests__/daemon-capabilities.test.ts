@@ -18,9 +18,6 @@ import {
 import type { DurableStore } from "../shared/durable-store.js";
 import { CapabilityBundleSchema, WsRegisterSchema } from "../shared/schemas.js";
 
-////////////////////////////////
-//  Functions & Helpers
-
 function fakeDurable(seed?: unknown): DurableStore & { written: unknown } {
 	let held = seed;
 	return {
@@ -60,7 +57,7 @@ function serve(env: Record<string, string | undefined>, console_: Capability[]) 
 	daemon.declare(frame.daemonCapabilities ?? []);
 	const consoleStore = new CapabilityStore(fakeDurable(), processAmbient());
 	consoleStore.report("phone-1", console_);
-	// Through JSON and the wire schema, because the route serializes before the MCP parses it back.
+	// Round-trip JSON and schemas to cover the route-to-MCP wire boundary.
 	const wire = JSON.parse(JSON.stringify({ console: consoleStore.snapshot(), daemon: daemon.snapshot() }));
 	return unionCapabilities(CapabilityBundleSchema.parse(wire));
 }
@@ -70,9 +67,6 @@ afterEach(() => {
 });
 
 const CODEX = { id: CODEX_AGENT_CAPABILITY_ID, instructions: "Delegate like so." };
-
-////////////////////////////////
-//  Tests
 
 describe("what the daemon announces", () => {
 	it("declares nothing when neither CLI is installed", () => {
@@ -132,9 +126,7 @@ describe("folding the bundle into one answer", () => {
 	});
 
 	it("does not let one source's empty declaration answer for the other's ids", () => {
-		// A purged gateway leaves the console with no opinion while the daemon still declares, and its
-		// declaration is empty on every install that has not switched Codex on. Reported as complete,
-		// that reads as an authoritative "nothing is enabled" about capabilities it cannot see.
+		// An empty known source cannot answer for an unreported source.
 		const daemonSaysNothing = { known: true, capabilities: [], clientVersions: [] };
 
 		expect(unionCapabilities({ console: UNREPORTED_CAPABILITIES, daemon: daemonSaysNothing }).known).toBe(false);
@@ -199,9 +191,8 @@ describe("what switchboard_capabilities reports", () => {
 	});
 });
 
+// Exercise the joins between declaration, storage, wire, and fold.
 describe("a declaration's whole journey to a session", () => {
-	// The units above each cover one hop. This covers the joins between them, where a shape agreed
-	// at both ends can still be dropped in the middle.
 	it("leaves the console's capability alone when the daemon has nothing to declare", () => {
 		const served = serve(envWithExecutables(), [{ id: "designer" }]);
 

@@ -63,8 +63,6 @@ describe("federation router surfaces", () => {
 		).toBe(401);
 	});
 
-	// reach and gateways are configuration and a roster, not state a signer could contest, so the
-	// app token is their whole gate. Behind it, the answers are what the Router was handed.
 	it("serves reach and gateways behind the app token, publicPort only when advertised", async () => {
 		const surface = new ConsoleSurface({
 			port: 0,

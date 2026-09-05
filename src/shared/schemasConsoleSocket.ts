@@ -5,14 +5,9 @@ export const ConsoleRefusalReasonSchema = z
 	.enum(["cursor_stale"])
 	.meta({ id: "ConsoleRefusalReason", catalog: "reason" });
 
-////////////////////////////////
-//  Console socket frames
-
-/** Plane-only socket mode. */
 export const CONSOLE_PLANES_ONLY = "planes";
 
 // Plane-only sockets register no inbox consumer.
-
 export const ConsoleHelloFrameSchema = z
 	.object({
 		type: z.literal("hello"),

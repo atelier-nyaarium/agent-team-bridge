@@ -16,26 +16,13 @@ import {
 import type { SessionRecord } from "../shared/session-store.js";
 import { type CodexAcceptanceResult, type CodexApplication, CodexTransitionError } from "./codexAgentTypes.js";
 
-////////////////////////////////
-//  Interfaces & Types
-
-/** What one delivery receipt means for its record, decided pure so the one decision that lets the
- * daemon retire its only copy is testable without a daemon. */
 export type CodexAcceptanceVerdict =
-	/** Already accepted and the receipt matches it byte for byte. */
 	| { kind: "replayed" }
-	/** Accepted but never fenced; only reconciliation can say which child that acceptance came from. */
 	| { kind: "unplaceable" }
-	/** Already accepted and the receipt CONTRADICTS it. */
 	| { kind: "conflict" }
-	/** The receipt will never apply to this record; settle it so the daemon may retire it. */
 	| { kind: "refuse" }
-	/** This gateway cannot place the receipt YET; hold it, never acknowledge it. */
 	| { kind: "unresolved" }
 	| { kind: "accept"; steeredIntoSettledTurn: boolean };
-
-////////////////////////////////
-//  Functions & Helpers
 
 export function validateTimestamp(at: number): number {
 	if (!Number.isSafeInteger(at) || at < 0) {
@@ -52,29 +39,21 @@ export function sameTarget(left: CodexResolvedTarget | undefined, right: CodexRe
 	return left?.kind === right.kind && left.targetId === right.targetId && left.cwd === right.cwd;
 }
 
-/** Only a REQUESTED delivery blocks the next one. An indeterminate one is already settled as far as
- * this gateway is concerned, and counting it would wedge the agent permanently: nothing ever
- * transitions an indeterminate operation, so a single unprovable delivery would refuse every
- * follow-up for the agent's whole life. Reconciliation, not this guard, is what restores truth. */
+// Count only requested operations or one refusal wedges the agent.
 export function hasPendingPrompt(agent: CodexPersistedAgent): boolean {
 	return agent.operations.some(
 		(operation) => (operation.kind === "start" || operation.kind === "message") && operation.state === "requested",
 	);
 }
 
-/** The frame does not describe anything this gateway owns, and never will. Safe to retire. */
 export function ignore(reason: string): CodexApplication {
 	return { disposition: "ignored", reason };
 }
 
-/** The frame is fine; building a record from it failed. Never retired, because the failure is this
- * gateway's and a retry or a reconcile may still place it. */
 export function failed(reason: string): CodexApplication {
 	return { disposition: "failed", reason };
 }
 
-/** Codex's binding of the shared append rule. The window policy and the truncation marker live in
- * `appendAgentActivity`; only the cap is Codex's to name. */
 export function appendActivity(
 	existing: readonly CodexStoredActivity[],
 	itemId: string,
@@ -83,8 +62,6 @@ export function appendActivity(
 	return appendAgentActivity(existing, itemId, text, CODEX_ACTIVITY_MAX_ITEMS) as CodexStoredActivity[] | null;
 }
 
-/** Clear the recovery flag Phase 2 sets on a delivery whose acceptance was never fenced. A
- * reconciled agent has a live fence again, which is exactly what the flag stood in for. */
 export function refenceUnverified(
 	operations: readonly CodexStoredOperation[],
 	fence: CodexReconciliationFence,
@@ -96,8 +73,6 @@ export function refenceUnverified(
 	);
 }
 
-/** What one delivery receipt means for its record. Every deny path picks between refuse (the
- * receipt will NEVER apply here, retire it) and unresolved (cannot place it YET, hold it). */
 export function decideAcceptance(args: {
 	current: CodexPersistedAgent;
 	operation: CodexStoredOperation;
@@ -108,8 +83,7 @@ export function decideAcceptance(args: {
 }): CodexAcceptanceVerdict {
 	const { current, operation, exchange, input, resolvedTarget, fence } = args;
 	if (operation.state === "accepted") {
-		// Accepted, but never fenced. Only reconciliation can say which child that acceptance came
-		// from, so this receipt is unplaceable rather than wrong.
+		// Unfenced acceptance needs reconciliation before placement.
 		if (operation.acceptanceUnverified) return { kind: "unplaceable" };
 		if (
 			operation.turnId !== input.turnId ||
@@ -127,9 +101,6 @@ export function decideAcceptance(args: {
 	if (operation.state !== "requested" || exchange.status !== "requested") return refuse;
 	if (operation.kind === "start" && input.delivery !== "started") return refuse;
 
-	// The turn this delivery was aimed at finished while the daemon was working on it. Both
-	// deliveries reach here: the daemon may have started a fresh turn after seeing the old one end,
-	// or it may have steered successfully and had its receipt overtaken by that turn's terminal.
 	const expectedTurn = operation.preDispatch.turnId
 		? current.turns.find((turn) => turn.id === operation.preDispatch.turnId)
 		: undefined;
@@ -138,9 +109,6 @@ export function decideAcceptance(args: {
 	const afterSettlement =
 		operation.kind === "message" && operation.preDispatch.agentState === "working" && expectedSettled;
 	const startedAfterSettlement = afterSettlement && input.delivery === "started";
-	// A steer that landed in the settled turn IS a delivery: the prompt reached Codex and that
-	// turn's answer is its answer. It must not reopen the turn, which is the one way recording it
-	// could do damage.
 	const steeredIntoSettledTurn = afterSettlement && input.delivery === "steered" && input.turnId === expectedTurn?.id;
 
 	if (
@@ -158,9 +126,6 @@ export function decideAcceptance(args: {
 		return refuse;
 	}
 	if (startedAfterSettlement || steeredIntoSettledTurn) {
-		// The record has necessarily moved: the terminal that settled the expected turn cleared the
-		// active turn and advanced the fence. Requiring nothing to have changed would refuse the very
-		// case these branches exist for, so the test is what the settlement itself must have produced.
 		if (
 			current.agentState !== "idle" ||
 			current.activeTurnId !== undefined ||
@@ -177,8 +142,7 @@ export function decideAcceptance(args: {
 	) {
 		return refuse;
 	} else if (!advancesFence(operation.preDispatch.fence, fence)) {
-		// A receipt from a different supervisor or generation is not a mismatch; it is a receipt this
-		// gateway cannot place yet. Acknowledging it would retire the daemon's only copy.
+		// Do not acknowledge receipts from an older supervisor fence.
 		return { kind: "unresolved" };
 	}
 	const existingTurn = current.turns.find((turn) => turn.id === input.turnId);
@@ -195,8 +159,6 @@ export function decideAcceptance(args: {
 	return { kind: "accept", steeredIntoSettledTurn };
 }
 
-/** The agent with one more commentary item folded into an in-progress turn; unchanged when the
- * item is already held. */
 export function withActivity(
 	agent: CodexPersistedAgent,
 	turnIndex: number,
@@ -216,7 +178,6 @@ export function withActivity(
 	});
 }
 
-/** The agent with a turn settled by its terminal, idle again with the fence advanced. */
 export function withTerminal(
 	agent: CodexPersistedAgent,
 	turnIndex: number,
@@ -242,8 +203,6 @@ export function withTerminal(
 		default:
 			settled = { ...base, state: "interrupted" };
 	}
-	// An interrupt that lost the race to completion is still a finished stop, so the ending the turn
-	// actually had settles it either way rather than only the interrupted one.
 	const operations = agent.operations.map((operation) =>
 		operation.kind === "stop" && operation.state === "requested" && operation.turnId === turn.id
 			? { ...operation, state: "accepted" as const, acceptanceFence: fence, updatedAt: at }
@@ -261,8 +220,6 @@ export function withTerminal(
 	});
 }
 
-/** `unresolved` marks the ones reconciliation could still make sense of, as opposed to a receipt
- * that genuinely does not describe this record. Only the first may withhold an acknowledgement. */
 export function indeterminate(
 	owner: SessionRecord,
 	agent: CodexPersistedAgent,

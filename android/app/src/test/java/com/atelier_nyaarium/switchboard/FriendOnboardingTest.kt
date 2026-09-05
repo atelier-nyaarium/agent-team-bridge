@@ -7,11 +7,6 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/**
- * Pins the pure friend-onboarding decision logic (the first-root branch, the reject humanization,
- * and the hosted-tenant state machine). The crypto/signing-bytes are pinned separately by
- * ProvisionOpsTest's cross-runtime vectors; this covers the app-side glue around them.
- */
 class FriendOnboardingTest {
 	private fun prov(pending: PendingTenantRef?) =
 		ConsoleCredentials(
@@ -28,7 +23,6 @@ class FriendOnboardingTest {
 	private fun team(name: String, domainId: String?, status: String = "online", displayName: String? = null) =
 		testTeam(name = name, status = status, mode = "channel", domainId = domainId, displayName = displayName)
 
-	// -- The first-root decision (blob pendingTenant branch) --
 
 	@Test
 	fun pendingBlobRootsAtItsNonce() {
@@ -41,18 +35,14 @@ class FriendOnboardingTest {
 
 	@Test
 	fun ordinaryBlobIsNotPending() {
-		// No pendingTenant: an already-rooted admin blob just provisions the console.
 		assertTrue(FriendOnboarding.decide(prov(null), alreadyRooted = false) is FirstRootDecision.NotPending)
 	}
 
 	@Test
 	fun alreadyRootedShortCircuits() {
-		// A reconnect after a successful root must NOT re-POST first_root, even with the blob still
-		// carrying the (now spent) pendingTenant.
 		assertTrue(FriendOnboarding.decide(prov(PendingTenantRef("abc123", "n")), alreadyRooted = true) is FirstRootDecision.NotPending)
 	}
 
-	// -- The reject humanization (UX error states) --
 
 	@Test
 	fun opaqueRejectMapsToFreshCodeGuidance() {
@@ -84,11 +74,9 @@ class FriendOnboardingTest {
 		assertTrue(FriendOnboarding.humanizeFirstRootError(null).isNotEmpty())
 	}
 
-	// -- The transient-vs-terminal first-root classification (auto-retry vs dead end) --
 
 	@Test
 	fun expiredInviteIsTerminal() {
-		// The root was decided (used/expired nonce): waiting will not help, so it is terminal.
 		val r = FriendOnboarding.classifyFirstRootError("invalid or expired invite")
 		assertFalse(r.transient)
 		assertTrue(r.message.contains("new one", ignoreCase = true))
@@ -103,8 +91,6 @@ class FriendOnboardingTest {
 
 	@Test
 	fun clockSkewRejectIsTransientWithASyncHint() {
-		// The Router's "admin op is stale" is a >2min device clock skew; the latch stays false and the
-		// poll loop re-attempts, so it must classify transient (auto-retry) with a clock-sync hint.
 		val r = FriendOnboarding.classifyFirstRootError("admin op is stale")
 		assertTrue(r.transient)
 		assertTrue(r.message.contains("clock", ignoreCase = true))
@@ -112,8 +98,6 @@ class FriendOnboardingTest {
 
 	@Test
 	fun persistContentionIsTransientTryAgain() {
-		// A CAS persist contention at the Router is momentary; classify transient so the UI reflects the
-		// auto-retry rather than a hard failure.
 		val r = FriendOnboarding.classifyFirstRootError("persist failed: conflict")
 		assertTrue(r.transient)
 		assertTrue(r.message.contains("retry", ignoreCase = true) || r.message.contains("moment", ignoreCase = true))
@@ -121,40 +105,31 @@ class FriendOnboardingTest {
 
 	@Test
 	fun unknownRejectIsTransientAndPassesThrough() {
-		// An unrecognized cause may clear on the next attempt (fresh timestamp + nonce), so it is
-		// transient and carries the original text for diagnosis.
 		val r = FriendOnboarding.classifyFirstRootError("some odd transport failure")
 		assertTrue(r.transient)
 		assertTrue(r.message.contains("some odd transport failure"))
 	}
 
-	// -- The no-gateway empty-board split (friend awaiting host vs admin add-a-gateway) --
 
 	@Test
 	fun aGatewayPresentIsNotANoGatewayState() {
-		// No no-gateway error: the board is connecting/connected, not in either onboarding branch.
 		assertEquals(NoGatewayState.NONE, FriendOnboarding.noGatewayState(noGateway = false, firstRooted = false))
 		assertEquals(NoGatewayState.NONE, FriendOnboarding.noGatewayState(noGateway = false, firstRooted = true))
 	}
 
 	@Test
 	fun firstRootedWithNoGatewayAwaitsAHost() {
-		// A friend who just first-rooted has no host yet: point at the Setting-up-a-host manual.
 		assertEquals(NoGatewayState.AWAITING_HOST, FriendOnboarding.noGatewayState(noGateway = true, firstRooted = true))
 	}
 
 	@Test
 	fun noGatewayWithoutAFirstRootIsTheAdminCta() {
-		// An admin who never first-rooted just needs to admit a Gateway.
 		assertEquals(NoGatewayState.NEEDS_GATEWAY, FriendOnboarding.noGatewayState(noGateway = true, firstRooted = false))
 	}
 
-	// -- The rename-before-discovery gate (Domain not yet confirmed) --
 
 	@Test
 	fun renameWaitsWhileDomainUnconfirmed() {
-		// A device that first-rooted its own Domain but has no confirmed local session yet (null) cannot
-		// sign a rename over a real Domain, so Save is gated.
 		assertTrue(FriendOnboarding.renameAwaitsDiscovery(firstRooted = true, domainId = null))
 	}
 
@@ -165,15 +140,12 @@ class FriendOnboardingTest {
 
 	@Test
 	fun notFirstRootedRenameIsNeverGated() {
-		// A device that never first-rooted is not gated even before a Domain is confirmed.
 		assertFalse(FriendOnboarding.renameAwaitsDiscovery(firstRooted = false, domainId = null))
 	}
 
-	// -- The hosted-tenant state machine (awaiting -> offline -> online) --
 
 	@Test
 	fun noSessionsIsAwaitingSetup() {
-		// The friend has not first-rooted + brought a gateway online yet: nothing in discovery.
 		val teams = listOf(team("local-gw/app", "alice"))
 		assertEquals(HostedTenantState.AWAITING_SETUP, FriendOnboarding.hostedState("guest1", teams))
 	}
@@ -193,7 +165,6 @@ class FriendOnboardingTest {
 		assertEquals(HostedTenantState.ONLINE, FriendOnboarding.hostedState("guest1", teams))
 	}
 
-	// -- The propagated display name in the Peers list --
 
 	@Test
 	fun peersShowTheFriendsDisplayName() {
@@ -212,8 +183,6 @@ class FriendOnboardingTest {
 
 	@Test
 	fun peerWithNoNameYetFallsBackToNull() {
-		// A peer present only in the peer set (no discovery session) has no displayName yet; the UI
-		// falls back to the opaque domainId.
 		val peers = CrossDomainLink.mergeLinkedDomains(
 			teams = emptyList(),
 			peerOwners = mapOf("dave" to "dave-owner"),

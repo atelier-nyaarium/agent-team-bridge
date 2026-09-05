@@ -21,19 +21,15 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.updateAndGet
 import kotlinx.coroutines.launch
 
-/** Mailbox entry with cursor sequence. */
 
 internal data class Drained(val entry: MailboxEntry) : SyncEntry {
 	override val seq: Long get() = entry.seq
 }
 
-/** In-memory provisioning state. */
 internal interface ClearsOnReprovision {
-	/** Clear in-memory state. */
 	suspend fun clearInMemory()
 }
 
-/** Chat state over a ConsoleClient. */
 data class FocusIntent(
 	val screen: String,
 	val terminalTeam: String? = null,
@@ -54,10 +50,8 @@ class ChatRepository(
 	private var ownerOpsValue: OwnerOps? = null
 	private var keyDeliveryBoot: PhoneBootstrap? = null
 	private var keyDeliveryValue: KeyDeliveryOps? = null
-	/** TTS playback engine. */
 	val stts = SttsPlayer(filesDir)
 
-	/** Task board state. */
 	val board = com.atelier_nyaarium.switchboard.board.BoardManager(store)
 
 	@Volatile internal var homeGatewayId: String = store.loadGatewayId()
@@ -66,14 +60,13 @@ class ChatRepository(
 	internal var onScheduledResult: (com.atelier_nyaarium.switchboard.proto.ScheduledResultRow) -> Unit = {}
 	internal var onBoardObservation: (com.atelier_nyaarium.switchboard.proto.BoardObservationRow) -> Unit = {}
 
-	/** JSON persistence codec. */
 	internal val persistence = ChatPersistence(store)
 	internal val mutationJournal = MutationJournal(filesDir)
 
-	// Migrate before loading persisted threads.
 	init {
+		// Migrate before loading persisted threads.
 		if (store.migrateSchemaIfNeeded()) {
-			// Purge file-backed migration caches.
+			// Purge caches invalidated by schema migration.
 			stts.purgeAll()
 			Attachments.purgeAll(filesDir)
 		}
@@ -104,22 +97,17 @@ class ChatRepository(
 	)
 	val state: StateFlow<ChatState> = _state
 
-	// Address helpers.
 
-	/** Local Domain id for address parsing. */
 	internal fun localDomain(): String = provisioningHost.localDomain()
 
 	internal fun transport(): ConsoleRouterTransport = provisioningHost.transport()
 
-	/** Canonicalize a target address. */
 	internal fun canonicalTarget(team: String): String =
 		runCatching { parseTarget(team, localDomain(), homeGatewayId).canonical }.getOrDefault(team)
 
-	/** Resolve a sender address. */
 	internal fun fromCanonical(from: String): String? =
 		runCatching { parseTarget(from, localDomain(), homeGatewayId).canonical }.getOrNull()
 
-	/** This device's session address. */
 	internal fun thisDeviceAddress(): Address? =
 		runCatching {
 			Address.local(localDomain(), homeGatewayId, ownerKeyId(federation.ownerSignPub()), Protocol.DEFAULT_SESSION)
@@ -170,14 +158,12 @@ class ChatRepository(
 	internal val ownerOps: OwnerOps get() = ownerOpsOrNull() ?: error("Domain not yet confirmed by a local session")
 	internal val keyDelivery: KeyDeliveryOps get() = keyDeliveryOrNull() ?: error("Domain not yet confirmed by a local session")
 
-	/** Board sealing context. */
 	internal fun boardSealing() = provisioningHost.boardSealing()
 
 	init {
 		board.sealing = { boardSealing() }
 	}
 
-	/** Foreground Router push channel. */
 	internal val socket: ConsoleSocketDriver = ConsoleSocketDriver(
 		coordinator = transportCoordinator,
 		newClient = { listener ->
@@ -208,7 +194,6 @@ class ChatRepository(
 			if (isVisible && transportCoordinator.link() != ConsoleLink.SOCKET) runCatching { socket.connect() }
 		} },
 				onWelcome = { gen, welcome ->
-					// The welcome carries versions only; fetch the payloads.
 					repoScope.launch(Dispatchers.IO) { drain.applyWelcomePlanes(welcome.versions) }
 					val epoch = welcome.migrationEpoch ?: 0L
 				if (epoch != 0L) repoScope.launch {
@@ -226,24 +211,20 @@ class ChatRepository(
 			},
 	)
 
-	/** Board Router writer. */
 	val boardRouter = BoardRouterWriter(
 		board = board,
 		signAndPost = { op, opId -> client().postOwnerOp(ownerOps.sign(op, opId) ?: error("cannot sign board op")) ?: error("owner op post failed") },
 		decode = { wireJson.decodeFromJsonElement(BoardWriteResult.serializer(), it) },
 	)
 
-	// Process-lifetime repository scope.
 	internal val repoScope = CoroutineScope(
 		SupervisorJob() + Dispatchers.IO +
 			CoroutineExceptionHandler { _, e ->
 				DebugLog.log("Repo", "uncaught in repo scope: ${e.javaClass.simpleName}: ${e.message}")
-				// Surface background failures in state.
 				_state.update { it.copy(error = "Something went wrong: ${e.javaClass.simpleName}") }
 			},
 	)
 
-	/** Run repository work on its scope. */
 	fun command(block: suspend ChatRepository.() -> Unit) {
 		repoScope.launch { block() }
 	}
@@ -257,13 +238,10 @@ class ChatRepository(
 		}
 	}
 
-	// Domain trust anchor.
 
-	/** Apply the keyring snapshot. */
 	internal fun applyDomainSync(snapshot: com.atelier_nyaarium.switchboard.proto.DomainSnapshot, version: String) =
 		provisioningHost.applyDomainSync(snapshot, version)
 
-	/** Refresh admitted Gateways. */
 	internal fun refreshAdmittedGateways() = provisioningHost.refreshAdmittedGateways()
 	internal val ownerFacts = OwnerFacts(this)
 	internal val gatewayEnroll = GatewayEnrollment(this)
@@ -278,17 +256,14 @@ class ChatRepository(
 	internal val presence = PresenceOps(presenceHost)
 	internal val sessions = SessionOps(ChatRepositorySessionHost(this), ports, mutationJournal)
 	internal val renameOps = RenameOps(ChatRepositoryRenameHost(this))
-	// Keep staged invite secrets in memory only.
+	// Staged invite secrets remain memory-only.
 	internal val enrollInvites = java.util.concurrent.ConcurrentHashMap<String, EnrollInvite>()
 	internal val approvalNonces = mutableMapOf<String, String>()
 	@Volatile internal var sttsClient: SttsClient? = null
 
-	// Re-provision wipe.
-	/** State holders cleared by [clearAll]. */
 	internal val clearedOnReprovision: List<ClearsOnReprovision>
 		get() = listOf(this, board, presence, trust, drain, playback)
 
-	/** Clear this class's state. */
 	override suspend fun clearInMemory() {
 		invalidateClient()
 		sttsClient = null
@@ -309,10 +284,8 @@ class ChatRepository(
 	val isVisible: Boolean get() = focusHost.visible
 	// Tombstones mask stale team snapshots.
 	internal val forgottenUntil = java.util.concurrent.ConcurrentHashMap<String, Long>()
-	// Rows reconciled once per process.
 	internal val reconciled = java.util.Collections.synchronizedSet(mutableSetOf<String>())
 
-	// Before the held roster lands below.
 	init {
 		sessions.armPendingForgetTombstones()
 	}
@@ -321,12 +294,10 @@ class ChatRepository(
 		get() = focusHost.currentFocus
 		set(value) { focusHost.currentFocus = value }
 
-	/** Poll loop and mailbox drain. */
 	internal val drain = PollDrain(drainHost, ports)
 
-	// The held roster, before the first poll or welcome. Without it a restart shows nothing until the
-	// Router's presence version moves, and an unchanged version is skipped as stale.
 	init {
+		// Restore the held roster before the first poll.
 		repoScope.launch(Dispatchers.IO) { presence.restoreLastProjection() }
 	}
 
@@ -408,17 +379,14 @@ class ChatRepository(
 		sessions = goalCollaborators,
 	)
 
-	/** Inbound message callback. */
 	var onInbound: ((team: String, messages: List<Message>) -> Unit)? = null
 
-	/** Enter foreground polling. */
 	fun onForeground() = focusHost.onForeground()
 
 	fun onBackground() = focusHost.onBackground()
 
 	fun kickPoll() = focusHost.kickPoll()
 
-	/** Declare current UI focus. */
 	internal fun declareFocus(focus: FocusIntent) = focusHost.declareFocus(focus)
 
 	internal fun client(): ConsoleClient = provisioningHost.client()
@@ -427,13 +395,10 @@ class ChatRepository(
 
 	internal fun invalidateClient() = provisioningHost.invalidateClient()
 
-	/** Capabilities reported at register. */
 	@Volatile var enabledPlugins: (() -> List<com.atelier_nyaarium.switchboard.proto.EnabledPlugin>)? = null
 
-	// Retry reports missing from the Gateway.
 	@Volatile internal var pluginReportPending = false
 
-	/** User-selected SAF tree. */
 	var saveTreeUri: String
 		get() = store.saveTreeUri
 		set(value) {
@@ -442,7 +407,6 @@ class ChatRepository(
 
 	internal fun List<Team>.withoutTombstoned(): List<Team> = filterTombstoned(this, forgottenUntil, System.currentTimeMillis())
 
-	/** Seed emulator state only. */
 	fun seedSandbox(
 		teams: List<Team>,
 		threads: Map<String, List<Message>>,
@@ -457,7 +421,6 @@ class ChatRepository(
 		_state.update { it.copy(biometricLock = enabled) }
 	}
 
-	/** Append inbound messages. */
 	internal fun append(team: String, msg: Message): Long {
 		var newId = 0L
 		val threads = _state.updateAndGet { s ->
@@ -470,11 +433,9 @@ class ChatRepository(
 		return newId
 	}
 
-	/** Prepare indexes before state commit. */
 	internal fun appendInbound(team: String, msg: Message, beforeCommit: () -> Unit = {}): Boolean {
 		if (!msg.isPeer) _state.update { it.copy(wakingTeams = it.wakingTeams - team) }
 		if (msg.seq > 0) {
-			// Deduplicate by mailbox epoch and sequence.
 			var folded = false
 			val updated = _state.updateAndGet { s ->
 				val thread = s.threads[team].orEmpty()
@@ -483,7 +444,6 @@ class ChatRepository(
 					folded = true
 					val old = thread[idx]
 						val merged = msg.copy(id = old.id, files = Attachments.mergeSentEchoFiles(old.files, msg.files).files)
-						// Preserve landed attachment paths.
 					val next = thread.toMutableList().also { it[idx] = merged }
 					s.copy(threads = s.threads + (team to next)).recomputeUnread(team, next)
 				} else {
@@ -501,12 +461,10 @@ class ChatRepository(
 		return true
 	}
 
-	/** Fold a sent echo. */
 	internal fun reconcileSent(team: String, echo: Message) {
 		var handled = false
 		var deleteSrcs: List<String> = emptyList()
 			val threads = _state.updateAndGet { s ->
-				// Reset captured values on every CAS attempt.
 			val thread = s.threads[team].orEmpty()
 			val idx = sentEchoMatch(thread, echo)
 			if (idx >= 0) {
@@ -524,7 +482,6 @@ class ChatRepository(
 		}.threads
 		if (handled) {
 			persistence.persistThreads(threads)
-				// Delete orphaned attachment copies.
 				attachments.scheduleAttachmentDelete(deleteSrcs)
 		} else {
 			append(team, echo)
@@ -532,47 +489,32 @@ class ChatRepository(
 	}
 
 	internal companion object {
-		/** Silent mode, distinct from default sound. */
 		const val CHIME_SILENT = "silent"
 
 		const val POLL_INTERVAL_MS = 5_000L
-		// Server-held poll cadence.
 		const val LONG_POLL_HOLD_MS = 40_000L
-		// Alarm backstop slack.
 		const val PARK_SLACK_MS = 5_000L
 		const val BACKGROUND_TICK_MS = 30_000L
-		// Outlast one teams request.
 		const val FORGET_TOMBSTONE_MS = ConsoleHttp.DEFAULT_OWNER_OP_TIMEOUT_MS + 5_000L
-		// Re-send a forget the Gateway did not confirm.
 		internal const val FORGET_RETRY_MS = 30_000L
-		// Total attachment cap from wire protocol.
 		const val MAX_OUTGOING_BYTES = Protocol.MAX_BLOB_BYTES
 
-		// Stop repeated attachment requests.
 		internal const val MAX_ATTACHMENT_FETCH_TRIES = 5
 
-		// Retain transfer residue through active uploads.
 		internal const val STALE_BLOB_MAX_AGE_MS = 24 * 60 * 60 * 1000L
 
-		/** Board attachment retry limit. */
 		internal const val BOARD_FETCH_GIVE_UP = 3
 
-		/** Confirmed-absent threshold. */
 		internal const val BOARD_FETCH_DEAD_AFTER = 3
 
-		// Scheduled-send retry delay.
 		internal const val SCHEDULED_SEND_RETRY_DELAY_MS = 5 * 60_000L
 
-		// Scheduler wiring wait.
 		internal const val SCHEDULER_WIRE_WAIT_MS = 5_000L
 
-		// Bound scheduled-send horizon.
 		internal const val SCHEDULED_SEND_MAX_HORIZON_MS = 30L * 24 * 60 * 60_000L
 
-		// Cover cold session creation.
 		internal const val SPAWN_RETRY_WINDOW_MS = 40_000L
 
-		// Detect instant empty polls.
 		const val INSTANT_EMPTY_THRESHOLD_MS = 3_000L
 
 		init {

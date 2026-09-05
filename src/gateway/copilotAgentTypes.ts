@@ -3,9 +3,6 @@ import type { CopilotCatalogWriter, SessionRecord, SessionStore } from "../share
 import type { AgentTransitionErrorCode } from "./agentRouteEnvelope.js";
 import type { SessionAuthority } from "./sessionAuthority.js";
 
-////////////////////////////////
-//  Interfaces & Types
-
 export interface CopilotAgentServiceDeps {
 	auth: SessionAuthority;
 	sessionStore: SessionStore;
@@ -56,9 +53,6 @@ export type CopilotApplication =
 	| { disposition: "ignored"; reason: string }
 	| { disposition: "reconcile"; owner: SessionRecord; agent: CopilotPersistedAgent }
 	| { disposition: "failed"; reason: string };
-
-////////////////////////////////
-//  Class
 
 export class CopilotTransitionError extends Error {
 	constructor(

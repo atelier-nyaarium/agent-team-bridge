@@ -45,7 +45,7 @@ describe("WakeCoordinator", () => {
 
 	it("ackReceived shortens an in-flight wait so a started-but-unregistered team fails fast, still ambiguous", async () => {
 		const coord = new WakeCoordinator(processAmbient());
-		// 10s base wait; if ackReceived did not shorten it, this would exceed the test timeout.
+		// Verifies the shortened deadline.
 		const p = coord.waitFor("alpha", 10_000);
 		coord.ackReceived("alpha", 10);
 		await expect(p).resolves.toEqual({ ok: false, errorKind: "timeout" });
@@ -79,13 +79,11 @@ describe("WakeCoordinator", () => {
 	});
 
 	it("ackReceived can only bring the deadline in, never push it out", async () => {
-		// Asserted on TIMING, not on the value: both the clamped and the unclamped path resolve to the
-		// same timeout result, so only the clock tells them apart.
+		// Timing distinguishes clamped from unclamped deadlines.
 		vi.useFakeTimers();
 		try {
 			const coord = new WakeCoordinator(processAmbient());
-			// A window wider than what the wait has left. Re-arming to it hands the team another 10s past
-			// a deadline 5s away, which is the opposite of this method's purpose.
+			// A wider window must not extend the deadline.
 			const p = coord.waitFor("alpha", 5_000);
 			let settled = false;
 			void p.then(() => {
@@ -104,8 +102,7 @@ describe("WakeCoordinator", () => {
 
 describe("decideWakeCreate", () => {
 	it("reattaches an existing record and ignores a displayLabel entirely, even one that was supplied", () => {
-		// displayLabel is ignored once a record already exists: not applied as a rename, not used to
-		// pick between two candidate records, just dropped.
+		// Existing records ignore display labels.
 		expect(decideWakeCreate("proj.existing", true, undefined)).toEqual({ kind: "reattach" });
 		expect(decideWakeCreate("proj.existing", true, "Some Label")).toEqual({ kind: "reattach" });
 	});
@@ -125,7 +122,7 @@ describe("decideWakeCreate", () => {
 	});
 
 	it("refuses a whitespace/invisible-only displayLabel the same as an absent one, rather than minting a garbage-labeled session", () => {
-		// A raw-truthiness check would treat all of these as "supplied" - sanitizeLabel does not.
+		// Sanitization rejects invisible labels.
 		const refused = {
 			kind: "refuse",
 			error: `"proj.newsession" does not exist yet; retry with a displayLabel to create it`,

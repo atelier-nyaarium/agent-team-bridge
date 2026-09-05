@@ -20,9 +20,6 @@ import { WIRE_NONCE_BYTES } from "../shared/wire-vocabulary.js";
 import type { EnrollmentState, EnrollmentStore } from "./federationSecret.js";
 import type { TenantAdmin } from "./tenantAdmin.js";
 
-////////////////////////////////
-//  Interfaces & Types
-
 export type DomainStatus = "rooted" | "pending" | "unrooted";
 
 export interface DomainMeta {
@@ -38,9 +35,6 @@ export function sanitizeDomainId(raw: string | undefined | null): string {
 	if (!slug) throw new Error("domain id is empty after sanitizing");
 	return slug;
 }
-
-////////////////////////////////
-//  Class
 
 const DEFAULT_NONCE_TTL_MS = 600_000;
 
@@ -182,7 +176,7 @@ export class EnrollmentCoordinator {
 		return null;
 	}
 
-	/** An owner's unlink, unsigned. */
+	// Unlink is unsigned because only the local owner controls this edge.
 	public dropLinkEdge(dstDomainId: string): number {
 		const before = this.state.linkEdges?.length ?? 0;
 		if (before === 0) return 0;
@@ -244,9 +238,6 @@ export class EnrollmentCoordinator {
 		return this.state.displayName ?? this.state.pendingTenant?.displayName ?? null;
 	}
 }
-
-////////////////////////////////
-//  Functions & Helpers
 
 export type EnrollRoute =
 	| { kind: "domain"; domainId: string }

@@ -19,9 +19,6 @@ import { sanitizeDomainId } from "./enrollmentCoordinator.js";
 import type { EnrollmentState, PendingTenantRecord, SeenAdminNonce } from "./federationSecret.js";
 import type { FileSecretStore } from "./fileSecretStore.js";
 
-////////////////////////////////
-//  Interfaces & Types
-
 export const DEFAULT_INVITE_TTL_MS = 86_400_000;
 
 const ADMIN_OP_MAX_SKEW_MS = REGISTER_MAX_SKEW_MS;
@@ -31,9 +28,6 @@ const MAX_SEEN_ADMIN_NONCES = 50_000;
 type AdminOpEffect<T> =
 	| { commit: true; enrollment: Record<string, EnrollmentState>; value: T }
 	| { commit: false; value: T };
-
-////////////////////////////////
-//  Class
 
 export class TenantAdmin {
 	public constructor(
@@ -247,9 +241,6 @@ export class TenantAdmin {
 		}
 	}
 
-	////////////////////////////////
-	//  Functions & Helpers
-
 	private checkSkew(issuedAt: number): string | null {
 		if (Math.abs(this.now() - issuedAt) > ADMIN_OP_MAX_SKEW_MS) return "admin op is stale";
 		return null;
@@ -297,9 +288,6 @@ export class TenantAdmin {
 		return { fresh: true, next };
 	}
 }
-
-////////////////////////////////
-//  Functions & Helpers
 
 function fail<T extends EnrollResult>(error: string): T {
 	return { ok: false, error } as T;

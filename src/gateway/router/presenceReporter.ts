@@ -61,8 +61,7 @@ export function createPresenceReporter(deps: PresenceReporterDeps) {
 					arm();
 					return;
 				}
-				// Only a baseline carries spawn points, so a change to them has no delta to ride.
-				// Force one rather than leaving the Router on whatever list the last baseline caught.
+				// Spawn-point changes require a baseline.
 				const spawns = deps.spawnPoints();
 				if (sync.at === "streaming" && sentSpawns !== null && JSON.stringify(spawns) !== sentSpawns) {
 					sync = { at: "needsBaseline" };
@@ -86,7 +85,7 @@ export function createPresenceReporter(deps: PresenceReporterDeps) {
 				switch (verdict.at) {
 					case "landed":
 						sync = verdict.sync;
-						// What actually went on the wire, never a re-read.
+						// Record transmitted data, never a later re-read.
 						if (frame.at === "baseline") sentSpawns = JSON.stringify(frame.spawnPoints);
 						setDeadline(null);
 						wakeWaiters();
@@ -124,9 +123,7 @@ export function createPresenceReporter(deps: PresenceReporterDeps) {
 	const markDirty = (): void => {
 		dirty = true;
 		if (sync.at === "parked") return;
-		// Never move an ARMED deadline later. A retry floor must not be lowered and a debounce window
-		// must not be pushed out by the next mutation, and both meanings agree on that. Extending it
-		// would make churn faster than the window starve presence entirely.
+		// Armed deadlines never move later.
 		if (deadline === null) setDeadline(now() + (deps.debounceMs ?? 250));
 		void pump();
 	};

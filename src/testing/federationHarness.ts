@@ -1,5 +1,3 @@
-// Real Router, gateway graph, and pinned client over fake host and session sockets.
-
 import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import net from "node:net";
@@ -23,20 +21,11 @@ import { FixtureWorld } from "./fixtureWorld.js";
 import { type IdentitySet, loadIdentitySet, mintIdentitySet, seedDomain, seedRouter } from "./identitySet.js";
 import { createPhoneDriver, type PhoneDriver } from "./phoneDriver.js";
 
-////////////////////////////////
-//  Interfaces & Types
-
 export interface FederationHarnessOptions {
 	now?: () => number;
-	/**
-	 * "real" (the default) leaves every timer on the process clock, so the persist tick, the presence
-	 * watch, the awareness tick, the inbox pump, and the reconciler make progress on their own.
-	 * "manual" holds them until `ambient.advance` reaches their deadline.
-	 */
 	drive?: "real" | "manual";
 	wakeTimeoutMs?: number;
 	host?: Omit<FakeHostOptions, "token">;
-	/** False boots the gateway with an empty keyring, so it must ask the phone for epoch 1. */
 	seedContentKey?: boolean;
 }
 
@@ -51,33 +40,26 @@ export interface RouterOnlyHarness {
 	set: IdentitySet;
 	world: FixtureWorld;
 	now: () => number;
-	/** The Router's clock, entropy, and timers. */
 	ambient: FakeAmbient;
-	/** The ambient a gateway composed over `dir` runs on. */
 	ambientFor: (dir: string) => FakeAmbient;
 	router: { server: RouterServer; port: number; certFp: string; store: FileSecretStore; dataDir: string };
 	phone: PhoneDriver;
 	waitFor<T>(probe: () => Probe<T>, label: string, timeoutMs?: number): Promise<T>;
 	composeGateway(options?: GatewayComposeOptions): GatewayGraph;
-	/** Roots another Domain in the Router and composes its gateway over `dir`. */
 	composeGatewayFor(set: IdentitySet, dir: string, options?: GatewayComposeOptions): GatewayGraph;
-	/** A phone admitted to `set`'s Domain, over the same Router. */
 	phoneFor(set: IdentitySet): PhoneDriver;
 	close(): Promise<void>;
 }
 
-/** One Domain's live half: its gateway, host daemon, and phone. */
 export interface DomainPeer {
 	set: IdentitySet;
 	world: FixtureWorld;
 	federationDir: string;
-	/** This peer's gateway clock, entropy, and timers. */
 	ambient: FakeAmbient;
 	gateway: GatewayGraph;
 	host: FakeHost;
 	phone: PhoneDriver;
 	restartGateway(): Promise<void>;
-	/** Reconnects the host daemon; `newDaemon` makes it a fresh process. */
 	restartHost(restart?: { newDaemon?: boolean }): void;
 	close(): Promise<void>;
 }
@@ -89,7 +71,6 @@ export interface AddDomainOptions {
 }
 
 export interface LinkResult {
-	/** The safety code both owners compared. */
 	sas: string;
 	pin: string;
 	receiver: CrossDomainListenStateResult;
@@ -99,24 +80,15 @@ export interface LinkResult {
 export interface FederationHarness extends DomainPeer {
 	root: string;
 	now: () => number;
-	/** The Router's own clock, entropy, and timers, apart from the home gateway's. */
 	routerAmbient: FakeAmbient;
 	router: { server: RouterServer; port: number; certFp: string; store: FileSecretStore; dataDir: string };
-	/** Polls until `probe` answers a value; throws with `label` on the deadline. */
 	waitFor<T>(probe: () => Probe<T>, label: string, timeoutMs?: number): Promise<T>;
-	/** Closes the gateway graph and composes it again over the same directories, host reattached. */
 	restartGateway(): Promise<void>;
-	/** Replaces the Router while preserving its directory and port. */
 	restartRouter(): Promise<void>;
-	/** Roots a second Domain with its own gateway, host, and phone; closed with the harness. */
 	addDomain(options: AddDomainOptions): Promise<DomainPeer>;
-	/** Links two Domains through the Router's handshake and edges, both directions. */
 	link(receiver: DomainPeer, requester: DomainPeer): Promise<LinkResult>;
 	close(): Promise<void>;
 }
-
-////////////////////////////////
-//  Functions & Helpers
 
 type Probe<T> = T | undefined | null | false | Promise<T | undefined | null | false>;
 
@@ -171,7 +143,7 @@ export async function startFederationHarness(options: FederationHarnessOptions =
 		restartHost: (restart) => home.restartHost(restart),
 		restartRouter: async () => {
 			await base.router.server.stop();
-			// A restart reads the disk, not the old process's memory.
+			// Restart reloads Router state from disk.
 			const store = new FileSecretStore(base.router.dataDir);
 			await store.init();
 			const server = new RouterServer({
@@ -199,7 +171,7 @@ export async function startFederationHarness(options: FederationHarnessOptions =
 				domainId: domainOptions.domainId,
 				gatewayId: domainOptions.gatewayId,
 				router: base.set.router.identity,
-				// One Router, one app token; each machine its own host token.
+				// One app token is shared; host tokens remain per machine.
 				tokens: { ...base.set.tokens, host: `${domainOptions.domainId}-host-token` },
 			});
 			await seedDomain(base.router.store, set);
@@ -228,7 +200,7 @@ async function attachDomain(
 	const world = FixtureWorld.from(set);
 	const federationDir = path.join(gatewayDir, "federation");
 	const compose = () => base.composeGatewayFor(set, gatewayDir, { seedContentKey: options.seedContentKey });
-	// The daemon process outlives the gateway; only restartHost replaces it.
+	// The daemon survives gateway restarts.
 	let daemon = createFakeCodexDaemon();
 	const attachHost = (graph: GatewayGraph): FakeHost =>
 		attachFakeHost(graph, {
@@ -278,7 +250,6 @@ async function attachDomain(
 	};
 }
 
-/** Listen, pair, confirm, sign both edges. */
 async function linkDomains(receiver: DomainPeer, requester: DomainPeer, now: () => number): Promise<LinkResult> {
 	const listen = await receiver.phone.value({ kind: "cross_domain_listen" });
 	const window = listen.result as CrossDomainListenResult;
@@ -348,7 +319,7 @@ export async function startRouterOnly(
 	const drive = options.drive ?? "real";
 	const ambient = fakeAmbient({ now: options.now, drive });
 	const now = () => ambient.now();
-	// Each graph draws its own entropy, so two peers never mint the same nonce.
+	// Each graph gets distinct entropy to avoid nonce collisions.
 	const gatewayAmbients = new Map<string, FakeAmbient>();
 	const ambientFor = (key: string): FakeAmbient => {
 		let held = gatewayAmbients.get(key);

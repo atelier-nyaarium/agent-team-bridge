@@ -24,7 +24,6 @@ import type { CallerScope } from "./routes/callerGuards.js";
 
 export interface DeliverToOwnerOptions {
 	entry: ConsolePushEntry;
-	/** Caller-chosen deduplication key. */
 	dedupeKey: string;
 	label?: string;
 }
@@ -54,15 +53,12 @@ type OwnerRowOutboxItem = {
 	entry: ConsolePushEntry;
 	opId: string;
 	label: string;
-	/** Stamped at enqueue, so a retry seals the same body. Absent on rows queued before it existed. */
+	// Stamped at enqueue for identical retries.
 	at?: number;
 };
 
-/**
- * The clear body the phone decodes is a MailboxEntry, which requires `seq` and `at`. The Router's row
- * seq is what the phone keeps; the placeholder only lets the decode pass.
- */
 export function ownerRowBody(entry: ConsolePushEntry, at: number): Record<string, unknown> {
+	// Placeholder seq satisfies the phone mailbox schema.
 	return { seq: 0, at, ...entry };
 }
 
@@ -237,7 +233,6 @@ export function createConsolePushOps({
 		return true;
 	}
 
-	/** Mirrors peer display entries. */
 	function mirrorPeer(
 		threadAddr: Address,
 		from: string,
@@ -247,7 +242,6 @@ export function createConsolePushOps({
 			files?: ChannelFile[];
 			status?: string;
 		},
-		// Stable across relay hops.
 		dedupeKey: string = newId(),
 	): void {
 		const owner = ownerId?.();
@@ -266,14 +260,12 @@ export function createConsolePushOps({
 		}
 	}
 
-	/** Broadcasts a notice to the owner mailbox. */
 	function humanNotify(req: Request, body: Record<string, unknown>): Response {
 		const parsed = HumanNotifySchema.safeParse(body);
 		if (!parsed.success) {
 			return jsonResponse({ error: `Invalid request: ${parsed.error.message}` }, 400);
 		}
 		const { from, title, summary, full, fullSpoken, files: rawNoticeFiles } = parsed.data;
-		// Blob ownership follows the originating gateway.
 		const files = rawNoticeFiles && stampBlobHolder(rawNoticeFiles, localGatewayId);
 		const refused = refuseImpersonation(req, from, "owner-data");
 		if (refused) return refused;
@@ -291,7 +283,6 @@ export function createConsolePushOps({
 			return jsonResponse({ error: "not yet enrolled; no owner to notify" }, 503);
 		}
 		const dedupeKey = newId();
-		// Notices require qualified sender addresses.
 		const sender = localAddress(from);
 		const entry: ConsolePushEntry = {
 			kind: "notice",
@@ -310,7 +301,6 @@ export function createConsolePushOps({
 		return jsonResponse({ delivered: true });
 	}
 
-	/** Lands a plugin action in the owner's mailbox. */
 	function pluginAction(req: Request, body: Record<string, unknown>): Response {
 		const parsed = PluginActionRequestSchema.safeParse(body);
 		if (!parsed.success) {

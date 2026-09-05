@@ -1,5 +1,3 @@
-// Copilot delegation: the gateway-daemon wire, not the App Server's own protocol.
-
 import { z } from "zod";
 import {
 	boundedUtf8,
@@ -13,9 +11,6 @@ import {
 } from "./copilotAgentIdentity.js";
 import { CopilotDaemonFailureCodeSchema, CopilotDeliverySchema } from "./copilotAgentState.js";
 import { CopilotExecutionTargetSchema, CopilotResolvedTargetSchema } from "./copilotAgentTargets.js";
-
-////////////////////////////////
-//  Daemon relay
 
 const CopilotDaemonCommandBase = {
 	type: z.literal("copilot_command"),
@@ -179,13 +174,7 @@ export type CopilotDaemonReceipt = z.infer<typeof CopilotDaemonReceiptSchema>;
 export type CopilotDaemonHello = z.infer<typeof CopilotDaemonHelloSchema>;
 export type CopilotEventAck = z.infer<typeof CopilotEventAckSchema>;
 
-/**
- * Whether losing one daemon message would change what an owner believes about an outcome.
- *
- * Stated per kind and keyed by the unions themselves, so a new kind added above without an entry
- * here fails the build. Activity is best-effort: retaining it fills the outbox with narration and
- * evicts the receipts that carry outcomes.
- */
+// Keyed by the event union so new kinds require an explicit policy.
 export const COPILOT_RELIABLE_EVENT_KIND: Record<CopilotDaemonEvent["kind"], boolean> = {
 	activity: false,
 	terminal: true,

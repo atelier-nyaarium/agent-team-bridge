@@ -108,8 +108,7 @@ export class CopilotRoute {
 			);
 		const owner = this.deps.service.resolveOwner(req);
 		if (!owner) {
-			// Same split as CodexRoute: a token-less caller is told so (it leaks nothing it does not
-			// already know), an unknown token stays "not found" against session probing.
+			// Preserve not-found responses for unknown tokens.
 			if (!presentedByRequest(req).token) {
 				return json(
 					{
@@ -292,8 +291,7 @@ export class CopilotRoute {
 		initial: CopilotPersistedAgent,
 		dispatched = true,
 	): Promise<CopilotAgentResult> {
-		// A delivery that never left (no host socket) cannot be accepted, so waiting out the budget for
-		// it would only delay the same indeterminate answer by four minutes.
+		// Unsent deliveries have no wait budget.
 		const deadline = dispatched ? this.deadline() : this.now();
 		await this.deps.relay.waitFor(
 			this.deps.service.ownerKeyOf(owner),

@@ -13,12 +13,7 @@ import type { SessionRecord, SessionStore } from "../shared/session-store.js";
 import type { CodexAgentService } from "./codexAgentService.js";
 import type { CodexApplication } from "./codexAgentTypes.js";
 
-////////////////////////////////
-//  Interfaces & Types
-
-/** A command minus the fields the relay itself owns. Distributed over the union deliberately: a
- * plain `Omit` collapses the four command shapes into their shared fields and loses the discriminant
- * each one's own payload hangs off. */
+/** Distributes over command variants so each payload keeps its discriminant. */
 type CodexCommandRequest = CodexDaemonCommand extends infer Command
 	? Command extends CodexDaemonCommand
 		? Omit<Command, "type" | "requestId">
@@ -28,42 +23,24 @@ type CodexCommandRequest = CodexDaemonCommand extends infer Command
 export interface CodexRelayDeps {
 	service: CodexAgentService;
 	sessionStore: SessionStore;
-	/** False when no authenticated host socket is attached. A command that cannot be sent is not
-	 * queued here: the caller reports it, and reconnect reconciliation recovers the record. */
+	/** Unsent commands are retried by reconnect reconciliation. */
 	sendToHost(message: Record<string, unknown>): boolean;
 	ambient: Pick<Ambient, "now" | "newId" | "setTimer" | "clearTimer">;
 }
 
-/** One generation's reliable stream. `highestDecided` is separate from `committedThrough` because
- * clearing a block must release every decided event above it, not just the one that cleared it. */
+/** Highest decided stays separate so clearing a hold releases later decisions. */
 interface StreamProgress {
 	committedThrough: number;
 	highestDecided: number;
-	/**
-	 * Event IDs this gateway could not decide, each mapped to the agent it was about. Nothing at or
-	 * above the lowest may be acknowledged, since acknowledging retires the daemon's only copy.
-	 *
-	 * Keyed by agent because a stream carries every agent on one target: a completed reconciliation
-	 * supersedes that agent's undecided frames and only that agent's, and without the attribution the
-	 * release would either strand the stream or free somebody else's.
-	 */
+	/** Undecided event IDs mapped to their agent for targeted reconciliation. */
 	undecided: Map<number, string>;
 }
 
-/** How many frames one agent may hold pending reconciliation. A stream this far out of step is being
- * repaired by reconciliation rather than by patience. */
 const MAX_DEFERRED_PER_AGENT = 128;
 
-/** How long one outstanding reconcile suppresses a re-ask. Its receipt is the only other clear, and
- * a connected daemon that never answers must not hold the guard - and the frames behind it - forever.
- * Comfortably above a reconcile's real round-trip (a thread/read against a live App Server). */
 export const RECONCILE_GUARD_MS = 300_000;
 
-////////////////////////////////
-//  Functions & Helpers
-
-// Both keys join fields with a separator that cannot occur inside any of them. Concatenating bare
-// would let one pair collide with another that merely splits at a different point.
+// The separator prevents composite-key collisions.
 function streamKey(message: { daemonInstanceId: string; targetId: string; generation: number }): string {
 	return `${message.daemonInstanceId} ${message.targetId} ${message.generation}`;
 }
@@ -72,56 +49,30 @@ function agentKey(ownerKey: string, agentId: string): string {
 	return `${ownerKey} ${agentId}`;
 }
 
-/** Whether there is anything to ask the daemon ABOUT. A record with no thread names nothing a
- * reconcile command could carry, so no answer can ever arrive for it. */
 function isAskable(agent: CodexPersistedAgent): boolean {
 	return agent.threadId !== undefined && agent.resolvedTarget !== undefined;
 }
 
-/** A record whose owner still believes work is outstanding. These are what the gateway asks about on
- * reconnect; an idle agent has nothing a restarted daemon could contradict. */
 function needsReconciliation(agent: CodexPersistedAgent): boolean {
 	return isAskable(agent) && (agent.agentState === "working" || agent.agentState === "recovering");
 }
 
-////////////////////////////////
-//  Class
-
-/**
- * The gateway's Codex relay: one serialized reducer per agent, and the acknowledgement the daemon
- * prunes its outbox against.
- *
- * The section is held only across the decide-and-persist step. Daemon I/O and a caller's wait happen
- * outside it, and the catalog's own revision check is what makes a decision taken against a stale
- * read fail rather than overwrite.
- */
 export class CodexRelay {
 	private readonly sections = new Map<string, Promise<unknown>>();
 	private readonly streams = new Map<string, StreamProgress>();
 	private readonly listeners = new Map<string, Set<() => void>>();
-	// agentKey -> when the outstanding reconcile was sent. A Map rather than a Set because the guard
-	// must be time-bounded: a daemon that accepted the command and never answers would otherwise hold
-	// the guard forever, and the guard is the ONLY thing standing between held frames and the
-	// re-request that frees them (issue #251's class - a hold whose release may never arrive).
+	// Timestamps bound reconciliation suppression.
 	private readonly reconciling = new Map<string, number>();
 	private readonly deferred = new Map<string, Array<CodexDaemonEvent | CodexDaemonReceipt>>();
 
 	constructor(private readonly deps: CodexRelayDeps) {}
 
-	/** Send one command to the daemon. Returns false when no host is attached. */
 	dispatch(command: CodexCommandRequest): boolean {
 		const message = { type: "codex_command", requestId: this.deps.ambient.newId(), ...command };
 		if (!CodexDaemonCommandSchema.safeParse(message).success) return false;
 		return this.deps.sendToHost(message);
 	}
 
-	/**
-	 * Ask about every record of one owner that still believes work is outstanding.
-	 *
-	 * The second reconciliation trigger beside a daemon reconnect. Without it, an owner whose daemon
-	 * never disconnects keeps being told "could not confirm" forever, because a reconnect is the only
-	 * other thing that ever asks. Cheap and idempotent: the per-agent guard collapses repeats.
-	 */
 	reconcileStale(owner: SessionRecord): void {
 		const ownerKey = this.deps.sessionStore.teamOf(owner);
 		for (const agent of this.deps.sessionStore.listCodexAgents(owner)) {
@@ -129,7 +80,6 @@ export class CodexRelay {
 		}
 	}
 
-	/** Every Codex frame arriving on the authenticated host socket. */
 	handleHostMessage(raw: Record<string, unknown>): void {
 		switch (raw.type) {
 			case "codex_hello":
@@ -146,8 +96,6 @@ export class CodexRelay {
 		}
 	}
 
-	/** Wake on the next committed change to one agent. The caller owns its own deadline; this only
-	 * says that something moved. */
 	onAgentChange(ownerKey: string, agentId: string, listener: () => void): () => void {
 		const key = agentKey(ownerKey, agentId);
 		const set = this.listeners.get(key) ?? new Set();
@@ -159,14 +107,6 @@ export class CodexRelay {
 		};
 	}
 
-	/**
-	 * Block until `settled` says the agent has reached what the caller is waiting for, or the deadline
-	 * passes. Resolves true when settled, false on expiry.
-	 *
-	 * `settled` is re-read on every committed change and once up front, so a turn that finished before
-	 * the wait began returns immediately rather than waiting out the whole budget for a change that
-	 * has already happened.
-	 */
 	waitFor(ownerKey: string, agentId: string, settled: () => boolean, deadlineMs: number): Promise<boolean> {
 		if (settled()) return Promise.resolve(true);
 		return new Promise((resolve) => {
@@ -185,18 +125,13 @@ export class CodexRelay {
 	private onHello(raw: Record<string, unknown>): void {
 		const hello = CodexDaemonHelloSchema.safeParse(raw);
 		if (!hello.success) return;
-		// A hello supersedes every outstanding reconcile: whatever daemon would have answered them is
-		// gone or restarted, so holding the guard would suppress the very re-ask this hello exists for.
+		// A hello invalidates outstanding reconciliation guards.
 		this.reconciling.clear();
-		// The gateway enumerates, not the daemon: only this side knows which records an owner still
-		// believes are working, and a restarted daemon knows nothing at all.
+		// The gateway owns the reconciliation candidate list.
 		for (const owner of this.deps.sessionStore.list()) {
 			const ownerKey = this.deps.sessionStore.teamOf(owner);
 			for (const agent of this.deps.sessionStore.listCodexAgents(owner)) {
-				// A HELD frame is a reason to ask in its own right, independent of what the record now
-				// says. Only a completed reconciliation releases a hold, so an agent that has since gone
-				// idle would otherwise never be asked about again and its frame would cap the whole
-				// target's acknowledgement for the life of the generation.
+				// A held frame requires reconciliation even after the record becomes idle.
 				if (needsReconciliation(agent) || this.deferred.has(agentKey(ownerKey, agent.agentId))) {
 					this.requestReconciliation(ownerKey, agent);
 				}
@@ -219,11 +154,7 @@ export class CodexRelay {
 	private reduceReceipt(receipt: CodexDaemonReceipt): void {
 		const application = this.deps.service.applyReceipt(receipt, this.now());
 		this.settle(receipt, application);
-		// Cleared on ANY answer to the reconcile, not only a successful one: a refused reconcile is what
-		// a target that has gone away replies with, and gating the clear on success would make the one
-		// situation reconciliation exists for the one it never retries. A reconcile is the only command
-		// whose refusal carries no operationId, which is what tells a refused reconcile apart from a
-		// refused start, message or stop for the same agent.
+		// Any reconciliation answer clears its guard; other refusals carry operationId.
 		if (receipt.kind === "rejected" && receipt.operationId !== undefined) return;
 		if (receipt.kind !== "reconciled" && receipt.kind !== "rejected") return;
 		if (!this.reconciling.delete(agentKey(receipt.ownerKey, receipt.agentId))) return;
@@ -235,18 +166,8 @@ export class CodexRelay {
 		this.settle(event, this.deps.service.applyEvent(event, this.now()));
 	}
 
-	/** Record what one message's outcome means for the daemon's outbox, then tell any waiter. */
 	private settle(message: CodexDaemonEvent | CodexDaemonReceipt, application: CodexApplication): void {
-		// Whether a frame may be retired is a fact about the RECORD, never about whether a socket
-		// happened to be attached. Asking is a separate, best-effort action: a host that is momentarily
-		// gone comes back and the next hello asks again, whereas a frame acked on its absence is gone
-		// for good. A record nobody can ask about at all - no thread yet - is genuinely decided, since
-		// holding it would cap the acknowledgement for every agent on that target with nothing left to
-		// release it.
-		// `failed` means the gateway could not build a record, which is a fact about this code and not
-		// about the frame. It holds unconditionally: acknowledging it would let a reducer bug delete the
-		// daemon's only copy of a terminal. `reconcile` holds too, but only when there is somebody to
-		// ask - a record with no thread can never be answered about.
+		// Failed records always hold; reconciliation holds only askable agents.
 		const repairable =
 			application.disposition === "failed" ||
 			(application.disposition === "reconcile" && isAskable(application.agent));
@@ -256,7 +177,7 @@ export class CodexRelay {
 				this.requestReconciliation(message.ownerKey, application.agent);
 			}
 		}
-		// A refusal carries no generation, so there is no stream to advance and nothing to acknowledge.
+		// Refusals have no stream generation to acknowledge.
 		if ("targetId" in message && "generation" in message) {
 			this.advance(message, repairable ? "hold" : "decided");
 		}
@@ -305,25 +226,19 @@ export class CodexRelay {
 			generation: message.generation,
 			throughEventId: through,
 		});
-		// The watermark moves only once the acknowledgement actually left. Advancing it on a failed send
-		// would leave the daemon holding those receipts with nothing that ever re-sends the number:
-		// their replays re-decide as duplicates and return early here on the very watermark that never
-		// shipped. A busy stream hides it under the next ack; a quiet one never recovers.
+		// Advance the watermark only after the acknowledgement is sent.
 		if (sent) progress.committedThrough = through;
 	}
 
 	private defer(message: CodexDaemonEvent | CodexDaemonReceipt): void {
 		const key = agentKey(message.ownerKey, message.agentId);
 		const held = this.deferred.get(key) ?? [];
-		// The daemon replays every retained reliable frame on each reconnect, so without this the same
-		// frame accumulates a copy per reconnect and the cap is reached by churn rather than by news.
+		// Reconnect replays require deduplication.
 		if (held.some((existing) => existing.type === message.type && existing.eventId === message.eventId)) return;
 		held.push(message);
 		this.deferred.set(key, held);
 		while (held.length > MAX_DEFERRED_PER_AGENT) {
-			// Commentary goes first: the daemon sends it best-effort anyway, so dropping one costs a line
-			// of narration where dropping a receipt costs an outcome. The dropped frame stays UNDECIDED
-			// either way, so the acknowledgement it holds is released by reconciliation, not by eviction.
+			// Drop activity before receipts when the deferred queue is full.
 			const index = held.findIndex((candidate) => candidate.kind === "activity");
 			held.splice(index >= 0 ? index : 0, 1);
 		}
@@ -333,9 +248,7 @@ export class CodexRelay {
 		const key = agentKey(ownerKey, agentId);
 		const held = this.deferred.get(key);
 		this.deferred.delete(key);
-		// A completed reconciliation is the authority on this agent, so every frame still undecided for
-		// it is superseded whether or not the queue still holds a copy to re-run. Releasing here is what
-		// keeps an evicted frame from capping its target's acknowledgement for good.
+		// Reconciliation supersedes all undecided frames for that agent.
 		for (const [streamId, progress] of this.streams) {
 			for (const [eventId, owner] of progress.undecided) {
 				if (owner === key) progress.undecided.delete(eventId);
@@ -343,29 +256,23 @@ export class CodexRelay {
 			this.releaseStream(streamId, progress);
 		}
 		if (!held?.length) return;
-		// Oldest first, so a terminal cannot be re-applied ahead of the activity that preceded it.
+		// Replay frames in event order.
 		for (const message of [...held].sort((left, right) => left.eventId - right.eventId)) {
 			if (message.type === "codex_event") this.reduceEvent(message);
 			else this.reduceReceipt(message);
 		}
 	}
 
-	/** Send whatever acknowledgement a stream's release now permits. The stream key carries the three
-	 * fields the acknowledgement needs, so a release does not have to wait for the next frame. */
 	private releaseStream(streamId: string, progress: StreamProgress): void {
 		const [daemonInstanceId, targetId, generation] = streamId.split(" ");
 		if (!daemonInstanceId || !targetId || generation === undefined) return;
 		this.acknowledge({ daemonInstanceId, targetId, generation: Number(generation) }, progress);
 	}
 
-	/** Ask the daemon what one agent actually is. Best-effort by design: the caller has already decided
-	 * what to do with the frame, and a request that cannot go out now goes out on the next hello. */
 	private requestReconciliation(ownerKey: string, agent: CodexPersistedAgent): void {
 		if (!agent.threadId || !agent.resolvedTarget) return;
 		const key = agentKey(ownerKey, agent.agentId);
-		// One outstanding request per agent: every withheld event in a stalled stream would otherwise
-		// ask again, and the answer to all of them is the same one message. Time-bounded, because a
-		// receipt is the only clear and a connected daemon that never answers would hold it forever.
+		// Allow one time-bounded reconciliation request per agent.
 		const askedAt = this.reconciling.get(key);
 		if (askedAt !== undefined && this.now() - askedAt < RECONCILE_GUARD_MS) return;
 		this.reconciling.set(key, this.now());
@@ -377,11 +284,11 @@ export class CodexRelay {
 			threadId: agent.threadId,
 			turnId: agent.activeTurnId,
 		});
-		// A request that never left is not outstanding, so the next hello may ask again.
+		// Unsent requests must not hold the guard.
 		if (!sent) this.reconciling.delete(key);
 	}
 
-	/** Run one reducer step with nothing else touching the same agent. */
+	/** Serialize one reducer step per agent. */
 	private serialize(ownerKey: string, agentId: string, step: () => void): Promise<void> {
 		const key = agentKey(ownerKey, agentId);
 		const previous = this.sections.get(key) ?? Promise.resolve();

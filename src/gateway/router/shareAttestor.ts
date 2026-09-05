@@ -6,7 +6,7 @@ export interface ShareAttestorDeps {
 	send: (action: string, params: Record<string, unknown>) => Promise<unknown>;
 	incarnation: () => number | null;
 	intervalMs?: number;
-	/** Floor between attestations, so a burst of job changes sends one frame set, not one each. */
+	/** Minimum interval between change-triggered attestations. */
 	minGapMs?: number;
 	ambient: Pick<Ambient, "now" | "setTimer" | "clearTimer" | "setInterval" | "clearInterval">;
 }
@@ -19,7 +19,6 @@ export function createShareAttestor(deps: ShareAttestorDeps) {
 	const now = () => deps.ambient.now();
 	const minGapMs = deps.minGapMs ?? 1_000;
 
-	/** Coalesced entry point: every caller outside the timer comes through here. */
 	const attest = (): void => {
 		if (coalesce) return;
 		const wait = Math.max(0, minGapMs - (now() - lastAt));
@@ -52,9 +51,8 @@ export function createShareAttestor(deps: ShareAttestorDeps) {
 		previousLive = currentLive;
 	};
 
-	// The interval re-states every live share, which is what the Router's sweep reads. It bypasses
-	// the coalescing floor because it is the heartbeat, not a reaction to a change.
 	const start = (): void => {
+		// The interval sends the heartbeat directly, bypassing change coalescing.
 		if (timer) return;
 		timer = deps.ambient.setInterval(send, deps.intervalMs ?? 60_000);
 	};

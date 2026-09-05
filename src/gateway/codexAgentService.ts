@@ -49,11 +49,6 @@ import {
 } from "./codexAgentTypes.js";
 import type { SessionAuthority } from "./sessionAuthority.js";
 
-////////////////////////////////
-//  Class
-
-/** Session-owned gateway boundary for Codex access and state transitions. Route and daemon
- * adapters resolve through this service rather than receiving catalog authority directly. */
 export class CodexAgentService {
 	private readonly auth: SessionAuthority;
 	private readonly sessionStore: SessionStore;
@@ -78,8 +73,6 @@ export class CodexAgentService {
 		return this.auth.resolveConfirmedManagedSession(req);
 	}
 
-	/** The canonical key the daemon echoes on every command and receipt. Never accepted from a caller;
-	 * this is the only place it is produced. */
 	ownerKeyOf(owner: SessionRecord): string {
 		return this.sessionStore.teamOf(owner);
 	}
@@ -88,9 +81,8 @@ export class CodexAgentService {
 		return this.sessionStore.listCodexAgents(owner);
 	}
 
-	/** `cwd` overrides the session's own workdir for a host target. The daemon still resolves it, so an
-	 * unusable path lands in home rather than anywhere a caller named. */
 	resolveExecutionTarget(owner: SessionRecord, cwd?: string): CodexExecutionTarget | null {
+		// Host workdir uses the route-resolved cwd exactly once.
 		let target: CodexExecutionTarget;
 		if (isHostSpawn(owner.spawn)) {
 			target = { kind: "host", workdirHint: cwd ?? this.sessionStore.hostWorkdirHint(owner) };
@@ -124,8 +116,6 @@ export class CodexAgentService {
 		const agentId = CodexAgentIdSchema.parse(input.agentId);
 		const operationId = CodexOperationIdSchema.parse(input.operationId);
 		const prompt = CodexPromptSchema.parse(input.prompt);
-		// Taken from the caller rather than re-resolved: the route resolves with the request's cwd,
-		// and a second resolve here would persist a different target than the one dispatched.
 		const target = CodexExecutionTargetSchema.parse(input.target);
 		const at = validateTimestamp(input.at);
 		const identity = codexOperationIdentity({ kind: "start", agentId, prompt, model: input.model });
@@ -200,7 +190,6 @@ export class CodexAgentService {
 		const timestamp = Math.max(at, current.updatedAt);
 		const next = CodexPersistedAgentSchema.parse({
 			...current,
-			// Absent leaves the agent on the tier it already has.
 			...(input.serviceTier === undefined ? {} : { serviceTier: input.serviceTier }),
 			exchanges: [
 				...current.exchanges,
@@ -293,7 +282,6 @@ export class CodexAgentService {
 		return this.acceptDeliveryForOwner(this.requireOwner(req), input);
 	}
 
-	/** Applies an authenticated host receipt after correlating it to one exact stored owner. */
 	acceptDeliveryFromDaemon(input: CodexDaemonDeliveryAcceptance): CodexAcceptanceResult {
 		const ownerKey = CodexOwnerKeySchema.parse(input.ownerKey);
 		const agentId = CodexAgentIdSchema.parse(input.agentId);
@@ -345,9 +333,6 @@ export class CodexAgentService {
 				}
 				return { owner, agent: current, operation, disposition: "replayed", catalogRevision: catalog.revision };
 			case "refuse":
-				// A receipt the gateway refuses SETTLES its operation rather than leaving it requested:
-				// nothing else ever transitions one, the daemon has been told it may retire the receipt,
-				// and a requested prompt blocks every later message and stop for the agent's whole life.
 				return this.refuseDelivery(owner, catalog, index, operationIndex, exchangeIndex, at);
 			case "unresolved":
 				return indeterminate(owner, current, operation, catalog.revision, true);
@@ -362,9 +347,7 @@ export class CodexAgentService {
 						{ id: input.turnId, state: "inProgress" as const, activities: [], updatedAt: timestamp },
 					]
 				: steeredIntoSettledTurn
-					? // The turn settled before this delivery was recorded against it, and a turn may not
-						// predate its own accepted delivery. Touching it keeps the ordering invariant true
-						// without changing what the turn is or what it answered.
+					? // The turn settled before delivery was recorded; preserve the ordering invariant.
 						current.turns.map((turn) =>
 							turn.id === input.turnId ? { ...turn, updatedAt: timestamp } : turn,
 						)
@@ -385,8 +368,6 @@ export class CodexAgentService {
 			};
 			const next = CodexPersistedAgentSchema.parse({
 				...current,
-				// A steer into an already-settled turn records the delivery and nothing else. Reopening
-				// that turn would resurrect a finished one as the agent's active work.
 				agentState: steeredIntoSettledTurn ? current.agentState : "working",
 				resolvedTarget,
 				threadId: input.threadId,
@@ -399,19 +380,10 @@ export class CodexAgentService {
 			});
 			return this.commit(owner, catalog, replaceAt(catalog.agents, index, next), next, operationId);
 		} catch {
-			// The record could not be written. Nothing about the receipt was wrong, so it must stay with
-			// the daemon rather than being acknowledged away on a disk error.
 			return indeterminate(owner, current, operation, catalog.revision, true);
 		}
 	}
 
-	/**
-	 * Settle a delivery this gateway will not accept.
-	 *
-	 * The operation and its exchange become indeterminate, and the agent enters recovery so no second
-	 * prompt goes out on a thread whose state is now in doubt. A write failure here is reported as
-	 * unresolved, since an unpersisted refusal must not be acknowledged away either.
-	 */
 	private refuseDelivery(
 		owner: SessionRecord,
 		catalog: CodexAgentCatalog,
@@ -427,6 +399,7 @@ export class CodexAgentService {
 		}
 		const timestamp = Math.max(at, current.updatedAt);
 		try {
+			// Refusal settles the operation and enters recovery when delivery is uncertain.
 			const next = CodexPersistedAgentSchema.parse({
 				...current,
 				agentState: operation.kind === "start" ? "unavailable" : "recovering",
@@ -454,13 +427,6 @@ export class CodexAgentService {
 		}
 	}
 
-	/**
-	 * Give up on a delivery whose acceptance never arrived, settling it the way a refusal would.
-	 *
-	 * A caller that has spent its whole wait budget with nothing proven is in the same position as one
-	 * holding a refusal: the prompt may or may not have landed. Leaving the operation `requested` would
-	 * block every later message and stop for the agent with nothing able to clear it.
-	 */
 	abandonDelivery(
 		owner: SessionRecord,
 		agentId: string,
@@ -478,17 +444,14 @@ export class CodexAgentService {
 		return result.agent;
 	}
 
-	/** Fold one asynchronous App Server event into the record it belongs to. */
 	applyEvent(event: CodexDaemonEvent, at: number): CodexApplication {
 		return this.receiptApplier.applyEvent(event, at);
 	}
 
-	/** Fold one authenticated daemon receipt into the record it belongs to. */
 	applyReceipt(receipt: CodexDaemonReceipt, at: number): CodexApplication {
 		return this.receiptApplier.applyReceipt(receipt, at);
 	}
 
-	/** The daemon's own reason for refusing an operation, consumed once. */
 	takeRefusalReason(operationId: string): string | undefined {
 		return this.receiptApplier.takeRefusalReason(operationId);
 	}

@@ -12,18 +12,8 @@ import com.atelier_nyaarium.switchboard.proto.SignedRemoveTenant
 import com.atelier_nyaarium.switchboard.proto.SignedSetDisplayName
 import com.atelier_nyaarium.switchboard.proto.Protocol
 
-/**
- * Friend cross-Domain onboarding signing, the byte-exact Kotlin counterpart of
- * switchboard's `src/shared/federation-lifecycle.ts`. The admin pre-stages a friend's pending
- * tenant (provision_tenant) or drops it (remove_tenant), the friend's app roots the Domain
- * on first connect (first_root, SELF-signed by its silently-generated owner key), and the
- * rooted owner renames the network (set_display_name). The Router verifies each against the
- * matching key, so the canonical signing bytes - a versioned, newline-joined, fixed-order
- * encoding binding fingerprint(signerSignPub) - must reproduce exactly. The cross-platform
- * vector in ProvisionOpsTest pins it. Distinct version prefixes keep the four artifacts
- * non-interchangeable. Never sign raw JSON.
- */
 object ProvisionOpsCrypto {
+	// Signing bytes mirror federation-lifecycle.ts exactly; never sign raw JSON.
 	fun provisionSigningBytes(p: ProvisionTenant, adminSignPub: String): ByteArray =
 		listOf(
 			Protocol.Wire.SIGNING_TAG_PROVISION_TENANT,
@@ -65,12 +55,7 @@ object ProvisionOpsCrypto {
 		s.adminSignPub == expectedAdminSignPub &&
 			Crypto.verify(removeSigningBytes(s.removal, expectedAdminSignPub), s.signature, expectedAdminSignPub)
 
-	/**
-	 * first_root is SELF-signed by the fresh owner key (no admission exists yet): the owner key
-	 * the Domain roots at lives INSIDE the artifact, and the verifier checks the signature
-	 * against firstRoot.ownerSignPub. The one-time QR nonce (checked unspent at the Router) is the
-	 * authorization; the self-signature only proves possession of the submitted owner key.
-	 */
+	// first_root is self-signed; the nonce authorizes and the signature proves owner-key possession.
 	fun firstRootSigningBytes(f: FirstRoot): ByteArray =
 		listOf(
 			Protocol.Wire.SIGNING_TAG_FIRST_ROOT,
@@ -108,12 +93,7 @@ object ProvisionOpsCrypto {
 		s.ownerSignPub == expectedOwnerSignPub &&
 			Crypto.verify(setDisplayNameSigningBytes(s.rename, expectedOwnerSignPub), s.signature, expectedOwnerSignPub)
 
-	/**
-	 * delete_domain is the app-only "Revoke and Delete Domain": the rooted owner proves possession of
-	 * the rooted key to purge its whole Domain slice from the Router. Owner-signed like set_display_name, so
-	 * the bytes bind fingerprint(ownerSignPub); the distinct version prefix keeps a rename signature
-	 * from replaying as a deletion over the same fields.
-	 */
+	// Delete-domain uses an owner fingerprint and a distinct tag from rename.
 	fun deleteDomainSigningBytes(d: DeleteDomain, ownerSignPub: String): ByteArray =
 		listOf(
 			Protocol.Wire.SIGNING_TAG_DELETE_DOMAIN,
@@ -134,38 +114,21 @@ object ProvisionOpsCrypto {
 		s.ownerSignPub == expectedOwnerSignPub &&
 			Crypto.verify(deleteDomainSigningBytes(s.deletion, expectedOwnerSignPub), s.signature, expectedOwnerSignPub)
 
-	/**
-	 * The cross-tenant roster request proof: the console proves it holds an admitted signing key by
-	 * signing ROSTER_V1 over its OWN key + a fresh timestamp + nonce (proof of possession, mirroring
-	 * the registration proof). The Router verifies the signature, freshness, and non-replay, then resolves
-	 * the key to an admitted console. The preimage binds the RAW signer key (not a fingerprint), so
-	 * it reproduces byte-for-byte against rosterRequestSigningBytes in federation-lifecycle.ts.
-	 */
+	// Roster proof binds the raw signer key, timestamp, nonce, and its own tag.
 	fun rosterRequestSigningBytes(signerSignPub: String, proofAt: Long, nonce: String): ByteArray =
 		listOf(Protocol.Wire.SIGNING_TAG_ROSTER, signerSignPub, proofAt.toString(), nonce).joinToString("\n").toByteArray(Charsets.UTF_8)
 
 	fun signRosterRequest(signerSignPub: String, proofAt: Long, nonce: String, signPriv: String): String =
 		Crypto.sign(rosterRequestSigningBytes(signerSignPub, proofAt, nonce), signPriv)
 
-	/**
-	 * The FLOW-2 trust-pending query proof: the target owner proves possession of its owner key by
-	 * signing TRUST_PENDING_V1 over its OWN key + a fresh timestamp + nonce, so only the owner can
-	 * enumerate the arms aimed at it. A distinct version tag from ROSTER_V1, so neither proof crosses
-	 * over. Reproduces byte-for-byte against trustPendingSigningBytes in federation-lifecycle.ts.
-	 */
+	// Trust-pending proof is owner-key possession with a tag distinct from roster.
 	fun trustPendingSigningBytes(signerSignPub: String, proofAt: Long, nonce: String): ByteArray =
 		listOf(Protocol.Wire.SIGNING_TAG_TRUST_PENDING, signerSignPub, proofAt.toString(), nonce).joinToString("\n").toByteArray(Charsets.UTF_8)
 
 	fun signTrustPendingRequest(signerSignPub: String, proofAt: Long, nonce: String, signPriv: String): String =
 		Crypto.sign(trustPendingSigningBytes(signerSignPub, proofAt, nonce), signPriv)
 
-	/**
-	 * The transport request proof: an owner proves it holds a rooted owner key by signing
-	 * TRANSPORT_REQUEST_V1 over its OWN key + a fresh timestamp + nonce, so the Router can resolve the
-	 * signer to a rooted owner and return the gateway-bridge transport. A distinct version tag from
-	 * ROSTER_V1 / TRUST_PENDING_V1, so no proof crosses over. Reproduces byte-for-byte against
-	 * transportRequestSigningBytes in federation-lifecycle.ts.
-	 */
+	// Transport proof is owner-key possession with a tag distinct from other proofs.
 	fun transportRequestSigningBytes(signerSignPub: String, proofAt: Long, nonce: String): ByteArray =
 		listOf(Protocol.Wire.SIGNING_TAG_TRANSPORT_REQUEST, signerSignPub, proofAt.toString(), nonce).joinToString("\n").toByteArray(Charsets.UTF_8)
 

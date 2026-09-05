@@ -2,13 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
-////////////////////////////////
-//  Tests
-//
-//  PhoneIdentity is the one door for identity facts: it writes, then re-assembles the boot. A
-//  writer that reaches the store or FederationManager directly leaves a boot that no longer
-//  describes the device.
-
 const ANDROID_MAIN = path.join(
 	import.meta.dirname,
 	"..",
@@ -25,7 +18,6 @@ const ANDROID_MAIN = path.join(
 const DOOR = "PhoneIdentity.kt";
 const STORE_WRITE =
 	/\bstore\??\.(?:(?:save|saveIdentity|saveOwnerIdentity|saveDomainId|saveDomain|saveContentKeys|installApprovedDevice|replaceProvisioning|clearProvisioning)\(|(?:firstRooted|consoleAdmitted)\s*=[^=])/;
-// The manager and the keyring persist their own slots.
 const STORE_WRITERS = new Set([DOOR, "FederationManager.kt", "crypto/ContentKeyring.kt"]);
 const FEDERATION_WRITE =
 	/\bfederation(?:\.|::)(importOwnerBackup|applyDomainSync|mergeAdmission|mergeRevocation|ensureContentEpochs|installContentKeys)\b/;
@@ -40,7 +32,6 @@ function kotlinFiles(dir: string, acc: string[] = []): string[] {
 	return acc;
 }
 
-/** Strip comments and literals. */
 function code(file: string): string {
 	return fs
 		.readFileSync(file, "utf8")

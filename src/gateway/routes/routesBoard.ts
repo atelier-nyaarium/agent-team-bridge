@@ -17,21 +17,19 @@ import type { CallerScope } from "./callerGuards.js";
 
 const replayKeyOf = (action: string, operationId: string) => `${action}:${operationId}`;
 
-/** What an agent sees: attachments as FILENAMES only, since a blobId is a bearer token. */
+/** Attachments expose filenames, never bearer blob ids. */
 function projectForAgent(entry: BoardEntry): AgentBoardEntry {
 	if (!entry.attachments) return entry;
 	const attachments = entry.attachments.map((a) => ({ filename: a.filename, mime: a.mime, size: a.size }));
 	return { ...entry, attachments };
 }
 
-/** Returns live descendants; trashed members are skipped. */
 function liveSubtree(view: BoardView, rootId: string): BoardEntry[] {
 	return subtreeIds(view.entries, rootId)
 		.map((id) => view.entry(id))
 		.filter((entry): entry is BoardEntry => entry !== undefined && entry.trashedAt === undefined);
 }
 
-/** The list's byte budget, cut rather than failing the read. */
 function cutToBudget(entries: BoardEntry[]): { entries: BoardEntry[]; truncated: boolean } {
 	let bytes = 0;
 	for (let i = 0; i < entries.length; i++) {
@@ -42,14 +40,9 @@ function cutToBudget(entries: BoardEntry[]): { entries: BoardEntry[]; truncated:
 }
 
 export interface BoardRoutesDeps {
-	// The sole resolver of what a caller must prove to act as X.
 	auth?: SessionAuthority;
-	// Router-held owner board. Unavailable before enrollment.
 	boardClient?: ReturnType<typeof createBoardClient>;
-	// Restart-proof replay for the board's ABSOLUTE writes.
 	boardReplays?: DurableOpStore<BoardReply>;
-	/** Settled replies keyed by sender, action and operation id, so one id across two actions
-	 * cannot read the other's reply. The fallback for a harness that wires no `boardReplays`. */
 	boardOperationReplies: Map<string, Record<string, unknown>>;
 	refuseImpersonation: (req: Request, claimed: string, scope: CallerScope) => Response | null;
 }
@@ -75,10 +68,6 @@ export function createBoardRoutes({
 		capFifo(boardOperationReplies, MAX_BOARD_REPLIES);
 	};
 
-	/** The one task-board route. `from` is both the impersonation claim and the only scoping key, so
-	 * a session touches the backlog plus its own entries. A refusal answers 200 with `applied:false`;
-	 * non-200 is transport, auth and validation. A multi-field update reports the first refusal and
-	 * keeps what landed before it. */
 	async function taskBoard(req: Request, body: Record<string, unknown>): Promise<Response> {
 		const parsed = BoardRouteRequestSchema.safeParse(body);
 		if (!parsed.success) {
@@ -87,25 +76,22 @@ export function createBoardRoutes({
 		const r = parsed.data;
 		const refused = refuseImpersonation(req, r.from, "owner-data");
 		if (refused) return refused;
-		// Replay before anything else. These writes are ABSOLUTE, so re-running one after a newer.
 		const recorded = r.operationId ? recallBoardReply(r.from, r.action, r.operationId) : undefined;
+		// Replay absolute writes before reading or mutating board state.
 		if (recorded) return jsonResponse(recorded);
 		if (!boardClient) return jsonResponse({ error: "task board is not enabled on this gateway" }, 503);
 		const client = boardClient;
-		// The bare fallback applies only when auth is not configured.
 		const sessionKey = auth ? auth.localTeamKey(r.from) : r.from;
 		if (!sessionKey) return jsonResponse({ error: `invalid session name "${r.from}"` }, 400);
-		// Mirror authority for local refusal. Reassign and restore stay owner-only.
 		const actor: BoardActor = { kind: "session", sessionId: sessionKey };
 
-		// The one exit for a settled outcome, so every one of them is recorded for replay. A 400 goes.
 		const done = (bodyOut: BoardReply): Response => {
 			if (r.operationId) rememberBoardReply(r.from, r.action, r.operationId, bodyOut);
 			return jsonResponse(bodyOut);
 		};
 
-		// Transport faults do not retire writes.
 		const answer = (result: BoardWriteAnswer, extra?: Record<string, unknown>): Response => {
+			// Transport failures stay retryable and are never recorded.
 			if (result.kind === "unavailable") return jsonResponse({ error: result.error }, 503);
 			if (result.kind === "refused") return done({ applied: false, refused: result.refused });
 			const cascaded = result.kind === "applied" ? result.cascaded : [];
@@ -126,20 +112,18 @@ export function createBoardRoutes({
 					})
 					.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 				const cut = cutToBudget(visible);
-				// Reads are not recorded: a list re-run is a fresher answer, not a replayed one.
 				return jsonResponse({
 					entries: cut.entries.map(projectForAgent),
 					...(cut.truncated ? { truncated: true } : {}),
 				});
 			}
 			case "attachments": {
-				// Hop one of a fetch: names to blobIds. Its own action because the list deliberately.
 				if (!r.id) return jsonResponse({ error: "attachments requires an id" }, 400);
 				const board = await client.read();
 				if (board.kind !== "ok") return jsonResponse({ error: board.error }, 503);
 				const entry = board.entries.find((e) => e.id === r.id);
 				if (!entry || !visibleTo(entry, sessionKey)) return jsonResponse({ error: "no such entry" }, 404);
-				// A read like the list: never recorded, so a re-run cannot replay blobIds for pictures.
+				// Attachment reads stay fresh and never enter replay storage.
 				return jsonResponse({ attachments: entry.attachments ?? [] });
 			}
 			case "claim": {
@@ -150,7 +134,6 @@ export function createBoardRoutes({
 						sessionKey,
 						(view) => {
 							const target = view.entry(id);
-							// Only the owner restores trashed entries.
 							if (!target || target.trashedAt !== undefined) return "entry_missing";
 							const members = liveSubtree(view, id);
 							for (const member of members) {
@@ -199,7 +182,6 @@ export function createBoardRoutes({
 					await client.mutate(
 						sessionKey,
 						(view) => {
-							// Operation-derived ids make retries idempotent.
 							if (view.entry(id)) return "unchanged";
 							if (view.entries.length >= MAX_ENTRIES_PER_OWNER) return "board_full";
 							const parent = create.parent ?? undefined;
@@ -209,7 +191,6 @@ export function createBoardRoutes({
 								const denied = mayWrite(target, actor);
 								if (denied) return denied;
 							}
-							// Rebalance rides the same batch as placement.
 							const placed = view.placeAtEnd(parent);
 							return [
 								...placed.rebalanced,
@@ -234,23 +215,20 @@ export function createBoardRoutes({
 				if (!r.id) return jsonResponse({ error: "update requires an id" }, 400);
 				const id = r.id;
 				const update = r;
-				// Multi-field updates are one batch.
 				return answer(
 					await client.mutate(
 						sessionKey,
 						(view) => {
 							const entry = view.entry(id);
-							// Scope first: an empty update would otherwise answer applied on an entry.
 							if (!entry) return "entry_missing";
 							const denied = mayWrite(entry, actor);
 							if (denied) return denied;
 							const ops: ClearBoardOp[] = [];
 							if (update.title !== undefined || update.body !== undefined) {
-								// Never write placeholders from unreadable text.
+								// Refuse edits when text cannot be decrypted.
 								if (!view.textIntact(id))
 									return { unavailable: "no content key for this entry's text" };
 								const body = update.body === undefined ? entry.body : (update.body ?? undefined);
-								// Unnamed parent and holder fields retain existing values.
 								ops.push({
 									kind: "upsert",
 									id,
@@ -263,8 +241,8 @@ export function createBoardRoutes({
 							if (update.state !== undefined) ops.push({ kind: "set_state", id, state: update.state });
 							if (update.parent !== undefined) {
 								const parent = update.parent === null ? undefined : update.parent;
-								// An unchanged parent skips placement: a retried update must not re-rank.
 								if (parent !== entry.parent) {
+									// Unchanged parents must not perturb sibling ranks.
 									if (parent !== undefined) {
 										const target = view.entry(parent);
 										if (!target) return "parent_missing";

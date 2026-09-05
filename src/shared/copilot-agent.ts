@@ -1,13 +1,6 @@
-// The Copilot delegation wire truth - zod schemas, bounds, and pure helpers - split by domain into
-// sibling copilotAgent*.ts files. This barrel re-exports the original public surface so no importer
-// changes.
-
 export * from "./copilotAgentActivities.js";
 export * from "./copilotAgentCatalog.js";
 export type { CopilotAgentId } from "./copilotAgentIdentity.js";
-// copilotAgentIdentity.js also re-exports boundedUtf8, module-public only so sibling split files
-// can import it across the new boundaries; the named list keeps it out of this module's original
-// public surface.
 export {
 	COPILOT_ACTIVITY_MAX_BYTES,
 	COPILOT_ACTIVITY_MAX_ITEMS,

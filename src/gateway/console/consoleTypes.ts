@@ -25,10 +25,6 @@ import type { WakeResult } from "../wake.js";
 import type { ConversationRegistry, TeamRegistry } from "../wsTypes.js";
 import type { DurableOpStore } from "./durableOpStore.js";
 
-////////////////////////////////
-//  Interfaces & Types
-
-/** The subset of gateway HTTP routes the console handler reuses. */
 export interface ConsoleRoutes {
 	send: (req: Request, body: Record<string, unknown>, opts?: { consoleSender?: boolean }) => Promise<Response>;
 	respond: (
@@ -37,27 +33,20 @@ export interface ConsoleRoutes {
 		opts?: { consoleSender?: boolean; onFederatedSettled?: (ok: boolean) => void },
 	) => Response;
 	teams: () => Response;
-	// Mesh-wide team list (local + every online peer Gateway). A console roams all Gateways.
 	discover: (url?: URL) => Promise<Response>;
-	// Same rows plus completeness, so a partial answer cannot pass as a full one.
+	// Discovery spans every same-Domain Gateway.
 	discoverFull: () => Promise<{
 		teams: TeamInfo[];
 		coverage: DiscoverCoverage;
-		/** What each Gateway's machine offers beyond `host`, same-Domain only. Optional for the same
-		 * reason the wire field is: absent means "not advertised", never "this machine has none". */
+		/** Absent means unadvertised, not empty. */
 		spawnPoints?: GatewaySpawnPoints[];
 	}>;
-	// The owner-delivery funnel (consolePushOps.deliverToOwner): the ONE mailbox writer, appending
-	// locally and converging to every other same-Domain Gateway the console might actually poll.
+	// The sole mailbox writer converges delivery across same-Domain Gateways.
 	deliverToOwner: DeliverToOwner;
 }
 
 export type TrustedCatalogProject = (name: string) => boolean;
 
-/** The JSON body shape returned by routes.send, shared by the in-time and backgrounded
- * read sites so they cannot drift. A channelOnly send never produces an inline response
- * body: success is always the deterministic channel session, the answer arrives via
- * response_push. */
 export interface SendRouteJson {
 	session_id?: string;
 	status?: string;
@@ -68,25 +57,15 @@ export interface ConsoleHandlerDeps {
 	registry: TeamRegistry;
 	conversationRegistry: ConversationRegistry;
 	routes: ConsoleRoutes;
-	/** This Gateway's id, returned on register so the console anchors its composite
-	 * (gatewayId, name) key, and used to canonicalize a send target to the qualified
-	 * session-id form (matching routes.send). */
+	// Session ids use the composite Gateway and name key.
 	localGatewayId: string;
 	localDomainId: string;
 	ambient: Pick<Ambient, "now" | "newId" | "setTimer" | "clearTimer">;
 	sendBoundMs?: number;
 	createSessionBoundMs?: number;
-	/** True when the name belongs to a trusted devcontainer project. A device must not take such a
-	 * name: while the project sleeps, the console's virtual peer would squat the registry slot,
-	 * absorb sends meant for the project, and suppress its wake. */
+	// Catalog projects cannot be claimed by device sessions.
 	isTrustedCatalogProject?: TrustedCatalogProject;
-	/** Drop a session's durable resume record (the console's Forget), so it stops listing as
-	 * an available asleep session. */
 	dropSessionResume?: (team: string, boardDisposition: BoardDisposition) => void;
-	/** Session access. create_session mints/adopts a record here (the minted id is the tmux session
-	 * name); rename_session relabels one; forget drops one. Production wires the presence facade
-	 * (so these writes announce themselves on the presence plane); a narrow Pick, not the full
-	 * SessionStore class, so either satisfies it structurally. Absent in harnesses with no store. */
 	sessionStore?: Pick<
 		SessionStore,
 		| "getByTeam"
@@ -99,66 +78,25 @@ export interface ConsoleHandlerDeps {
 		| "rename"
 		| "ensureBindToken"
 	>;
-	/** The current keyring + its version hash. The poll reply carries the snapshot only when
-	 * the Console's known version differs. */
+	// Keyring snapshots send only when the version changes.
 	domain?: () => { version: string; snapshot: DomainSnapshot } | null;
-	/** Absent turns every blob op into a refusal. */
 	blobStore?: BlobStore;
-	/** Pulls a blob in from the Gateway holding it. */
 	fetchBlobFromGateway?: (blobId: string, fromGateway: string) => Promise<import("../blobOps.js").BlobFetchOutcome>;
-	/** Absent answers every terminal op "terminal unavailable". */
 	relayToHost?: (op: HostOp) => Promise<HostOpResult>;
-	/** Wake a team (the same trigger send() uses for an asleep target), bringing up a devcontainer's
-	 * cold container if needed. create_session uses this instead of relayToHost for a devcontainer
-	 * target, since only this path brings the container up first. Absent when no host daemon is
-	 * wired (create_session then falls back to relayToHost, which will fail against a cold container -
-	 * matching what happens today without this dependency). */
+	// Devcontainer creation wakes before host relay.
 	tryWakeTeam?: (team: string) => Promise<WakeResult>;
-	/** Whether a wake is currently in flight for a composite team. `close_session` consults it to
-	 * refuse a close mid-wake (which would no-op then resurrect once the wake registers). Absent when
-	 * no wake path is wired; a close then proceeds unguarded (matching today's behavior). */
+	// Closing a team during wake must refuse.
 	isWakeInFlight?: (team: string) => boolean;
-	/** Mark a team's launch in flight for `isWakeInFlight`'s duration, covering `create_session`'s
-	 * relayToHost branch (a host target, or any target with no tryWakeTeam wired), which never touches
-	 * the tryWakeTeam/inflightWakes bookkeeping. Without this, teams() has no signal between "launch
-	 * requested" and "MCP registered" for that branch, so a slow-to-register host session (tmux up,
-	 * Claude CLI still starting) reads as plain "available" instead of "verifying" for that whole gap.
-	 * Returns a release function; absent when no wake path is wired (matching today's unguarded case). */
+	// Host creation remains verifying until MCP registration.
 	markCreateInFlight?: (team: string) => () => void;
-	/** Wait for a team's actual MCP registration (or a bounded timeout), independent of any container
-	 * bring-up. `create_session`'s relayToHost (host) branch uses this to keep `markCreateInFlight`'s
-	 * release pending through the real "Claude CLI still starting" gap instead of releasing the moment
-	 * the tmux pane itself spawns - the devcontainer branch gets the same coverage for free, since
-	 * tryWakeTeam already awaits registration internally before its own promise settles. Absent when no
-	 * wake path is wired (create_session then falls back to releasing at tmux-spawn time, as before). */
 	awaitRegister?: (team: string) => Promise<WakeResult>;
-	/** The cross-Domain listening-mode handshake coordinator. Absent when federation is not
-	 * wired (the cross_domain_* ops then error "not available"). The console drives the mutual
-	 * pairing; the gateway owns the listening window and writes the peer. */
 	crossDomain?: CrossDomainConsoleHandlers;
-	/** The per-session share manager. Absent when federation is not wired. Backed by the
-	 * gateway's CrossDomainShareState store; `isLinkedDomain` reads the cross-Domain peer set
-	 * so a share can only target a Domain the owner has actually linked. */
 	crossDomainShare?: CrossDomainShareHandlers;
-	/** Drop all local trust + share state for a linked friend Domain: forget every peer gateway
-	 * of the Domain, every share offered to it, and settle any in-flight job bound to it, then
-	 * return the counts. Idempotent (an already-unlinked Domain returns zero counts). Absent when
-	 * federation is not wired. The Router-side relay-edge revocation is the phone's separate
-	 * owner-signed submit, not this gateway-local cleanup. */
 	unlinkDomain?: (domainId: string) => CrossDomainUnlinkResult;
-	/** Untrust a person by owner key: the owner-keyed sibling of unlinkDomain. Forgets every peer
-	 * Gateway owned by that owner across all their Domains, then drops the shares and settles the
-	 * in-flight jobs for those Domains, returning the summed counts. Idempotent. Absent when
-	 * federation is not wired. */
 	untrustOwner?: (ownerSignPub: string) => CrossDomainUnlinkResult;
-	/** Durable, restart-proof idempotency for `send`/`respond`, consulted only on an in-memory
-	 * opCache miss - see durableOpStore.ts. Absent disables the durable layer entirely (the
-	 * in-memory opCache alone still covers same-process retries, but not across a restart). */
 	durableOpStore?: DurableOpStore;
 }
 
-/** The subset of the cross-Domain handshake coordinator the console handler drives. A
- * narrow seam so the handler stays mockable and never imports the coordinator class. */
 export interface CrossDomainConsoleHandlers {
 	listen: () => CrossDomainListenResult;
 	request: (args: {
@@ -170,111 +108,55 @@ export interface CrossDomainConsoleHandlers {
 	}) => Promise<CrossDomainRequestResult>;
 	confirm: (args: { pin: string; mySignedLink: SignedXDomainLink }) => CrossDomainConfirmResult;
 	cancel: (args: { listeningToken?: string; pin?: string }) => boolean;
-	/** Receiver read of the listening window's pairing state (the SAS and the friend keys).
-	 * Read-only, so it does not consume the window. */
 	listenState: (listeningToken: string) => CrossDomainListenStateResult;
-	/** The linked friend Domains, projected to `(domainId, gatewayId)` per peer. A peer is listed
-	 * once linked regardless of online or shared-back state, so a freshly-linked peer is visible
-	 * before any session crosses. */
 	listPeers: () => CrossDomainListPeersResult;
 }
 
-/** The subset of the per-session share state the console handler drives. A narrow seam
- * so the handler stays mockable and never imports the store class. `sessionTarget` is the
- * canonical `domain.gateway.spawn.session` of a LOCAL session; `domainId` is a linked friend Domain. */
 export interface CrossDomainShareHandlers {
-	/** Writes the Router's own share record. A refusal throws. */
 	postRecord: (
 		action: "cross_domain_share" | "cross_domain_unshare",
 		sessionTarget: string,
 		target: CrossDomainShareTarget,
 	) => Promise<void>;
-	/** False while the migration fence holds. */
 	share: (sessionTarget: string, target: CrossDomainShareTarget) => boolean;
 	unshare: (sessionTarget: string, target: CrossDomainShareTarget) => ShareMirrorOutcome;
 	listShares: () => CrossDomainListSharesResult["shares"];
-	/** Settle any in-flight cross-Domain job after a withdrawn share, so an already-accepted send's
-	 * reply stops at the destination instead of forwarding back to the origin. Targets the one
-	 * Domain for a specific-Domain share, or every currently-linked Domain for an everyone-trusted
-	 * share. Called after a successful unshare. */
+	// Withdrawals settle jobs so replies stop at the destination.
 	expireSessionJobsForTarget: (sessionTarget: string, target: CrossDomainShareTarget) => void;
-	/** Whether the owner has a linked cross-Domain peer in this Domain (a specific-Domain share can
-	 * only target a linked Domain). */
+	// Shares target linked Domains only.
 	isLinkedDomain: (domainId: string) => boolean;
 }
 
-////////////////////////////////
-//  Functions & Helpers
-
-// An ABSENT peek (pane booting, just exited, or stopped) gets a calm lead in place of raw stderr,
-// with the original cause appended so a PERMANENT absence (dead agent, removed container) stays
-// diagnosable instead of reading as "still starting" forever. The absent-vs-failure decision is
-// made at the host (classifyPeekError); a real failure (timeout, offline host) passes through.
 export function friendlyPeekError(error?: string, kind?: HostOpResult["errorKind"]): string {
+	// Absent sessions are transient, but preserve the host cause.
 	const raw = error ?? "peek failed";
 	if (kind === "absent") return `No session running - it may be starting or has stopped: ${raw}`;
 	return raw;
 }
 
-// Marks a create_session failure as an ambiguous host-op outcome (a timeout or a disconnect, never a
-// host-reported result) rather than a definitive one, so the catch-all rollback around it knows not
-// to forget a record whose launch may still be running.
+// Ambiguous host failures must not roll back a possibly running launch.
 export class CreateSessionAmbiguousError extends Error {}
 
 export const FAKE_REQ = new Request("http://gateway/console");
 
-// Bound on how long a console send op may block inside the relay. The gateway's wake path can
-// hold /send for up to WAKE_TIMEOUT_MS (10 min), far past the Router's opId hold. Past this bound the
-// op returns the deterministic session id and the wake/send continues in the background, the
-// answer landing in the mailbox via the persistent conversation. The Android console's own
-// PINNED_READ_TIMEOUT_MS (ConsoleHttp.kt) must outlast this - pinned by
-// ChatRepositoryConstantsTest.kt, update both sides together.
+// The Android read timeout must exceed this bound.
 export const SEND_BOUND_MS = 25_000;
 
-// Same reasoning and ceiling as SEND_BOUND_MS, for create_session's devcontainer-wake launch (which
-// can likewise run for up to WAKE_TIMEOUT_MS cold-starting a container). Past this bound the op
-// returns the already-adopted session id with status "pending" and the launch continues in the
-// background; a backgrounded failure rolls the record back with no push, so its tile simply drops off
-// the console's board on the next teams() refresh rather than needing a push-delivery mechanism.
-// The Android console's own retry-reattach window (ChatRepository.kt: SPAWN_RETRY_WINDOW_MS) must
-// stay comfortably past this - pinned by consoleHandler.test.ts, update both sides together.
-// Exported only so that test can read the real value.
+// The Android retry window must exceed this bound.
 export const CREATE_SESSION_BOUND_MS = 25_000;
 
-// The real gate is schemas.ts's MAX_POLL_HOLD_MS (the zod .max() rejects a larger holdMs
-// outright); this Math.min is a harmless second layer, never actually truncating a schema-valid
-// value. Must clear the relay chain with headroom: the Router holds the console's HTTP request 55s
-// (ConsoleHttp.ROUTER_HOLD_MS mirrors it). The Android console's own LONG_POLL_HOLD_MS must stay at
-// or under MAX_POLL_HOLD_MS - pinned by consoleHandler.test.ts and ChatRepositoryConstantsTest.kt,
-// update all sides together.
 export const HOLD_CAP_MS = MAX_POLL_HOLD_MS;
 
-// At-most-once side effects: the console->Router->gateway path is at-least-once (a lost reply makes
-// the console retry the same opId), so a seen opId replays its cached reply instead of re-running
-// the op (which would duplicate a channel_push / response_push). Only mutating ops are cached,
-// only on success, and the cache is keyed per conversation so one install cannot evict or read
-// another's entry. MAX_OPS_PER_CONVERSATION lives in shared/console-protocol.ts, shared with
-// durableOpStore.ts's own per-conversation cap, since a durable op can never outnumber the
-// mutating ops that pass through this cache above it.
-
-/** The one predicate both the opCache membership and the durable-layer branch derive the board
- * mutation set from, so a future board op cannot join one and silently miss the other. */
+// Board retries align mutation caching with durable replay.
 export function isBoardMutationKind(kind: string): boolean {
 	return kind.startsWith("board_") && kind !== "board_read";
 }
 
 export function isMutatingOp(op: ConsoleOp): boolean {
-	// Ops with a side effect are cached so a retried opId replays the cached reply rather than
-	// re-running: tmux_send re-injecting keys, create_session/reload_plugins re-launching, the
-	// cross_domain_* handshake ops minting a second window or re-routing or re-writing a peer,
-	// share/unshare re-mutating the store, unlink re-running cleanup and reporting zero. The reads
-	// (peek, cross_domain_listen_state, list_shares, list_peers) run live and are never cached.
 	return (
 		op.kind === "send" ||
 		op.kind === "respond" ||
-		// Board mutations are absolute but NOT monotonic: a retry replayed after a newer write
-		// would regress the field, so the opCache must answer a lost-reply retry with the cached
-		// reply rather than re-running it (board_read stays out - reads run fresh).
+		// Board writes are absolute, so replay instead of reapplying them.
 		isBoardMutationKind(op.kind) ||
 		op.kind === "tmux_send" ||
 		op.kind === "create_session" ||

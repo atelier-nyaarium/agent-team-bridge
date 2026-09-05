@@ -1,7 +1,3 @@
-// The Router's leaf is self-signed, so its fingerprint is the only thing that authenticates it, and
-// the bearer rides the upgrade request. So the property under test is not "a bad cert is noticed" but
-// "a bad cert never receives the bearer", which is what moving the check onto the TLS handshake buys.
-
 import { spawnSync } from "node:child_process";
 import { createHash, X509Certificate } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -14,9 +10,6 @@ import { WebSocketServer } from "ws";
 import { classifyLeaf, pinnedDial, pinRefusal } from "../gateway/router/pinnedSocket.js";
 import { startRouterClient } from "../gateway/router/routerClient.js";
 import { processAmbient } from "../shared/ambient.js";
-
-////////////////////////////////
-//  Functions & Helpers
 
 interface Pair {
 	certPem: string;
@@ -59,7 +52,6 @@ function mint(cn: string): Pair {
 
 interface FakeRouter {
 	url: string;
-	/** Every authorization header the listener saw, which is where a leaked bearer would show up. */
 	sawAuth: string[];
 	stop: () => Promise<void>;
 }
@@ -89,9 +81,6 @@ function startTlsRouter(pair: Pair): Promise<FakeRouter> {
 	});
 }
 
-////////////////////////////////
-//  Tests
-
 describe("router cert pinning", () => {
 	beforeAll(() => {
 		dir = mkdtempSync(path.join(tmpdir(), "pin-test-"));
@@ -115,11 +104,9 @@ describe("router cert pinning", () => {
 		expect(classifyLeaf(raw, good.fp)).toBe("match");
 		expect(classifyLeaf(raw, good.fp.toUpperCase())).toBe("match");
 		expect(classifyLeaf(raw, other.fp)).toBe("mismatch");
-		// The outage: no certificate to read is not evidence of a wrong one.
 		expect(classifyLeaf(undefined, good.fp)).toBe("unreadable");
 		expect(classifyLeaf(Buffer.alloc(0), good.fp)).toBe("unreadable");
 
-		// Each refusal has to say a different thing, or a reader cannot tell an attack from a runtime.
 		const reasons = new Set([pinRefusal("mismatch"), pinRefusal("unreadable"), pinRefusal("pending")]);
 		expect(reasons.size).toBe(3);
 	});
@@ -145,13 +132,10 @@ describe("router cert pinning", () => {
 
 		await new Promise((resolve) => setTimeout(resolve, 1500));
 		expect(client.isConnected()).toBe(false);
-		// The whole point of checking at the handshake: the request carrying the bearer is never written.
+		// Pin refusal precedes any bearer-bearing write.
 		expect(router.sawAuth).toEqual([]);
 	});
 
-	// This suite runs under node, where ws is the real package. Whether the SHIPPING runtime can pin
-	// is a different question and no vitest assertion can reach it; scripts/check-pinning-runtime.ts
-	// answers that one under bun.
 	it("connects when the certificate matches the pin", async () => {
 		const served = mint("matching-leaf");
 		router = await startTlsRouter(served);

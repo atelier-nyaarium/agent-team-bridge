@@ -43,8 +43,7 @@ function socket() {
 }
 
 describe("Router owner state residue", () => {
-	// The Router stores ciphertext and never accesses content keys. The relay and the operation
-	// catalog name the sealed envelopes they carry; neither opens one.
+	// Router stores sealed content and never holds content keys.
 	it("federation-server imports no content-key symbol", () => {
 		const relays = ["keyDeliveryService.ts", "ownerOpRegistry.ts"];
 		const offenders = sources(path.join(REPO_ROOT, "src", "federation-server")).filter((file) =>
@@ -125,7 +124,6 @@ describe("Router owner state residue", () => {
 			proofNonce: "proof",
 			proof: signRegister("fgw", proofAt, "proof", gateway.sign.priv),
 		});
-		// The registration is the only identity a frame handler ever sees.
 		const seen: Array<{ reg: unknown; params: unknown }> = [];
 		bridge.registerGatewayFrame("probe", "read", (reg, params) => {
 			seen.push({ reg, params });
@@ -170,7 +168,6 @@ describe("Router owner state residue", () => {
 		registry.close();
 	});
 
-	// Result and message rows use distinct per-owner keys.
 	it("fires a scheduled send through the real ledger: one session row, pending and sent results", () => {
 		const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "router-residue-"));
 		roots.push(dataDir);

@@ -2,16 +2,12 @@ import crypto from "node:crypto";
 import type { Ambient, TimerHandle } from "./ambient.js";
 import { mintEpoch } from "./epoch.js";
 
-////////////////////////////////
-//  Interfaces & Types
-
-/** `epoch` distinguishes one process incarnation from a later one. */
 export interface PlaneVersion {
+	/** Epochs compare for equality, never ordering. */
 	epoch: number;
 	counter: number;
 }
 
-/** `cleanShutdown` is stamped by the CALLER: the registry has no process-lifecycle knowledge. */
 export interface PlanePersistedState {
 	epoch: number;
 	counter: number;
@@ -23,7 +19,6 @@ interface PlaneDefinition<T> {
 	name: string;
 	snapshot: () => T;
 	identityOf: (snapshot: T) => string;
-	/** The one hook outside waitForBump for a plane that must react to its own change. */
 	onBump?: (version: PlaneVersion) => void;
 }
 
@@ -32,13 +27,8 @@ interface Waiter {
 	settle: (woke: boolean) => void;
 }
 
-////////////////////////////////
-//  Functions & Helpers
-
-/** Mirrors device-mailbox.ts's mintEpoch. Equality-only, never ordering. */
-/** Keys sorted, arrays NOT: array order is assumed meaningful, so `identityOf` must sort its own
- * unordered collections before hashing. */
 export function stableHash(value: unknown): string {
+	// Object keys sort; array order remains meaningful.
 	return crypto.createHash("sha256").update(stableStringify(value)).digest("hex");
 }
 
@@ -49,11 +39,6 @@ function stableStringify(value: unknown): string {
 	return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify((value as Record<string, unknown>)[k])}`).join(",")}}`;
 }
 
-////////////////////////////////
-//  Class
-
-/** Mutators call `markDirty()`, never bump directly: nothing outside `recompute()` may advance
- * the counter, so a plane cannot forget to announce a real change. */
 class Plane<T> {
 	readonly name: string;
 	private readonly snapshotFn: () => T;
@@ -72,10 +57,9 @@ class Plane<T> {
 		if (restored?.cleanShutdown) {
 			this.epoch = restored.epoch;
 			this.counter = restored.counter;
-			// Not recomputed yet: reconcileOnBoot() does that once every plane is registered.
 			this.lastHash = restored.hash;
 		} else {
-			// An unclean exit cannot trust the counter lineage, so a fresh epoch forces a full resync.
+			// Unclean exits mint a fresh epoch for full resync.
 			this.epoch = mintEpoch();
 			this.lastHash = this.identityOf(this.snapshotFn());
 		}
@@ -86,10 +70,10 @@ class Plane<T> {
 	}
 
 	markDirty(): void {
+		// Only recompute may advance a counter.
 		this.dirty = true;
 	}
 
-	/** True if a bump fired. `force` catches an escaped write that never marked dirty. */
 	recompute(force = false): boolean {
 		if (!this.dirty && !force) return false;
 		this.dirty = false;
@@ -101,13 +85,11 @@ class Plane<T> {
 		return true;
 	}
 
-	/** Live-derived fields never survive an exit, so this is expected to fire, not a bug. */
 	reconcileOnBoot(): boolean {
 		return this.recompute(true);
 	}
 
 	persistedState(cleanShutdown: boolean): PlanePersistedState {
-		// The true moment of exit, even if nothing marked dirty since the last tick.
 		if (cleanShutdown) this.recompute(true);
 		return { epoch: this.epoch, counter: this.counter, hash: this.lastHash, cleanShutdown };
 	}
@@ -117,8 +99,6 @@ class Plane<T> {
 	}
 }
 
-/** Multiplexed on the console poll response, plus the wait primitive a held poll races against a
- * mailbox's own `waitForAppend`. One registry per process. */
 export class PlaneRegistry {
 	private readonly planes = new Map<string, Plane<unknown>>();
 	private waiters: Waiter[] = [];
@@ -126,18 +106,15 @@ export class PlaneRegistry {
 
 	constructor(private readonly ambient: Pick<Ambient, "setTimer" | "clearTimer">) {}
 
-	/** `identityOf` must be pure and canonically order any unordered collection inside it. */
 	registerPlane<T>(def: PlaneDefinition<T>, restored?: PlanePersistedState): void {
 		if (this.planes.has(def.name)) throw new Error(`plane "${def.name}" already registered`);
 		this.planes.set(def.name, new Plane(def, restored) as Plane<unknown>);
 	}
 
-	/** For a caller that registers planes LAZILY, since a second registerPlane throws. */
 	hasPlane(name: string): boolean {
 		return this.planes.has(name);
 	}
 
-	/** For a plane shorter-lived than the process. Wakes, never times out, any waiter tracking it. */
 	unregisterPlane(name: string): void {
 		if (!this.planes.delete(name)) return;
 		const pending = this.coalesceTimers.get(name);
@@ -150,8 +127,6 @@ export class PlaneRegistry {
 		}
 	}
 
-	/** The ONLY path that can advance a counter. Wakes every held poll whose version no longer
-	 * matches. */
 	markDirty(name: string): void {
 		const plane = this.planes.get(name);
 		if (!plane) return;
@@ -159,8 +134,6 @@ export class PlaneRegistry {
 		if (plane.recompute()) this.wake(name);
 	}
 
-	/** Folds a write burst into one bump. On the registry, not a call-site debounce, so a mutator
-	 * cannot forget the flush. */
 	markDirtyCoalesced(name: string, windowMs: number): void {
 		const plane = this.planes.get(name);
 		if (!plane) return;
@@ -184,8 +157,6 @@ export class PlaneRegistry {
 		return this.planes.get(name)?.snapshot() as T | undefined;
 	}
 
-	/** `scope` matters once more than one plane exists: without it, "not tracked" and "unknown, ship
-	 * it" are indistinguishable from an absent presented-map key. */
 	changedSince(presented: ReadonlyMap<string, PlaneVersion>, scope?: ReadonlySet<string>): string[] {
 		const changed: string[] = [];
 		for (const [name, plane] of this.planes) {
@@ -197,12 +168,12 @@ export class PlaneRegistry {
 		return changed;
 	}
 
-	/** No `await` between check and push, so the check and registration stay atomic. */
 	waitForBump(
 		presented: ReadonlyMap<string, PlaneVersion>,
 		timeoutMs: number,
 		scope?: ReadonlySet<string>,
 	): Promise<boolean> {
+		// Check and waiter registration stay synchronous.
 		if (this.changedSince(presented, scope).length > 0) return Promise.resolve(true);
 		return new Promise((resolve) => {
 			let timer: TimerHandle | undefined;
@@ -224,19 +195,14 @@ export class PlaneRegistry {
 		const cur = this.planes.get(planeName)?.version;
 		if (!cur) return;
 		for (const waiter of [...this.waiters]) {
-			// A waiter with no key for this plane is not tracking it.
 			if (!waiter.presentedMap.has(planeName)) continue;
 			const have = waiter.presentedMap.get(planeName);
 			if (!have || have.epoch !== cur.epoch || have.counter !== cur.counter) waiter.settle(true);
 		}
 	}
 
-	/** Self-heals a mutation that escaped markDirty. Call on a slow tick, never the hot path.
-	 *
-	 * Each plane's recompute is isolated: an uncaught throw here runs inside a bare setInterval with
-	 * nothing to catch it, taking the whole gateway down. One broken plane keeps running everything
-	 * else. */
 	tripwireTick(): void {
+		// Isolate broken planes so one recompute cannot stop the tick.
 		for (const [name, plane] of this.planes) {
 			try {
 				if (plane.recompute(true)) {
@@ -251,14 +217,12 @@ export class PlaneRegistry {
 		}
 	}
 
-	/** Call once at startup, after every plane is registered. */
 	reconcileOnBoot(): void {
 		for (const [name, plane] of this.planes) {
 			if (plane.reconcileOnBoot()) console.log(`[plane-registry] "${name}" reconciled on boot (one honest bump)`);
 		}
 	}
 
-	/** Bundled into the caller's one atomic file, never a separate sidecar. */
 	persistedState(cleanShutdown: boolean): Record<string, PlanePersistedState> {
 		const out: Record<string, PlanePersistedState> = {};
 		for (const [name, plane] of this.planes) out[name] = plane.persistedState(cleanShutdown);

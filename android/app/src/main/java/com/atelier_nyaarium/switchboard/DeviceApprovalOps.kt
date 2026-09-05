@@ -42,8 +42,6 @@ internal fun verifyDeviceJoin(approvalId: String, nonce: String, join: ConsoleAp
 	}.getOrDefault(false)
 }
 
-/** The "Add a device" surface: a held device arms a one-time approval window and a fresh device
- * joins it, all keyed off the console-approval broker (no admin round trip). */
 internal class DeviceApprovalOps(
 	private val state: MutableStateFlow<ChatState>,
 	private val store: AppStateStore,
@@ -52,21 +50,13 @@ internal class DeviceApprovalOps(
 	private val collaborators: DeviceApprovalOpsCollaborators,
 ) {
 	private val approvalNonces get() = collaborators.approvalNonces()
-	////////////////////////////////
-	//  Add a device (USER self-enroll: the owner authorizes their OWN fresh device, no admin)
 
-	/** The Router's public device-approval reach for the authorize-console QR, or null when this network
-	 * has no public ingress (the Add-a-device entry is then shown disabled). */
 	fun deviceApprovalReach(): String? =
 		runCatching { store.load()?.let { ConsoleCredentials.parse(it, store) } }.getOrNull()?.deviceApprovalReach?.takeIf { it.isNotEmpty() }
 
-	/** The Router cert fingerprint to pin the reach against, empty when this device holds none. */
 	private fun routerCertFp(): String =
 		runCatching { store.load()?.let { ConsoleCredentials.parse(it, store) } }.getOrNull()?.routerCertFp ?: ""
 
-	/** HELD device: arm a one-time approval window and build the authorize-console QR. The QR carries
-	 * PUBLIC material only (owner keys + Domain + the reach/token/nonce), never an SA token. Fails when
-	 * the network has no public ingress or its Domain is not yet confirmed by a local session. */
 	suspend fun armDeviceApproval(): Result<DeviceApprovalArmed> = withContext(Dispatchers.IO) {
 		runCatchingCancellable {
 			val reach = deviceApprovalReach() ?: error("This network has no device-approval reach configured.")
@@ -77,6 +67,7 @@ internal class DeviceApprovalOps(
 			val result = client.client().postConsoleApproval(ConsoleApprovalOp.Arm(approvalId = approvalId, nonce = nonce))
 			if (!result.ok) error(result.error ?: "Couldn't arm the approval window.")
 			approvalNonces[approvalId] = nonce
+			// QR contains public enrollment data, never an SA token.
 			val qr = JSONObject()
 				.put("type", "authorize-console")
 				.put("domainId", domainId)
@@ -85,16 +76,12 @@ internal class DeviceApprovalOps(
 				.put("approvalId", approvalId)
 				.put("nonce", nonce)
 				.put("reach", reach)
-				// A fresh device holds no provisioning record, so the QR is the only place it can
-				// learn which cert to pin against a self-signed Router.
 				.put("reachCertFp", routerCertFp())
 				.toString()
 			DeviceApprovalArmed(approvalId, nonce, qr)
 		}
 	}
 
-	/** HELD device: poll the window for the fresh device's join (its generated console keys). Null
-	 * until it joins, so the screen keeps polling. */
 	suspend fun pollDeviceApproval(approvalId: String): Result<ConsoleApprovalJoin?> = withContext(Dispatchers.IO) {
 		runCatchingCancellable {
 			val result = client.client().postConsoleApproval(ConsoleApprovalOp.Poll(approvalId = approvalId))
@@ -108,9 +95,6 @@ internal class DeviceApprovalOps(
 		}
 	}
 
-	/** HELD device: approve the joined device. Owner-signs a kind:console admission for its keys and
-	 * submits it (the existing submit_admission path), then seals the console transport to its box key
-	 * and parks it for the device to fetch. The biometric gate is applied at the UI call site. */
 	suspend fun approveDevice(approvalId: String, nonce: String, join: ConsoleApprovalJoin): Result<Unit> = withContext(Dispatchers.IO) {
 		runCatchingCancellable {
 			require(verifyDeviceJoin(approvalId, nonce, join)) {
@@ -129,14 +113,12 @@ internal class DeviceApprovalOps(
 		}
 	}
 
-	/** HELD device: tear down the approval window when the owner leaves the screen (best-effort). */
 	suspend fun cancelDeviceApproval(approvalId: String) {
 		withContext(Dispatchers.IO) {
 			runCatchingCancellable { client.client().postConsoleApproval(ConsoleApprovalOp.Cancel(approvalId = approvalId)) }
 		}
 	}
 
-	/** Transport for an approved device. */
 	private fun buildConsoleTransport(recipientBoxPub: String): ConsoleTransport {
 		val boot = identity.readyOrNull() ?: error("Your Domain isn't confirmed yet - open a session first.")
 		val prov = boot.credentials
@@ -159,8 +141,6 @@ internal class DeviceApprovalOps(
 		)
 	}
 
-	/** Parse a scanned authorize-console QR, or null if it is not one. The owner signPub is pinned to
-	 * verify the sealed reply; its fingerprint is shown so the human confirms the network. */
 	suspend fun parseAuthorizeConsole(scanned: String): ScannedDeviceApproval? = withContext(Dispatchers.IO) {
 		runCatching {
 			val j = JSONObject(scanned.trim())
@@ -173,21 +153,16 @@ internal class DeviceApprovalOps(
 				nonce = j.getString("nonce"),
 				reach = j.getString("reach"),
 				reachCertFp = j.optString("reachCertFp"),
-				// N's OWN console key fingerprint - the SAME value the held device renders (it shows
-				// fingerprint(newSignPub)) so the human can cross-check the two screens. An attacker who
-				// saw the QR and joined first then shows a different code and is caught. The owner key
-				// (signPub) is NOT shown here; it is only the unseal pin.
+				// Display the joining console fingerprint for human comparison.
 				sas = Crypto.fingerprint(identity.federation.consoleIdentity().sign.pub),
 			)
 		}.getOrNull()
 	}
 
-	/** NEW device: announce this device's freshly-generated console keys to the held device by POSTing a
-	 * join to the public ingress (nonce-gated, no creds). consoleIdentity() mints+persists the keys on
-	 * first call, so the keys sent here are the SAME ones this device later unseals with. */
 	suspend fun newDeviceJoin(scan: ScannedDeviceApproval): Result<Unit> = withContext(Dispatchers.IO) {
 		runCatching {
 			val id = identity.federation.consoleIdentity()
+			// These keys are reused when the new device unwraps transport.
 			val joinSig = Crypto.sign(
 				Crypto.deviceJoinSigningBytes(scan.approvalId, scan.nonce, id.sign.pub, id.box.pub),
 				id.sign.priv,
@@ -206,15 +181,13 @@ internal class DeviceApprovalOps(
 		}
 	}
 
-	/** NEW device: poll the public ingress for the held device's sealed reply. Returns true once it
-	 * arrives - unseals it (verifying the owner signPub pinned from the QR) and installs the transport;
-	 * false while still pending, so the caller keeps polling. */
 	suspend fun newDeviceFetch(scan: ScannedDeviceApproval): Result<Boolean> = withContext(Dispatchers.IO) {
 		runCatching {
 			val op = ConsoleApprovalOp.Fetch(approvalId = scan.approvalId, nonce = scan.nonce)
 			val result = ConsoleHttp.postPublicApproval(scan.reach, op)
 			if (!result.ok) error(result.error ?: "The approval window expired.")
 			val sealed = result.sealed ?: return@runCatching false
+			// The QR owner key authenticates the sealed transport.
 			val plain = identity.federation.unsealConsoleTransport(sealed, scan.ownerSignPub)
 			val transport = wireJson.decodeFromString(ConsoleTransport.serializer(), plain.toString(Charsets.UTF_8))
 			installApprovedDevice(transport)
@@ -222,7 +195,6 @@ internal class DeviceApprovalOps(
 		}
 	}
 
-	/** Install approved transport without self-signing. Mark provisioned last. */
 	private fun installApprovedDevice(transport: ConsoleTransport) {
 		val contentMerge = classifyContentKeys(transport)
 		val contentKeys = when (contentMerge) {
@@ -233,8 +205,7 @@ internal class DeviceApprovalOps(
 			ContentKeyring.Merge.Unchanged -> heldContentKeys()
 			is ContentKeyring.Merge.Installed -> contentMerge.next
 		}
-		// Every transport field is restated: a rebuild that enumerates a subset drops a record on the
-		// way in, and the new device silently provisions against nothing.
+		// Rebuild every transport field to preserve the approved record.
 		val prov = Provisioning(
 			routerUrl = transport.routerUrl.ifEmpty { null },
 			routerCertFp = transport.routerCertFp.ifEmpty { null },
@@ -250,9 +221,7 @@ internal class DeviceApprovalOps(
 		}
 		gatewayId?.let { collaborators.setHomeGatewayId(it) }
 		collaborators.invalidateClients()
-		// Refresh after route assignment.
 		if (transport.domain != null) collaborators.refreshAdmittedGateways()
-		// Preserve first-root provenance.
 		DebugLog.log(
 			"AddDevice",
 			"installed approved-device transport; consoleAdmitted+firstRooted set, " +

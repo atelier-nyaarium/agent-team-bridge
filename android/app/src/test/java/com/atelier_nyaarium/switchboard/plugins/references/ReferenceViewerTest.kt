@@ -13,12 +13,6 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 
-/**
- * Pins the viewer's consumer half of the segment contract: the snapshot file is its declared
- * segments' text joined with newlines, so consuming `lineCount` lines per segment in wire order
- * must reproduce each segment byte-for-byte. The producer half is pinned in the TS suite
- * (ref-artifacts.test.ts); this side proves the inverse against the same join.
- */
 class ReferenceViewerTest {
 
 	@get:Rule
@@ -50,8 +44,6 @@ class ReferenceViewerTest {
 		}
 	}
 
-	////////////////////////////////
-	//  Segment slicing (the inverse of the producer's join)
 
 	@Test
 	fun aSnapshotWithNoSegmentsRendersWholeNumberedFromOne() {
@@ -62,8 +54,7 @@ class ReferenceViewerTest {
 
 	@Test
 	fun declaredLineCountsSliceTheJoinedSnapshotBackIntoTheOriginalSegments() {
-		// The producer joins segment texts with a newline; the declared counts must partition that
-		// join back into exactly the texts it was built from.
+		// Declared counts must invert the producer's newline join.
 		val first = "fun a() {\n\treturn 1\n}"
 		val second = "fun z() {\n\treturn 26\n}"
 		val snapshot = tmp.newFile().apply { writeText("$first\n$second") }
@@ -97,8 +88,6 @@ class ReferenceViewerTest {
 		assertEquals(listOf(1L to "a\nb", 50L to ""), segmentsOf(payloadFor(request(meta), snapshot)))
 	}
 
-	////////////////////////////////
-	//  The banner
 
 	@Test
 	fun anExactResolutionShowsNoBanner() {
@@ -121,7 +110,7 @@ class ReferenceViewerTest {
 	@Test
 	fun ambiguityPrintsItsCountOrNothingNeverTheWordNull() {
 		assertTrue(noticeFor(key(ambiguous = true, matchCount = 3))!!.contains("3"))
-		// The flag without its count degrades to silence.
+		// An ambiguity flag without a count renders no notice.
 		assertNull(noticeFor(key(ambiguous = true, matchCount = null)))
 	}
 }

@@ -35,9 +35,6 @@ import {
 	type OwnedCopilotAgent,
 } from "./copilotAgentTypes.js";
 
-////////////////////////////////
-//  Class
-
 export class CopilotAgentService {
 	private readonly persistenceDeps: CopilotCatalogDeps;
 	private readonly receiptApplier: CopilotReceiptApplier;

@@ -9,9 +9,6 @@ import type { WakeResult } from "../wake.js";
 import type { ConsoleTargets } from "./consoleTargets.js";
 import { CreateSessionAmbiguousError } from "./consoleTypes.js";
 
-////////////////////////////////
-//  Interfaces & Types
-
 export interface SessionLifecycleDeps {
 	targets: ConsoleTargets;
 	createSessionBoundMs: number;
@@ -35,9 +32,6 @@ export interface SessionLifecycleDeps {
 		| "ensureBindToken"
 	>;
 }
-
-////////////////////////////////
-//  Functions & Helpers
 
 export function createSessionLifecycleHandlers({
 	targets,
@@ -185,9 +179,6 @@ export function createSessionLifecycleHandlers({
 	async function wake(op: Extract<ConsoleOp, { kind: "wake" }>) {
 		if (!tryWakeTeam) throw new Error("wake is unavailable");
 		const { name, spawn, session } = targets.requireLocalComposite(op.target, "wake");
-		// The owner's button re-creates a record the gateway lost, under the session's own id, as
-		// create_session does with a typed sessionName. A send never adopts a typed name; the
-		// console may. A launch that never comes up forgets the record again.
 		const adopted =
 			sessionStore && !sessionStore.getByTeam(name)
 				? sessionStore.adoptById(session, { spawn, sessionLabel: session, workdirHint: session })
@@ -197,7 +188,6 @@ export function createSessionLifecycleHandlers({
 			const current = sessionStore.getByTeam(name);
 			return current === adopted && current.confirmedAt === undefined;
 		};
-		// Bounded like create_session: a slow launch answers pending and finishes on its own.
 		let boundTimer: TimerHandle | undefined;
 		const bound = new Promise<null>((resolve) => {
 			boundTimer = ambient.setTimer(() => resolve(null), createSessionBoundMs);

@@ -7,7 +7,7 @@ describe("ReplayGuard", () => {
 		const g = new ReplayGuard(processAmbient());
 		expect(g.check("hostA", "n1")).toBe(true);
 		expect(g.check("hostA", "n1")).toBe(false);
-		// A different scope or nonce is independent.
+		// Scope and nonce both participate in replay identity.
 		expect(g.check("hostB", "n1")).toBe(true);
 		expect(g.check("hostA", "n2")).toBe(true);
 	});
@@ -16,9 +16,9 @@ describe("ReplayGuard", () => {
 		let now = 1000;
 		const g = new ReplayGuard({ now: () => now }, 100, 50_000);
 		expect(g.check("h", "n")).toBe(true);
-		now = 1050; // within the window -> still a replay
+		now = 1050;
 		expect(g.check("h", "n")).toBe(false);
-		now = 1101; // past the window -> forgotten, fresh again
+		now = 1101;
 		expect(g.check("h", "n")).toBe(true);
 	});
 
@@ -35,13 +35,10 @@ describe("ReplayGuard", () => {
 		const snap = g.snapshot();
 		expect(snap).toContainEqual(["hostA\nn1", 1000 + 300_000]);
 
-		// Simulate a restart: a brand-new guard loads the persisted seen-set.
 		const revived = new ReplayGuard({ now: () => now }, 300_000, 50_000);
 		revived.restore(snap);
-		// The captured nonce is still a replay AFTER the restart: restoring a snapshot into a fresh
-		// guard must reject it exactly as the original guard would have.
+		// Restored entries remain replay-protected.
 		expect(revived.check("hostA", "n1")).toBe(false);
-		// A fresh nonce is still accepted.
 		expect(revived.check("hostA", "n2")).toBe(true);
 	});
 
@@ -49,12 +46,11 @@ describe("ReplayGuard", () => {
 		let now = 1000;
 		const g = new ReplayGuard({ now: () => now }, 100, 50_000);
 		g.check("h", "stale");
-		now = 1200; // past the 100ms window
-		// The expired entry is not carried forward.
+		now = 1200;
 		expect(g.snapshot()).toEqual([]);
 
 		const revived = new ReplayGuard({ now: () => now }, 100, 50_000);
-		revived.restore([["h\nstale", 1100]]); // already expired at now=1200
-		expect(revived.check("h", "stale")).toBe(true); // forgotten, fresh again
+		revived.restore([["h\nstale", 1100]]);
+		expect(revived.check("h", "stale")).toBe(true);
 	});
 });

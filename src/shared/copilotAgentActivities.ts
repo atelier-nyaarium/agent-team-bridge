@@ -1,6 +1,3 @@
-// Copilot delegation: the narration items a turn accumulates while it runs, in their caller-visible
-// and durable-storage shapes.
-
 import { z } from "zod";
 import { agentActivityIssues } from "./agent-record.js";
 import {

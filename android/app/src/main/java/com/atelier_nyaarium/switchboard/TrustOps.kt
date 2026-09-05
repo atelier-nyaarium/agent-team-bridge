@@ -10,8 +10,6 @@ internal interface TrustOpsCollaborators {
 	suspend fun revokeXdomainLink(srcDomainId: String, dstDomainId: String): Boolean
 }
 
-/** The cross-Domain trust surface: the roster, the link/share/unlink wizard's REQUESTER and
- * RECEIVER legs, the owner-keyed friend graph, and the FLOW-2 roster-initiated trust rendezvous. */
 internal class TrustOps(
 	private val state: MutableStateFlow<ChatState>,
 	private val clientPort: ClientPort,
@@ -20,19 +18,14 @@ internal class TrustOps(
 	private val homeGatewayId: () -> String,
 	private val collaborators: TrustOpsCollaborators,
 ) : ClearsOnReprovision {
-	// RECEIVER link state: the requester-minted pin learned from a listen-state poll, keyed by the
-	// receiver's listening token. The receiver needs it to confirm its pairing (the gateway resolves
-	// the window by the pin), but the wizard only holds the token, so the poll stashes it here.
+	// Receiver confirmation needs the pin returned by polling.
 	private val receiverPin = mutableMapOf<String, String>()
 
-	/** The pins belong to the outgoing owner's link windows, which the next owner cannot confirm. */
 	override suspend fun clearInMemory() {
 		receiverPin.clear()
 	}
 
-	/** Fetch the cross-tenant roster (the Users surface): every member on this Router, by name +
-	 * presence. Router-direct + signed-proof scoped; a non-member or auth failure surfaces as a
-	 * failure with the Router's opaque reason. The rendering surface consumes the rows. */
+	/** Fetch the signed-proof-scoped cross-tenant roster. */
 	suspend fun fetchRoster(): Result<List<com.atelier_nyaarium.switchboard.proto.RosterMember>> =
 		withContext(Dispatchers.IO) {
 			runCatchingCancellable {
@@ -42,23 +35,12 @@ internal class TrustOps(
 			}
 		}
 
-	////////////////////////////////
-	//  Cross-Domain trust (the link/share/unlink surface the Federation UI drives)
-
-	 /**
-	 * set (pushed on the poll response's linkedPeers plane; see applyLinkedPeers): a peer is listed
-	 * the moment it is linked, regardless of whether its gateway is online or has shared anything
-	 * back. That set is unioned with the presence-derived Domains so a just-linked peer is
-	 * immediately visible (and its detail reachable to start sharing) before any of its sessions
-	 * surface in presence. Presence still supplies the session count; a peer present
-	 * only in the peer set shows zero sessions / offline. */
+	/** Linked peers remain visible when gateways are offline. */
 	fun linkedDomains(): List<LinkedDomain> {
 		val adminDomain = identity.readyOrNull()?.domainId ?: return emptyList()
 		return CrossDomainLink.mergeLinkedDomains(state.value.teams, state.value.linkedPeerOwners, adminDomain)
 	}
 
-	/** My LOCAL devcontainer/loose sessions, the only kinds shareable to a friend Domain (never the
-	 * host-agent, the cli host, or a console). Drives the per-session share checkmarks. */
 	fun shareableSessions(): List<Team> {
 		val adminDomain = identity.readyOrNull()?.domainId ?: return emptyList()
 		val gw = homeGatewayId()
@@ -69,16 +51,12 @@ internal class TrustOps(
 			.sortedBy { s.label(it.name) }
 	}
 
-	/** RECEIVER: open a listening window, returning the token to read to the friend + this
-	 * Gateway's keys + the expiry. */
 	suspend fun crossDomainListen(): Result<com.atelier_nyaarium.switchboard.proto.CrossDomainListenResult> =
 		withContext(Dispatchers.IO) {
 			runCatchingCancellable { clientPort.client().crossDomainListen() }
 		}
 
-	/** REQUESTER: mint a one-time rendezvous pin, pair against the friend's token, and run the
-	 * commit-reveal exchange. Returns the SAS + both sides' keys (and the pin, so confirm can pass
-	 * it back). The Gateway uses this owner's admitted owner key, not the advisory value sent. */
+	/** Open a requester pairing and run the commit-reveal exchange. */
 	suspend fun crossDomainRequest(listeningToken: String): Result<CrossDomainPairing> =
 		withContext(Dispatchers.IO) {
 			runCatchingCancellable {
@@ -96,10 +74,6 @@ internal class TrustOps(
 			}
 		}
 
-	/** RECEIVER: poll the listening window's pairing state. Returns null until a requester pairs;
-	 * once the exchange lands, returns the SAS + the friend (requester) keys the receiver
-	 * owner-signs its own link over, plus the pin to pass to confirm. The receiver polls this on a
-	 * short interval while on the link screen (its only path out of "awaiting request"). */
 	suspend fun crossDomainListenState(listeningToken: String): Result<CrossDomainReceiverPairing?> =
 		withContext(Dispatchers.IO) {
 			runCatchingCancellable {
@@ -107,9 +81,7 @@ internal class TrustOps(
 				if (!state.pairingArrived) {
 					return@runCatchingCancellable null
 				}
-				// pairingArrived implies the SAS + all friend keys + the pin are present (the gateway
-				// only sets pairingArrived once round 2 records them); guard so a partial reply fails
-				// loudly rather than signing a link over blanks.
+				// Pairing readiness requires every signed-link input.
 				CrossDomainReceiverPairing(
 					sas = state.sas ?: error("pairing arrived without a SAS"),
 					friendOwnerSignPub = state.friendOwnerSignPub ?: error("pairing arrived without the friend owner key"),
@@ -121,10 +93,6 @@ internal class TrustOps(
 			}
 		}
 
-	/** REQUESTER confirm: owner-sign this owner's link over the RECEIVER's keys (from the request
-	 * pairing the SAS just verified) and submit it. Only this owner's side is sent; the receiver
-	 * confirms its own side independently. `linkNonce` is pinned by the wizard so a retry reuses
-	 * the same signed link. */
 	suspend fun crossDomainConfirmRequester(pairing: CrossDomainPairing, linkNonce: String): Result<ConfirmOutcome> =
 		withContext(Dispatchers.IO) {
 			val r = pairing.result
@@ -139,9 +107,6 @@ internal class TrustOps(
 			)
 		}
 
-	/** RECEIVER confirm: owner-sign this owner's link over the FRIEND (requester) keys learned from
-	 * the listen-state poll and submit it. Uses the pin the poll surfaced (the requester minted it;
-	 * the gateway resolves this window's pairing by it). Only this owner's side is sent. */
 	suspend fun crossDomainConfirmReceiver(
 		listeningToken: String,
 		friend: CrossDomainReceiverPairing,
@@ -161,13 +126,7 @@ internal class TrustOps(
 		)
 	}
 
-	/** Shared confirm core: owner-sign this owner's link over the friend Gateway's keys, submit it
-	 * (the gateway verifies it under this owner's key + writes the cross-Domain peer), then
-	 * owner-sign + submit the relay-affinity edge so the Router permits the crosstalk. The local peer
-	 * write must succeed (it THROWS otherwise -> Result.failure -> the wizard restarts). The edge
-	 * submit RETURNS false (not throws) on a Router rejection: the peer is then linked locally but
-	 * cross-Domain sends to it would be DENIED, so the outcome distinguishes the two (RelayEdgeRejected
-	 * carries the peer Domain for an edge-only retry) instead of silently reporting a full link. */
+	/** Commit local trust before the relay-affinity edge. */
 	private suspend fun confirmWithMyLink(
 		pin: String,
 		peerOwnerSignPub: String,
@@ -186,12 +145,10 @@ internal class TrustOps(
 			nowMs = System.currentTimeMillis(),
 			nonce = linkNonce,
 		)
-		// Record the OWNER-keyed friend edge (the Users-surface trust) - the SAS confirmed this owner key.
+		// Record the owner-keyed friend edge.
 		identity.federation.addTrustedOwner(peerOwnerSignPub)
 		clientPort.client().crossDomainConfirm(pin, mySignedLink)
-		// The local peer is now written. The relay-affinity edge is a separate Router submit that
-		// returns false on rejection; surface that as RelayEdgeRejected (recoverable by retrying the
-		// edge alone) rather than letting the wizard show a false "Linked".
+		// Surface relay-edge rejection separately from local linking.
 		if (collaborators.submitXdomainLink(identity.ready().domainId, peerDomainId)) {
 			ConfirmOutcome.Linked
 		} else {
@@ -199,10 +156,6 @@ internal class TrustOps(
 		}
 	}
 
-	/** Re-submit ONLY the relay-affinity edge for an already-linked peer (the local peer write
-	 * happened at confirm; only the Router edge failed). Idempotent at the Router (it dedups by
-	 * nonce), so this needs no unlink+relink. Returns the same outcome shape so the wizard can loop on a repeat
-	 * failure or advance to Done. */
 	suspend fun retryXdomainLinkEdge(peerDomainId: String): Result<ConfirmOutcome> = withContext(Dispatchers.IO) {
 		runCatchingCancellable {
 			if (collaborators.submitXdomainLink(identity.ready().domainId, peerDomainId)) {
@@ -213,42 +166,27 @@ internal class TrustOps(
 		}
 	}
 
-	/** A fresh owner-link nonce, pinned by the wizard for one pairing so a confirm retry reuses
-	 * the same signed link bytes. */
 	fun freshLinkNonce(): String = identity.federation.freshLinkNonce()
 
-	/** Cancel the pairing windows when the owner leaves the link screen (no passive surface). */
 	suspend fun crossDomainCancel(listeningToken: String?, pin: String?) = withContext(Dispatchers.IO) {
 		runCatchingCancellable { clientPort.client().crossDomainCancel(listeningToken, pin) }
 	}
 
-	////////////////////////////////
-	//  Owner-keyed trust (the friend graph the Users surface reads)
-
-	/** True iff this owner has trusted the given owner key (the Users-surface Trusted badge). */
 	fun isOwnerTrusted(ownerSignPub: String): Boolean = identity.federation.isTrusted(ownerSignPub)
 
-	/** The set of trusted owner keys (the friend graph). */
 	fun trustedOwners(): Set<String> = identity.federation.trustedOwners()
 
-	/** Untrust a person by owner key: drop the local friend edge + sign an owner-keyed untrust
-	 * tombstone. The relay-affinity edge teardown (per the peer's Domains) is the gateway-side
-	 * follow-up; the friend-graph removal is immediate so the Users surface reflects it now. */
 	suspend fun untrustOwner(peerOwnerSignPub: String): Result<Unit> = withContext(Dispatchers.IO) {
 		runCatchingCancellable {
-			// Drop the local friend edge first so the Users surface reflects the untrust immediately.
+			// Remove local trust before remote cleanup.
 			identity.federation.removeTrustedOwner(peerOwnerSignPub)
-			// Capture the person's Domains BEFORE the local cleanup forgets the peers (a person may run
-			// several), so we can revoke each Router-side relay edge. Owner-keyed via the peer set.
+			// Capture peer Domains before local cleanup.
 			val peerDomains = runCatchingCancellable {
 				clientPort.client().crossDomainListPeers().peers.filter { it.ownerSignPub == peerOwnerSignPub }.map { it.domainId }.toSet()
 			}.getOrDefault(emptySet())
-			// Tell the gateway to forget every peer + share for this owner across all their Domains
-			// (owner-keyed local cleanup). Best-effort: the friend-graph removal already stands even if
-			// the gateway is unreachable (a gateway-less owner has no peer state to drop anyway).
+			// Gateway cleanup is best-effort after local trust removal.
 			runCatchingCancellable { clientPort.client().crossDomainUntrust(peerOwnerSignPub) }
-			// Router-side: revoke the owner-signed link edge for each of the person's Domains, so the
-			// Router drops its relay-affinity edge too (the tombstone's relay half, completing the untrust).
+			// Revoke each Router relay edge.
 			for (d in peerDomains) {
 				runCatchingCancellable { collaborators.revokeXdomainLink(identity.ready().domainId, d) }
 			}
@@ -257,20 +195,12 @@ internal class TrustOps(
 		}
 	}
 
-	////////////////////////////////
-	//  FLOW-2 trust rendezvous (roster-initiated user-to-user trust)
-
-	/** The sorted-owner-key role both sides agree on for the SYMMETRIC FLOW-2 SAS: the lower owner key
-	 * takes the ADMIN slot, so both phones hash the two parties in the SAME order. Reuses enrollSas /
-	 * enrollCommitment - no new SAS scheme (the rendezvousId is the pin). */
+	/** Assign the symmetric SAS role by sorted owner key. */
 	private fun trustRole(myOwner: String, peerOwner: String): String =
 		if (myOwner < peerOwner) EnrollCeremony.ADMIN else EnrollCeremony.ENROLLEE
 
-	/** Mint a fresh rendezvous id (the initiator's; also the SAS pin both sides bind). */
 	fun mintRendezvousId(): String = identity.federation.freshRendezvousId()
 
-	/** Poll "who armed trust toward me?" (the highlight). Returns the armed initiator rows (owner key
-	 * + rendezvousId) so the Users surface highlights them. Best-effort. */
 	suspend fun fetchPendingTrust(): Result<List<com.atelier_nyaarium.switchboard.proto.TrustPendingEntry>> =
 		withContext(Dispatchers.IO) {
 			runCatchingCancellable {
@@ -280,8 +210,6 @@ internal class TrustOps(
 			}
 		}
 
-	/** The FLOW-2 leg to the human compare, over the rendezvous. `mySide` is INITIATOR (I armed) or
-	 * TARGET (I joined a highlighted arm). The result feeds `enrollConfirm` on a [Yes]. */
 	suspend fun trustExchange(
 		rendezvousId: String,
 		mySide: String,
@@ -293,10 +221,10 @@ internal class TrustOps(
 				runSasExchange(
 					myParty = myParty,
 					myRole = trustRole(myParty.ownerSignPub, peerOwnerSignPub),
-					// The rendezvousId IS this flow's SAS pin, so no new SAS scheme.
+					// The rendezvous ID is the SAS pin.
 					pin = rendezvousId,
 					salt = identity.federation.freshEnrollSalt(),
-					// No QR here, so the recovery is re-arming from the roster.
+					// Recovery re-arms from the roster.
 					retryHint = "Try again.",
 					transport = object : SasTransport {
 						override suspend fun commit(commitment: String): String? {
@@ -321,13 +249,10 @@ internal class TrustOps(
 			}
 		}
 
-	/** Cancel this leg of the trust rendezvous (a [No], timeout, or leaving). Best-effort. */
 	suspend fun trustCancel(rendezvousId: String) = withContext(Dispatchers.IO) {
 		runCatchingCancellable { clientPort.client().trustHandshake(TrustHandshakeOp.Cancel(rendezvousId)) }
 	}
 
-	/** This owner's current per-session SPECIFIC-Domain shares as (sessionTarget, domainId) pairs, so
-	 * the per-peer checkmark UI can render them (everyone-trusted shares are a separate mode). */
 	suspend fun crossDomainShares(): Result<Set<Pair<String, String>>> = withContext(Dispatchers.IO) {
 		runCatchingCancellable {
 			clientPort.client().crossDomainListShares().shares
@@ -340,9 +265,6 @@ internal class TrustOps(
 		}
 	}
 
-	/** How many of MY sessions each TRUSTED person can reach, keyed by their owner key (the Users
-	 * row's "N shared sessions"). A person reaches a session shared to one of their Domains OR shared
-	 * to everyone-trusted. Joins the peer set (owner -> their Domains) with the share list. */
 	suspend fun sharedSessionCounts(): Result<Map<String, Int>> = withContext(Dispatchers.IO) {
 		runCatchingCancellable {
 			val ownerDomains = clientPort.client().crossDomainListPeers().peers
@@ -366,7 +288,6 @@ internal class TrustOps(
 		}
 	}
 
-	/** The sessions shared to EVERYONE the owner trusts (the Users-surface share mode). */
 	suspend fun sessionsSharedToEveryone(): Result<Set<String>> = withContext(Dispatchers.IO) {
 		runCatchingCancellable {
 			clientPort.client().crossDomainListShares().shares
@@ -376,7 +297,6 @@ internal class TrustOps(
 		}
 	}
 
-	/** Toggle a local session's share to a specific friend Domain (the checkmark IS the consent). */
 	suspend fun setCrossDomainShare(sessionTarget: String, domainId: String, shared: Boolean): Result<Unit> =
 		withContext(Dispatchers.IO) {
 			runCatchingCancellable {
@@ -386,7 +306,6 @@ internal class TrustOps(
 			}
 		}
 
-	/** Toggle a local session's share to EVERYONE the owner trusts (the live-trust-set audience). */
 	suspend fun setShareEveryoneTrusted(sessionTarget: String, shared: Boolean): Result<Unit> =
 		withContext(Dispatchers.IO) {
 			runCatchingCancellable {

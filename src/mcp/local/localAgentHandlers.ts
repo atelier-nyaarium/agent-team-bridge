@@ -13,9 +13,6 @@ import type {
 } from "./localAgentRuntime.js";
 import type { LocalBackendSession, LocalTerminal, LocalTurnHandle } from "./localAgentSession.js";
 
-////////////////////////////////
-//  Interfaces & Types
-
 export interface LocalHandlerHost {
 	spec: LocalBackendSpec;
 	now(): number;
@@ -49,39 +46,23 @@ interface LocalAgentRecord {
 	createdAt: number;
 	updatedAt: number;
 	activeTurnId?: string;
-	/** The tier this agent is currently set to, applied to each new turn. */
 	serviceTier?: CodexServiceTier;
-	/** The thread's model, kept so a later turn's tier is checked against it. */
 	model?: string;
 	turns: LocalTurnRecord[];
 	exchanges: LocalExchangeRecord[];
 	settled?: Promise<LocalTerminal>;
 }
 
-////////////////////////////////
-//  Functions & Helpers
-
-/**
- * Child errors arrive as whatever the process wrote, which for a spawn failure is a multi-line stack
- * trace. Both result schemas require `value === sanitize(value)` and cap the bytes, so trimming alone
- * made an ordinary failure unreportable: the answer threw on its own way out and the caller learned
- * nothing about what actually went wrong. Sanitizing here covers every `fail()` site at once.
- */
 function errorText(error: unknown): string {
 	const text = error instanceof Error ? error.message : String(error);
 	return sanitizeAgentErrorText(text, AGENT_ERROR_MAX_BYTES) || `agent command failed`;
 }
 
-////////////////////////////////
-//  Class
-
-/** Every agent's history and its request kinds. */
 export class LocalAgentHandlers {
 	private readonly agents = new Map<string, LocalAgentRecord>();
 
 	constructor(private readonly host: LocalHandlerHost) {}
 
-	/** Insertion order, which is start order: nothing here is reordered by later work. */
 	list(): LocalListAgent[] {
 		return [...this.agents.values()].map((agent) => ({
 			agentId: agent.agentId,
@@ -110,8 +91,7 @@ export class LocalAgentHandlers {
 	}
 
 	async start(request: LocalRequest): Promise<LocalAgentAnswer> {
-		// The CALLER's identity when it supplied one, so an id is not merely spelled like a coordinated
-		// one but is the same one. Minted only when nobody named it.
+		// Preserve a caller-supplied operation identity for agent derivation.
 		const operationId = request.operationId ?? crypto.randomUUID();
 		const agentId = agentIdForOperation(this.host.spec.backendId, operationId);
 		const prompt = request.prompt ?? "";
@@ -132,7 +112,6 @@ export class LocalAgentHandlers {
 				serviceTier: request.serviceTier,
 			});
 		} catch (error) {
-			// Nothing was recorded, so no record is invented and `list` stays honest.
 			return this.fail(agentId, "app_server_unavailable", errorText(error), true);
 		}
 
@@ -163,7 +142,7 @@ export class LocalAgentHandlers {
 
 		const active = this.activeTurn(agent);
 		if (active) {
-			// Refusing the REQUEST keeps the running turn untouched, instead of racing a second one.
+			// Refuse busy requests when steering is unavailable.
 			if (!session.steerTurn) return { refused: this.host.spec.busyMessage ?? `agent is still working` };
 			try {
 				await session.steerTurn(agent.threadId, active.id, prompt);
@@ -180,14 +159,12 @@ export class LocalAgentHandlers {
 				createdAt: at,
 				acceptedAt: at,
 			});
-			// A steer carries no tier, so a change asked for here lands on the next turn.
 			if (request.serviceTier !== undefined) agent.serviceTier = request.serviceTier;
 			return this.waitFor(agent, active.id, "steered");
 		}
 
 		const serviceTier = request.serviceTier ?? agent.serviceTier;
 		const answer = await this.dispatchTurn(session, agent, prompt, "message", { model: agent.model, serviceTier });
-		// Remembered only once a turn started. A refused tier would otherwise ride every later message.
 		if (serviceTier !== undefined && answer.observation !== "unavailable") agent.serviceTier = serviceTier;
 		return answer;
 	}
@@ -196,7 +173,6 @@ export class LocalAgentHandlers {
 		const agent = this.agents.get(request.agentId ?? "");
 		if (!agent) return this.notFound(request.agentId ?? "");
 		const active = this.activeTurn(agent);
-		// Nothing running is not an error: the outcome is already in hand.
 		if (!active) return this.settledAnswer(agent);
 		return this.waitFor(agent, active.id);
 	}
@@ -218,7 +194,6 @@ export class LocalAgentHandlers {
 		} catch (error) {
 			return this.fail(agent.agentId, "app_server_unavailable", errorText(error), true);
 		}
-		// Requested, not ended: the turn's own terminal still decides how it finished.
 		return {
 			agentId: agent.agentId,
 			agentState: "working",
@@ -234,7 +209,6 @@ export class LocalAgentHandlers {
 			const turn = agent.turns.find((candidate) => candidate.id === turnId);
 			if (turn?.state !== "inProgress") continue;
 			turn.commentary.push(text);
-			// The newest window is kept: what it is doing now explains a running turn best.
 			while (turn.commentary.length > this.host.spec.maxActivities) {
 				turn.commentary.shift();
 				turn.omitted += 1;
@@ -245,7 +219,6 @@ export class LocalAgentHandlers {
 		}
 	}
 
-	/** Open a turn and wait on it, recording the exchange that started it. */
 	private async dispatchTurn(
 		session: LocalBackendSession,
 		agent: LocalAgentRecord,
@@ -270,28 +243,23 @@ export class LocalAgentHandlers {
 		};
 		agent.turns.push(turn);
 		agent.activeTurnId = turn.id;
-		// `LocalTurnHandle` promises this never rejects. Held to it here, so a backend that breaks the
-		// promise loses one turn rather than raising an unhandled rejection.
+		// Register the turn before racing its terminal.
 		const settled = handle.settled.catch((error): LocalTerminal => ({ status: "failed", error: errorText(error) }));
 		agent.settled = settled;
 		agent.exchanges.push({
 			kind,
 			prompt,
 			status: "accepted",
-			// The schema refuses any other word for a start.
 			delivery: kind === "start" ? "started" : this.host.spec.followupDelivery,
 			turnId: turn.id,
 			createdAt: at,
 			acceptedAt: at,
 		});
-		// Registered before the race, so a terminal beating the budget is recorded. applyTerminal is
-		// idempotent for the case where it does not.
 		void settled.then((terminal) => this.applyTerminal(agent, turn.id, terminal));
 
 		return this.waitFor(agent, turn.id, kind === "start" ? "started" : this.host.spec.followupDelivery);
 	}
 
-	/** A turn outliving the budget keeps running; the caller collects it with an await. */
 	private async waitFor(agent: LocalAgentRecord, turnId: string, delivery?: string): Promise<LocalAgentAnswer> {
 		const settled = agent.settled;
 		if (settled) {
@@ -322,19 +290,13 @@ export class LocalAgentHandlers {
 		return this.terminalAnswer(agent, turn, delivery);
 	}
 
-	/**
-	 * Record how a turn ended, once.
-	 *
-	 * Two paths reach it: the dispatch listener and the racing caller. Whichever runs second must not
-	 * re-stamp, or an await reports a fresher timestamp than the terminal it describes.
-	 */
 	private applyTerminal(agent: LocalAgentRecord, turnId: string, terminal: LocalTerminal): void {
+		// Apply the terminal once because listener and waiter paths race.
 		const turn = agent.turns.find((candidate) => candidate.id === turnId);
 		if (turn?.state !== "inProgress") return;
 		turn.state = terminal.status;
 		if (terminal.status === "completed") turn.finalResponse = terminal.finalResponse ?? "";
-		// The child wrote this, so it is normalized before it is stored rather than at each reader:
-		// it leaves here for `error.message`, which both backends bound and refuse unnormalized.
+		// Normalize child errors before schema validation.
 		if (terminal.status === "failed") turn.error = errorText(terminal.error || `turn failed`);
 		turn.updatedAt = this.host.now();
 		if (agent.activeTurnId === turnId) {
@@ -342,14 +304,11 @@ export class LocalAgentHandlers {
 			agent.settled = undefined;
 		}
 		agent.updatedAt = Math.max(agent.updatedAt, turn.updatedAt);
-		// A terminal arrives on the event stream, not from a call, so it reaches no lease. Without
-		// this the idle clock still reads the turn's START: a thirty-minute turn would be reapable
-		// the instant it finished, instead of ten minutes after the child actually went quiet.
 		this.host.markUsed(turn.updatedAt);
 	}
 
-	/** The marker sits at the end and the window is exactly full, per the shared invariant. */
 	private activitiesOf(turn: LocalTurnRecord): LocalAgentAnswer["activities"] {
+		// Keep the truncation marker with the full activity window.
 		const kept = turn.commentary.map((text) => ({ kind: "commentary" as const, text }));
 		if (turn.omitted === 0) return kept;
 		return [...kept, { kind: "truncated" as const, omitted: turn.omitted }];
@@ -374,7 +333,6 @@ export class LocalAgentHandlers {
 		return base;
 	}
 
-	/** The latest settled turn, for an await that found nothing running. */
 	private settledAnswer(agent: LocalAgentRecord): LocalAgentAnswer {
 		const last = agent.turns[agent.turns.length - 1];
 		if (!last || last.state === "inProgress") return this.idleAnswer(agent);
@@ -409,7 +367,6 @@ export class LocalAgentHandlers {
 		return this.activeTurn(agent) ? "working" : "idle";
 	}
 
-	/** Returns the instant, so every child record written in one step shares a timestamp. */
 	private touch(agent: LocalAgentRecord): number {
 		const at = this.host.now();
 		agent.updatedAt = Math.max(agent.updatedAt, at);

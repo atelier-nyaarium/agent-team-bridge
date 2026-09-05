@@ -13,17 +13,11 @@ import type { SessionStore } from "../../shared/session-store.js";
 import type { ConsoleTargets } from "./consoleTargets.js";
 import { friendlyPeekError } from "./consoleTypes.js";
 
-////////////////////////////////
-//  Interfaces & Types
-
 export interface TerminalOpsDeps {
 	targets: ConsoleTargets;
 	relayToHost?: (op: HostOp) => Promise<HostOpResult>;
 	sessionStore?: Pick<SessionStore, "getByTeam" | "teamOf">;
 }
-
-////////////////////////////////
-//  Functions & Helpers
 
 export function createTerminalHandlers({ targets, relayToHost, sessionStore }: TerminalOpsDeps) {
 	function assertDaemonDrivable(target: TmuxTarget): void {
@@ -68,7 +62,7 @@ export function createTerminalHandlers({ targets, relayToHost, sessionStore }: T
 
 	async function listDirs(op: Extract<ConsoleOp, { kind: "list_dirs" }>) {
 		if (!relayToHost) throw new Error("terminal view unavailable on this Gateway");
-		// Blank names the spawn point's own default directory, which the machine spells back.
+		// An empty path asks the spawn point for its default directory.
 		if (op.path.length > 0 && !isSpawnWorkdirPath(op.spawn, op.path)) {
 			throw new Error("invalid path: must be absolute, ~-rooted, or a Windows drive path");
 		}

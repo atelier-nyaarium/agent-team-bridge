@@ -22,24 +22,16 @@ import { CodexTransitionError } from "./codexAgentTypes.js";
 import type { CodexRelay } from "./codexRelay.js";
 import { presentedByRequest } from "./sessionAuthority.js";
 
-////////////////////////////////
-//  Interfaces & Types
-
 export interface CodexRouteDeps {
 	service: CodexAgentService;
 	relay: CodexRelay;
 	ambient: Clock;
-	/** How long a waiting call blocks. The tool's own documented budget; overridable for tests. */
+	/** Wait budget covers acceptance and turn settlement together. */
 	waitBudgetMs?: number;
 }
 
-////////////////////////////////
-//  Functions & Helpers
-
 const DEFAULT_WAIT_BUDGET_MS = CODEX_WAIT_BUDGET_MS;
 
-/** A result carrying nothing but a failure. Deliberately claims no agent activity, which is what the
- * envelope requires of a contextless error. */
 function unavailable(
 	agentId: string,
 	error: { code: CodexErrorCode; retryable: boolean },
@@ -61,22 +53,12 @@ function turnOf(agent: CodexPersistedAgent, turnId: string | undefined): CodexSt
 	return turnId ? agent.turns.find((turn) => turn.id === turnId) : undefined;
 }
 
-/** The model the thread runs, held only by the start exchange. Absent means the target's own default. */
 function startModelOf(agent: CodexPersistedAgent): string | undefined {
 	return agent.exchanges.find((exchange) => exchange.kind === "start")?.model;
 }
 
-/**
- * What one call should report about an agent, given the turn it was waiting on.
- *
- * The turn is captured at invocation and never re-read from the record, so a later turn cannot
- * satisfy an earlier waiter. Everything else is derived from the stored state, which is why a result
- * cannot claim an outcome the record does not hold.
- */
 function describeAgent(agent: CodexPersistedAgent, waitedTurnId: string | undefined): CodexAgentResult {
-	// An agent whose state could not be confirmed says exactly that, whatever turns it happens to
-	// hold. Checked FIRST and for every branch: reporting a settled turn's answer while the record is
-	// in recovery hands the caller a previous prompt's response as though it answered this one.
+	// Unavailable and recovering states override any previously settled turn.
 	if (agent.agentState === "unavailable" || agent.agentState === "recovering") {
 		const dead = agent.agentState === "unavailable";
 		return CodexAgentResultSchema.parse({
@@ -94,9 +76,6 @@ function describeAgent(agent: CodexPersistedAgent, waitedTurnId: string | undefi
 	const turn = turnOf(agent, waitedTurnId);
 	const activities = publishedActivities(turn?.activities);
 	if (!turn) {
-		// A `creating` agent has no turn by construction, so this is the branch an await on one always
-		// takes - which the tool descriptions actively send callers to after a start times out. It is
-		// still waiting for its first delivery, and `idle` is the one thing it is not.
 		return CodexAgentResultSchema.parse({
 			agentId: agent.agentId,
 			agentState: agent.agentState === "working" ? "idle" : agent.agentState,
@@ -112,10 +91,7 @@ function describeAgent(agent: CodexPersistedAgent, waitedTurnId: string | undefi
 			agentState: "working",
 			observation: interrupting ? "interruptRequested" : "waitTimedOut",
 			turn: { id: turn.id, state: turn.state },
-			// An interrupt request reports the turn it is stopping, never how that turn was delivered:
-			// the delivery already happened and is no longer what the caller is being told about. The
-			// envelope schema forbids carrying both on an interrupting turn, so sending delivery here
-			// fails validation and turns a stop of a working agent into a 500 instead of the interrupt result.
+			// Interrupting turns omit delivery.
 			delivery: interrupting ? undefined : exchange?.delivery,
 			activities,
 		});
@@ -132,15 +108,6 @@ function describeAgent(agent: CodexPersistedAgent, waitedTurnId: string | undefi
 	});
 }
 
-////////////////////////////////
-//  Class
-
-/**
- * The one authenticated entry point for every Codex tool.
- *
- * Five tools, one handler: session authority, input validation, idempotency and the result envelope
- * are each written once here rather than five times, which is what keeps them from drifting apart.
- */
 export class CodexRoute {
 	constructor(private readonly deps: CodexRouteDeps) {}
 
@@ -150,10 +117,6 @@ export class CodexRoute {
 
 		const owner = this.deps.service.resolveOwner(req);
 		if (!owner) {
-			// A caller that presented NO token already knows it - naming that leaks nothing, and the
-			// bare "not found" collapsed three causes into one string (issue #252). An unknown token
-			// keeps the answer indistinguishable from an unknown agent, so nobody can probe whether
-			// another session exists.
 			if (!presentedByRequest(req).token) {
 				return json(
 					{
@@ -162,6 +125,7 @@ export class CodexRoute {
 					401,
 				);
 			}
+			// Unknown tokens remain indistinguishable from unknown agents.
 			return json({ error: "not found" }, 404);
 		}
 
@@ -196,8 +160,6 @@ export class CodexRoute {
 						400,
 					);
 				}
-				// Every failing kind names its agent one way or the other: an existing one carries the ID,
-				// and a start derives it from the operation it would have created.
 				const agentId =
 					"agentId" in request
 						? request.agentId
@@ -216,11 +178,9 @@ export class CodexRoute {
 		owner: SessionRecord,
 		request: Extract<ReturnType<typeof CodexGatewayRequestSchema.parse>, { kind: "start" }>,
 	): Promise<CodexAgentResult> {
-		// Derived, not minted, so an HTTP retry of this same invocation names the same agent and
-		// replays instead of colliding.
+		// Derive agent identity from operationId so retries replay the same start.
 		const agentId = codexAgentIdForOperation(request.operationId);
-		// Refused rather than ignored: a devcontainer thread runs at its project root, and accepting a
-		// path this side would silently drop would tell the caller its agent is somewhere it is not.
+		// Only host sessions may override the execution working directory.
 		if (request.cwd !== undefined && !isHostSpawn(owner.spawn)) {
 			throw new CodexTransitionError("invalid_input", "cwd applies to host sessions only");
 		}
@@ -232,8 +192,6 @@ export class CodexRoute {
 			operationId: request.operationId,
 			prompt: request.prompt,
 			target,
-			// The model travelled straight to the daemon and never reached the persisted identity, so
-			// the record could not tell two starts apart that differed only by it.
 			model: request.model,
 			serviceTier: request.serviceTier,
 			at: this.now(),
@@ -247,6 +205,7 @@ export class CodexRoute {
 				operationId: request.operationId,
 				target,
 				prompt: request.prompt,
+				// Persisted model and tier are the replay source of truth.
 				model: request.model,
 				...(request.serviceTier === undefined ? {} : { serviceTier: request.serviceTier }),
 			});
@@ -278,7 +237,6 @@ export class CodexRoute {
 				threadId: agent.threadId!,
 				expectedTurnId: committed.operation.expectedTurnId,
 				prompt: request.prompt,
-				// Read back from the committed record, so an unchanged tier still travels.
 				...(agent.serviceTier === undefined ? {} : { serviceTier: agent.serviceTier }),
 				...(startModelOf(agent) === undefined ? {} : { model: startModelOf(agent) }),
 			});
@@ -297,7 +255,6 @@ export class CodexRoute {
 			at: this.now(),
 		});
 		const agent = committed.agent;
-		// An idle stop is a successful no-op that never reaches the daemon, which is what `noOp` records.
 		if (committed.disposition === "committed" && !committed.operation.noOp) {
 			this.deps.relay.dispatch({
 				kind: "interrupt",
@@ -309,19 +266,14 @@ export class CodexRoute {
 				turnId: committed.operation.turnId!,
 			});
 		}
-		// Stop returns immediately by design. The authoritative outcome arrives later, on the turn.
 		return describeAgent(this.current(owner, request.agentId) ?? agent, agent.activeTurnId);
 	}
 
 	private async awaitAgent(req: Request, owner: SessionRecord, agentId: string): Promise<CodexAgentResult> {
 		const owned = this.deps.service.resolveOwnedAgent(req, agentId);
 		if (!owned) return unavailable(agentId, AGENT_NOT_FOUND, "codex agent was not found");
-		// With no active turn there is nothing to wait for, so the latest settled state is the answer.
 		const waitedTurnId = owned.agent.activeTurnId;
-		// Reconcile a STALE record, never the turn being waited on. Asking about a live turn makes the
-		// daemon answer `recovering` whenever it cannot confirm that exact turn, which settles this
-		// wait immediately and reports a running turn as unconfirmed - an await that breaks the very
-		// thing it was called to observe.
+		// Reconcile only stale agents; querying the active turn would mark it recovering.
 		if (!waitedTurnId) this.deps.relay.reconcileStale(owner);
 		if (!waitedTurnId) return describeAgent(owned.agent, lastSettledTurnId(owned.agent));
 		await this.waitForTurn(owner, agentId, waitedTurnId, this.deadline());
@@ -332,8 +284,6 @@ export class CodexRoute {
 		owner: SessionRecord,
 		request: Extract<ReturnType<typeof CodexGatewayRequestSchema.parse>, { kind: "list" }>,
 	): CodexListAgentsResult {
-		// The other trigger. A list is how a caller picks work back up after its own agent died, so it
-		// is exactly when a stale record most needs asking about.
 		this.deps.relay.reconcileStale(owner);
 		const agents = this.deps.service.listOwnedAgents(owner);
 		const selected =
@@ -344,30 +294,20 @@ export class CodexRoute {
 		});
 	}
 
-	/**
-	 * Report on the operation just committed, waiting for its exact turn when asked to.
-	 *
-	 * The turn is whatever the acceptance recorded, so a caller that did not wait still learns which
-	 * turn its prompt landed in, and one that did wait cannot be satisfied by a later turn.
-	 */
 	private async settle(
 		owner: SessionRecord,
 		agentId: string,
 		operationId: string,
 		dispatched = true,
 	): Promise<CodexAgentResult> {
-		// ONE deadline for the whole call. Acceptance and the turn are two phases of a single wait, and
-		// giving each its own fresh budget let a documented nine-minute call block for eighteen.
-		// A delivery that never left (no host socket) cannot be accepted, so waiting out the budget for
-		// it would only delay the same indeterminate answer by four minutes.
+		// Acceptance and turn settlement share one deadline.
 		const deadline = dispatched ? this.deadline() : this.now();
 		const accepted = await this.waitForAcceptance(owner, agentId, operationId, deadline);
 		const agent = this.current(owner, agentId);
 		if (!agent) return unavailable(agentId, AGENT_NOT_FOUND, "codex agent was not found");
 		const turnId = accepted?.turnId;
 		if (!turnId) {
-			// Never accepted within the budget. Reporting a turn or a delivery here would describe work
-			// that was never proven to have started.
+			// Do not report delivery or a turn without confirmed acceptance.
 			if (agent.agentState === "creating") {
 				return CodexAgentResultSchema.parse({
 					agentId,
@@ -376,11 +316,8 @@ export class CodexRoute {
 					activities: [],
 				});
 			}
-			// An unproven delivery against an existing agent is exactly the condition the rest of the
-			// system calls recovery, and the envelope will not carry an error for an agent it is still
-			// calling idle. So the record is moved to match what is being reported, rather than the report
-			// being bent to match a record that has not caught up.
 			const recovering = this.deps.service.abandonDelivery(owner, agentId, operationId, this.now());
+			// Unconfirmed delivery is reported as recovery, never as idle.
 			return CodexAgentResultSchema.parse({
 				agentId,
 				agentState: recovering?.agentState === "unavailable" ? "unavailable" : "recovering",
@@ -389,8 +326,6 @@ export class CodexRoute {
 				error: {
 					code: "indeterminate",
 					retryable: true,
-					// A daemon that answered with a reason gets to keep it. Only a genuine silence is a
-					// budget expiry.
 					message:
 						this.deps.service.takeRefusalReason(operationId) ??
 						"codex delivery was not confirmed within the wait budget",
@@ -401,7 +336,6 @@ export class CodexRoute {
 		return describeAgent(this.current(owner, agentId) ?? agent, turnId);
 	}
 
-	/** The operation's accepted turn, once the daemon's receipt has been committed. */
 	private async waitForAcceptance(
 		owner: SessionRecord,
 		agentId: string,
@@ -425,10 +359,6 @@ export class CodexRoute {
 			agentId,
 			() => {
 				const agent = this.current(owner, agentId);
-				// An agent that has fallen out of a working state settles the wait too: there is nothing
-				// left that could produce this turn's outcome until reconciliation runs.
-				// `recovering` settles the wait too. describeAgent already reports it as unconfirmed, so
-				// waiting on past it only delays that same answer by the rest of the budget.
 				if (!agent || agent.agentState === "unavailable" || agent.agentState === "recovering") return true;
 				return turnOf(agent, turnId)?.state !== "inProgress";
 			},
@@ -453,10 +383,6 @@ export class CodexRoute {
 	}
 }
 
-////////////////////////////////
-//  Functions & Helpers
-
-/** The most recent turn that actually ended, which is what an await with nothing running reports. */
 function lastSettledTurnId(agent: CodexPersistedAgent): string | undefined {
 	return agent.turns.findLast((turn) => turn.state !== "inProgress")?.id;
 }

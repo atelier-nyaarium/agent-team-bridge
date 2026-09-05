@@ -29,7 +29,6 @@ function hostAdmission(gatewayId: string, id: { sign: { pub: string }; box: { pu
 	return { kind: "gateway", signPub: id.sign.pub, boxPub: id.box.pub, gatewayId, issuedAt: 1, nonce: "bg==" };
 }
 
-/** An allowlist rooted at `owner` admitting both Gateway A and Gateway B. */
 function allowlistWithBoth(): Allowlist {
 	const a = new Allowlist(tmp(), processAmbient());
 	a.setOwner(owner.sign.pub);
@@ -38,7 +37,6 @@ function allowlistWithBoth(): Allowlist {
 	return a;
 }
 
-/** An empty cross-Domain peer set, so the local seal path is exercised. */
 function noPeers(): CrossDomainPeers {
 	return new CrossDomainPeers(tmp());
 }
@@ -78,11 +76,9 @@ describe("sealer (local v1)", () => {
 			processAmbient(),
 		);
 		const env = aSealer.seal("B", { hello: "world" });
-		// Decrypt directly to inspect the inner wrapper B would parse.
 		const inner = JSON.parse(unseal(env, B.box.priv, A.sign.pub).toString("utf8"));
 		expect(inner).toEqual({ v: 1, src: "A", dst: "B", at: inner.at, body: { hello: "world" } });
 		expect(typeof inner.at).toBe("number");
-		// No Domain fields leak into the local v1 body.
 		expect(inner).not.toHaveProperty("srcDomain");
 		expect(inner).not.toHaveProperty("dstDomain");
 	});
@@ -178,7 +174,6 @@ describe("sealer (local v1)", () => {
 			processAmbient(),
 		);
 		const env = aSealer.seal("B", { x: 1 });
-		// B is also admitted; opening A's frame under label "B" must not verify/attribute.
 		expect(() => bSealer.open("B", env)).toThrow();
 	});
 
@@ -192,7 +187,6 @@ describe("sealer (local v1)", () => {
 			new ReplayGuard(processAmbient()),
 			processAmbient(),
 		);
-		// A seals to B, but a Gateway that believes itself "C" opens it.
 		const cSealer = createSealer(
 			B,
 			allowlistWithBoth(),
@@ -227,25 +221,21 @@ describe("sealer (local v1)", () => {
 			{ now: () => clock },
 		);
 		const env = aSealer.seal("B", { x: 1 });
-		clock += 120_001; // past SEAL_MAX_AGE_MS
+		// Past SEAL_MAX_AGE_MS.
+		clock += 120_001;
 		expect(() => bSealer.open("A", env)).toThrow(/stale/);
 	});
 });
 
-////////////////////////////////
-//  Cross-Domain (v2)
-//
-//  Two gateways owned by DIFFERENT owners (two Domains), each holding the other in
-//  its disjoint cross-Domain peer set. Each Domain's allowlist roots at its OWN owner
-//  and does NOT admit the friend gateway, so the seal MUST resolve via crossDomainPeers
-//  and emit v2.
+// Cross-Domain peers require v2 with domain binding. Domain localx.
+const ownerX = generateIdentity();
+// Domain carol.
+const ownerY = generateIdentity();
+// Gateway gw-x.
+const X = generateIdentity();
+// Gateway gw-y.
+const Y = generateIdentity();
 
-const ownerX = generateIdentity(); // Domain "localx"
-const ownerY = generateIdentity(); // Domain "carol"
-const X = generateIdentity(); // gateway in localx, id "gw-x"
-const Y = generateIdentity(); // gateway in carol, id "gw-y"
-
-/** A local allowlist rooted at `o` admitting only its own gateway `(gwId, id)`. */
 function soloAllowlist(o: Identity, gwId: string, id: Identity): Allowlist {
 	const a = new Allowlist(tmp(), processAmbient());
 	a.setOwner(o.sign.pub);
@@ -253,8 +243,6 @@ function soloAllowlist(o: Identity, gwId: string, id: Identity): Allowlist {
 	return a;
 }
 
-/** A cross-Domain peer record for `friend` in `(friendDomainId, friendGatewayId)`,
- * with the link side owner-signed by `friendOwner`. */
 function crossPeer(
 	friendOwner: Identity,
 	friendDomainId: string,
@@ -282,13 +270,11 @@ function crossPeer(
 	};
 }
 
-/** X's peers: it knows Y (Domain "carol", id "gw-y"). */
 function xPeers(): CrossDomainPeers {
 	const s = new CrossDomainPeers(tmp());
 	s.add(crossPeer(ownerY, "carol", "gw-y", Y, ownerX));
 	return s;
 }
-/** Y's peers: it knows X (Domain "localx", id "gw-x"). */
 function yPeers(): CrossDomainPeers {
 	const s = new CrossDomainPeers(tmp());
 	s.add(crossPeer(ownerX, "localx", "gw-x", X, ownerY));
@@ -330,7 +316,6 @@ describe("sealer (cross-Domain v2)", () => {
 			processAmbient(),
 		);
 		const env = xSealer.seal({ domainId: "carol", gatewayId: "gw-y" }, { ping: 42 });
-		// Decrypt with Y's box key (the recipient) to inspect the inner wrapper.
 		const inner = JSON.parse(unseal(env, Y.box.priv, X.sign.pub).toString("utf8"));
 		expect(inner).toMatchObject({
 			v: 2,
@@ -356,7 +341,6 @@ describe("sealer (cross-Domain v2)", () => {
 	});
 
 	it("rejects a v2 frame whose dstDomain is not this Gateway's Domain", () => {
-		// X seals to Y, but Y believes it lives in a DIFFERENT Domain than the link says.
 		const xSealer = createSealer(
 			X,
 			soloAllowlist(ownerX, "gw-x", X),
@@ -380,8 +364,6 @@ describe("sealer (cross-Domain v2)", () => {
 	});
 
 	it("rejects a v2 frame whose signed-in srcDomain disagrees with the resolved peer", () => {
-		// Y's peer record for X claims X lives in "localx". A sealer that signs in a
-		// different srcDomain trips the srcDomain cross-check.
 		const xLies = createSealer(
 			X,
 			soloAllowlist(ownerX, "gw-x", X),
@@ -405,8 +387,6 @@ describe("sealer (cross-Domain v2)", () => {
 	});
 
 	it("rejects an unknown sealed body version", () => {
-		// Craft a v:99 inner body sealed to Y and signed by X (a known peer), so the
-		// version branch - not the resolve / unseal - is what rejects it.
 		const ySealer = createSealer(
 			Y,
 			soloAllowlist(ownerY, "gw-y", Y),
@@ -425,15 +405,11 @@ describe("sealer (cross-Domain v2)", () => {
 			at: Date.now(),
 			body: {},
 		};
-		// Seal it ourselves with crypto.seal so we control the version byte.
 		const env = seal(Buffer.from(JSON.stringify(inner)), Y.box.pub, X.sign.priv);
 		expect(() => ySealer.open("gw-x", env)).toThrow(/unknown sealed body version/);
 	});
 
 	it("rejects a v1 frame from a cross-Domain Gateway (v1 must be a local peer)", () => {
-		// A cross-Domain peer crafts a v1 body (no srcDomain/dstDomain) to skip the v2
-		// (srcDomain, dstDomain) binding. open() must reject it: v1 resolves only to a local peer.
-		// X is a cross peer in Y's yPeers() (localx/gw-x), so open resolves crossPeer, not local.
 		const ySealer = createSealer(
 			Y,
 			soloAllowlist(ownerY, "gw-y", Y),
@@ -449,23 +425,19 @@ describe("sealer (cross-Domain v2)", () => {
 	});
 });
 
-////////////////////////////////
-//  Cross-Domain srcDomain disambiguation
-//
-//  Two friend Domains share the SAME gateway id ("shared"). The receiver holds both as
-//  cross-Domain peers. Pre-unseal, the cleartext frame names only the gateway id, so
-//  without the Router-stamped srcDomain the receiver cannot tell the two peers apart.
-//  The srcDomain on the relay frame resolves the right peer by the full (domain, gateway)
-//  pair.
+// srcDomain disambiguates duplicate gateway ids. Domain pat.
+const ownerP = generateIdentity();
+// Domain quinn.
+const ownerQ = generateIdentity();
+// Receiving Domain rcv.
+const recvOwner = generateIdentity();
+// Gateway shared in pat.
+const P = generateIdentity();
+// Gateway shared in quinn.
+const Q = generateIdentity();
+// Receiving gateway gw-r.
+const R = generateIdentity();
 
-const ownerP = generateIdentity(); // Domain "pat"
-const ownerQ = generateIdentity(); // Domain "quinn"
-const recvOwner = generateIdentity(); // the receiving Domain "rcv"
-const P = generateIdentity(); // gateway "shared" in Domain "pat"
-const Q = generateIdentity(); // gateway "shared" in Domain "quinn" (same id!)
-const R = generateIdentity(); // the receiving gateway "gw-r" in Domain "rcv"
-
-/** The receiver's peers: BOTH friend Domains run a gateway whose id is "shared". */
 function recvPeersWithCollision(): CrossDomainPeers {
 	const s = new CrossDomainPeers(tmp());
 	s.add(crossPeer(ownerP, "pat", "shared", P, recvOwner));
@@ -473,8 +445,6 @@ function recvPeersWithCollision(): CrossDomainPeers {
 	return s;
 }
 
-/** A friend's OWN peer set: it knows the receiver (Domain "rcv", gateway "gw-r"), so its
- * seal to the receiver resolves the receiver's keys + emits v2. */
 function friendPeersKnowingReceiver(friendOwner: Identity): CrossDomainPeers {
 	const s = new CrossDomainPeers(tmp());
 	s.add(crossPeer(recvOwner, "rcv", "gw-r", R, friendOwner));
@@ -495,8 +465,6 @@ describe("sealer (cross-Domain srcDomain disambiguation)", () => {
 	}
 
 	it("resolves a same-id-two-Domains peer when srcDomain names the sender's Domain", () => {
-		// P (Domain "pat", gateway "shared") seals to the receiver. The receiver opens
-		// with srcDomain="pat" and resolves P's peer despite "quinn" also running "shared".
 		const pSealer = createSealer(
 			P,
 			soloAllowlist(ownerP, "shared", P),
@@ -511,8 +479,6 @@ describe("sealer (cross-Domain srcDomain disambiguation)", () => {
 	});
 
 	it("resolves the OTHER same-id peer when srcDomain names the other Domain", () => {
-		// Q (Domain "quinn", same gateway id "shared") seals to the receiver; srcDomain="quinn"
-		// must select Q's peer, proving the pair - not the bare id - drives resolution.
 		const qSealer = createSealer(
 			Q,
 			soloAllowlist(ownerQ, "shared", Q),
@@ -541,8 +507,6 @@ describe("sealer (cross-Domain srcDomain disambiguation)", () => {
 	});
 
 	it("without srcDomain, a colliding gateway id stays ambiguous (back-compat null)", () => {
-		// No srcDomain plus two peers sharing the id: the scan refuses, so the authentic
-		// frame fails to open rather than being attributed to the wrong peer.
 		const pSealer = createSealer(
 			P,
 			soloAllowlist(ownerP, "shared", P),

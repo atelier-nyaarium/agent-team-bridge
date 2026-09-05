@@ -13,19 +13,12 @@ import { applyCopilotAgent, type CopilotCatalogDeps } from "./copilotAgentPersis
 import { appendActivity, replaceAt, resolvedTargetMatchesRequest, sameResolvedTarget } from "./copilotAgentReducers.js";
 import type { CopilotApplication } from "./copilotAgentTypes.js";
 
-////////////////////////////////
-//  Interfaces & Types
-
 export interface CopilotReceiptApplier {
 	applyReceipt: (receipt: CopilotDaemonReceipt, at: number) => CopilotApplication;
 	applyEvent: (event: CopilotDaemonEvent, at: number) => CopilotApplication;
 	takeRefusal: (operationId: string) => { code?: CopilotDaemonFailureCode; message: string } | undefined;
 }
 
-////////////////////////////////
-//  Functions & Helpers
-
-/** Session-owned folding of Copilot daemon events and receipts into their agent records. */
 export function createCopilotReceiptApplier(deps: CopilotCatalogDeps): CopilotReceiptApplier {
 	function applyAccepted(
 		owner: SessionRecord,
@@ -137,8 +130,7 @@ export function createCopilotReceiptApplier(deps: CopilotCatalogDeps): CopilotRe
 		const activeTurn = receipt.active && receipt.turnId ? receipt.turnId : undefined;
 		if (current.activeTurnId && activeTurn && current.activeTurnId !== activeTurn)
 			return { disposition: "reconcile", owner, agent: current };
-		// ACP session/load can prove that the session exists, but it does not return a turn status. Keep a
-		// previously active turn recovering rather than translating that absence of proof into idle.
+		// Missing turn status preserves a previously active turn during recovery.
 		const knownActiveTurn = current.activeTurnId;
 		const nextTurns =
 			activeTurn && !current.turns.some((turn) => turn.id === activeTurn)
@@ -158,8 +150,7 @@ export function createCopilotReceiptApplier(deps: CopilotCatalogDeps): CopilotRe
 		return applyCopilotAgent(deps, owner, current, next);
 	}
 
-	/** Bounded to the live operations it is about; an entry is dropped when its result is reported.
-	 * Kept off the persisted record deliberately: it is a diagnostic, not agent state. */
+	// Keep refusal diagnostics off persisted agent state.
 	const refusalReasons = new Map<string, string>();
 	const refusalCodes = new Map<string, CopilotDaemonFailureCode>();
 

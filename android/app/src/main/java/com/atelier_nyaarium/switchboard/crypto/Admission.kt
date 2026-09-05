@@ -6,13 +6,7 @@ import com.atelier_nyaarium.switchboard.proto.SignedAdmission
 import com.atelier_nyaarium.switchboard.proto.SignedRevocation
 import com.atelier_nyaarium.switchboard.proto.Protocol
 
-/**
- * Owner-signed admission / revocation, the byte-exact Kotlin counterpart of
- * switchboard's `src/shared/admission.ts`. The owner device (this console) signs
- * admissions that Hosts and the Router verify, so the canonical signing bytes - a
- * versioned, newline-joined, fixed-order encoding - must reproduce exactly. The
- * cross-platform vector in AdmissionTest pins it. Never sign raw JSON.
- */
+/** Owner-signed admissions use fixed-order bytes matching admission.ts. */
 object AdmissionCrypto {
 	fun admissionSigningBytes(a: Admission): ByteArray =
 		listOf(Protocol.Wire.SIGNING_TAG_ADMISSION, a.kind, a.signPub, a.boxPub, a.gatewayId ?: "", a.issuedAt.toString(), a.nonce)

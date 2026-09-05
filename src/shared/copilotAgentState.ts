@@ -1,6 +1,3 @@
-// Copilot delegation: the agent/turn/observation vocabulary, the validated per-call result shape a
-// tool answers with, and the five tools' own input and gateway-request envelopes.
-
 import { z } from "zod";
 import { CopilotActivitiesSchema } from "./copilotAgentActivities.js";
 import {
@@ -10,9 +7,6 @@ import {
 	CopilotOperationIdSchema,
 	CopilotPromptSchema,
 } from "./copilotAgentIdentity.js";
-
-////////////////////////////////
-//  Enums and errors
 
 export const CopilotAgentStateSchema = z.enum(["creating", "idle", "working", "recovering", "unavailable"]);
 export const CopilotTurnStateSchema = z.enum(["inProgress", "completed", "failed", "interrupted"]);
@@ -58,9 +52,6 @@ export const CopilotRequestErrorSchema = z
 		error: CopilotErrorSchema.extend({ code: z.literal("invalid_input"), retryable: z.literal(false) }).strict(),
 	})
 	.strict();
-
-////////////////////////////////
-//  Agent result
 
 export const CopilotAgentResultSchema = z
 	.object({
@@ -192,9 +183,6 @@ export const CopilotAgentResultSchema = z
 		if (value.error && !errorAllowed)
 			ctx.addIssue({ code: "custom", message: "observation does not allow an error", path: ["error"] });
 	});
-
-////////////////////////////////
-//  Tool inputs and gateway request
 
 export const CopilotStartAgentInputSchema = z
 	.object({

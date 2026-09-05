@@ -30,30 +30,16 @@ import androidx.compose.ui.unit.dp
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.launch
 
-////////////////////////////////
-//  FLOW-2 trust compare (the roster-initiated user-to-user 6-digit compare)
-
-/** The product step for the FLOW-2 compare UI. */
 sealed interface TrustCompareStep {
-	/** Running the commit-reveal exchange (waiting for the other person to arm/join + reveal). */
 	data object Loading : TrustCompareStep
 
-	/** Both sides revealed; the humans compare the typed 6-digit code over a side channel. */
 	data class Compare(val exchange: EnrollExchange) : TrustCompareStep
 
-	/** Trust recorded (the friend edge is written; the relay edge is best-effort). */
 	data object Done : TrustCompareStep
 
-	/** A terminal failure (mismatch, timeout, transport, or a decline). */
 	data class Failed(val reason: String) : TrustCompareStep
 }
 
-/**
- * The FLOW-2 trust compare: drives `TrustOps.trustExchange` over a rendezvous (the initiator
- * armed; the target joined a highlighted arm), shows the typed 6-digit SAS for an out-of-band
- * compare, and on a mutual [Yes] records the owner-to-owner trust (REUSES `enrollConfirm`). The SAS
- * code is owner-anchored + symmetric (sorted-owner-key roles), so both phones display the SAME code.
- */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TrustCompareScreen(
@@ -67,7 +53,7 @@ fun TrustCompareScreen(
 	val scope = repo.repoScope
 	var step by remember { mutableStateOf<TrustCompareStep>(TrustCompareStep.Loading) }
 	var busy by remember { mutableStateOf(false) }
-	// Set once the human commits trust, so leaving the screen afterward does NOT cancel the rendezvous.
+	// Confirmation keeps the rendezvous alive after leaving the screen.
 	val confirmed = remember { AtomicBoolean(false) }
 	val edgeNonce = remember { repo.trust.freshLinkNonce() }
 	val who = peerName.ifEmpty { "the other person" }
@@ -117,17 +103,14 @@ fun TrustCompareScreen(
 								scope.launch {
 									val domainId = repo.readyOrNull()?.domainId
 									if (domainId == null) {
-										// Same failure path as the .onFailure below (not a bare return@launch),
-										// so this can never strand the screen on the busy spinner with no
-										// retry affordance.
+										// Reset busy state so this failure remains retryable.
 										confirmed.set(false)
 										busy = false
 										step = TrustCompareStep.Failed("Lost the confirmed session; please retry.")
 										return@launch
 									}
 									repo.ceremony.enrollConfirm(domainId, s.exchange.peerDomainId, edgeNonce, peerOwnerSignPub)
-										// Both outcomes mean the friend edge is recorded (the relay edge is
-										// best-effort); the Trusted badge appears either way.
+										// Either result records the friend edge. Relay publication is best effort.
 										.onSuccess { step = TrustCompareStep.Done }
 										.onFailure {
 											confirmed.set(false)

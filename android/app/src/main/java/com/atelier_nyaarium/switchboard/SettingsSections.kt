@@ -35,11 +35,7 @@ import androidx.fragment.app.FragmentActivity
 import com.atelier_nyaarium.switchboard.plugins.PluginManager
 import kotlinx.coroutines.launch
 
-////////////////////////////////
-//  Composables
 
-/** The baked-in plugin list, one row per catalog plugin with its on/off toggle. A refused flip
- * (dep gating, broken plugin) surfaces the manager's message instead of silently reverting. */
 @Composable
 internal fun PluginsSettings(plugins: PluginManager, repo: ChatRepository) {
 	val scope = rememberCoroutineScope()
@@ -72,14 +68,12 @@ internal fun PluginsSettings(plugins: PluginManager, repo: ChatRepository) {
 			}
 			Switch(
 				checked = p.enabled,
-				// A broken plugin cannot be switched ON, but switching OFF must stay reachable
-				// (a flag stranded on by a failing boot needs a live opt-out, not a dead toggle).
+				// Broken plugins remain switchable off.
 				enabled = p.broken == null || p.enabled,
 				onCheckedChange = { on ->
 					status = plugins.setEnabled(p.id, on) ?: ""
 					refresh++
-					// Tell the gateway now. A session already running keeps the tools it started
-					// with; this is what the NEXT session start reads.
+					// Report changes for the next session.
 					repo.command { reportEnabledPlugins() }
 				},
 			)
@@ -93,13 +87,10 @@ internal fun PluginsSettings(plugins: PluginManager, repo: ChatRepository) {
 @Composable
 internal fun ProfileSettings(state: ChatState, repo: ChatRepository, onSetDeviceName: (String) -> Unit) {
 	val scope = rememberCoroutineScope()
-	// The owner's display name (one per owner): what linked friends see them as. Owner-signed +
-	// pushed to the Router; it lives above the per-install device name. Seeded from state.displayName
 	var displayName by remember(state.displayName) { mutableStateOf(state.displayName) }
 	var opStatus by remember { mutableStateOf("") }
 	var opBusy by remember { mutableStateOf(false) }
-	// confirmed Domain id has nothing real to sign over, so the Router would reject the rename ("Domain
-	// the real Domain id. A device that never first-rooted (the admin) is not gated - its rename
+	// Rename stays gated until the rooted Domain is discovered.
 	val domainResolving = FriendOnboarding.renameAwaitsDiscovery(state.firstRooted, state.domainId)
 	Text("Your name", style = MaterialTheme.typography.titleMedium)
 	Text(
@@ -158,12 +149,6 @@ internal fun NetworksSettings(
 	onClear: () -> Unit,
 	onFederationScreen: () -> Unit,
 ) {
-	// Four distinct concerns kept apart: the gateways within YOUR network, the consoles signed in to
-	// your account (Your devices), linking with a friend's separate network (cross-Domain trust),
-	// and the server all of that rides on. Navigation only - the forms live on their own screens,
-	// since inline they read as settings of whatever section they happen to sit under. The one
-	// exception is the Danger block at the bottom: the two Domain wipes are not settings of anything,
-	// and they belong beside the Gateways, devices and Federation they act on.
 	Text("Your Domain", style = MaterialTheme.typography.titleSmall)
 	Button(onClick = hapticClick(onManage), modifier = Modifier.fillMaxWidth()) { Text("Gateways") }
 	HorizontalDivider()
@@ -179,11 +164,6 @@ internal fun NetworksSettings(
 	DomainDangerSection(repo, onClear)
 }
 
-/** The two Domain wipes, behind a confirm each, so either is two levels deep (Settings -> Domain &
- * Trust) plus an explicit confirmation. Deliberately distinct: Forget this Domain wipes THIS phone and
- * sends nothing, for everyone; Revoke and Delete Domain also purges the owner's whole Domain from the
- * servers, so it is hidden for an admin (who purges via setup.sh) and shown only to a confirmed
- * app-only owner (see canDeleteOwnDomain). */
 @Composable
 internal fun DomainDangerSection(repo: ChatRepository, onClear: () -> Unit) {
 	val scope = rememberCoroutineScope()
@@ -195,9 +175,6 @@ internal fun DomainDangerSection(repo: ChatRepository, onClear: () -> Unit) {
 	var confirmForget by remember { mutableStateOf(false) }
 	var forgetting by remember { mutableStateOf(false) }
 	var forgetError by remember { mutableStateOf<String?>(null) }
-	// This screen exists only on a provisioned app (an unprovisioned one shows onboarding instead), so
-	// the local wipe is offered unconditionally. It is the ONLY reset an admin's phone has: setup.sh
-	// option 0 deletes the Domain on the Router and then needs this to let the phone scan again.
 	Text("Danger", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.error)
 	OutlinedButton(
 		onClick = hapticClick { forgetError = null; confirmForget = true },
@@ -212,8 +189,7 @@ internal fun DomainDangerSection(repo: ChatRepository, onClear: () -> Unit) {
 		style = MaterialTheme.typography.bodySmall,
 	)
 	if (confirmForget) {
-		// Read when the dialog opens, not at composition: it decodes the stored keys, and the answer
-		// only matters once the owner is about to act on it.
+		// Read owner-key state when confirmation opens.
 		val holdsOwnerKey = remember { repo.ownerFacts.holdsOwnerKey() }
 		AlertDialog(
 			onDismissRequest = { if (!forgetting) confirmForget = false },
@@ -222,8 +198,6 @@ internal fun DomainDangerSection(repo: ChatRepository, onClear: () -> Unit) {
 				Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
 					Text("This wipes the app on this phone: history, drafts, the board cache, downloaded files and the speech cache. Nothing is deleted from the Router: your Domain, gateways and other devices stay as they are.")
 					if (holdsOwnerKey) {
-						// The owner key is generated on the first phone and reaches another device only through
-						// a passphrase backup, so on this phone the warning is about the Domain itself.
 						Text(
 							"Your owner key lives on this phone, plus any backup you exported. Without a copy, nothing new can ever be owner-signed for this Domain: no admits, revokes, renames or links.",
 							style = MaterialTheme.typography.bodySmall,
@@ -250,8 +224,6 @@ internal fun DomainDangerSection(repo: ChatRepository, onClear: () -> Unit) {
 							if (!requireOwnerPresent(repo.state.value.biometricLock, activity)) return@launch
 							forgetting = true
 							forgetError = null
-							// runCatchingCancellable, not runCatching: a plain catch would turn this coroutine's
-							// cancellation into "Could not wipe", the same trap submitOwnerFact documents.
 							runCatchingCancellable { repo.domainAdmin.forgetDomain() }
 								.onSuccess {
 									forgetting = false
@@ -269,9 +241,8 @@ internal fun DomainDangerSection(repo: ChatRepository, onClear: () -> Unit) {
 			dismissButton = { TextButton(enabled = !forgetting, onClick = hapticClick { confirmForget = false }) { Text("Cancel") } },
 		)
 	}
-	// Admins purge via setup.sh; an unconfirmed Domain (offline) hides it too, so an admin whose gateway
-	// is down can't read the unknown state as "not admin" and delete everything (see canDeleteOwnDomain).
 	if (repo.canDeleteOwnDomain()) {
+		// Hide server deletion while ownership is unconfirmed.
 		OutlinedButton(
 			onClick = hapticClick { deleteError = null; confirmDelete = true },
 			colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
@@ -336,8 +307,6 @@ internal fun DomainDangerSection(repo: ChatRepository, onClear: () -> Unit) {
 	}
 }
 
-/** Everything that is only meaningful because this console federates: which server it talks to,
- * and the owner key that server's whole trust graph roots at. */
 @Composable
 internal fun FederationSettings(repo: ChatRepository) {
 	RouterEndpointCard(repo)
@@ -377,18 +346,13 @@ private fun ContentKeyDeliveryCard(repo: ChatRepository) {
 	lines.forEach { Text(it, style = MaterialTheme.typography.bodySmall) }
 }
 
-/** Point this console at a self-hosted Router. Editing here repoints the transport only: it never
- * re-runs provisioning, so the admission and enrollment latches survive. Either of the Router's
- * addresses will do: whichever one this phone can reach, the Router tells it the rest. */
 @Composable
 internal fun RouterEndpointCard(repo: ChatRepository) {
 	val scope = rememberCoroutineScope()
-	// Seed from what this console is ACTUALLY pointed at. Blank fields read as "nothing is set",
-	// which is wrong on a connected console and hides the values the owner came here to check.
 	val stored = remember { repo.currentRouterEndpoint(DEFAULT_ROUTER_PORT) }
-	// What the Router has told this device about itself, so the owner sees the addresses in play
-	// rather than only the one they typed.
+	// Seed fields from the endpoint currently in use.
 	val learned = remember { RouterReach.decode(repo.store.loadRouterReach()) }
+	// Show Router addresses learned from the active reach.
 	var host by remember { mutableStateOf(stored?.host ?: "") }
 	var port by remember { mutableStateOf((stored?.port ?: DEFAULT_ROUTER_PORT).toString()) }
 	var certFp by remember { mutableStateOf(stored?.certFp ?: "") }
@@ -454,8 +418,7 @@ internal fun SecuritySettings(state: ChatState, onToggleBiometric: (Boolean) -> 
 	val activity = LocalContext.current as? FragmentActivity
 	Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
 		Text("Biometric lock", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
-		// Enabling the lock is direct; DISABLING it is itself an owner-present action, so a grabbed
-		// unlocked phone can't drop the lock (then act against the owner key) without the owner.
+		// Disabling the lock requires owner presence.
 		Switch(
 			checked = state.biometricLock,
 			onCheckedChange = { wantOn ->

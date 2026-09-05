@@ -1,19 +1,12 @@
-// The clock, the entropy, the ids, and the timers, as one injected record.
-
 import crypto from "node:crypto";
-
-////////////////////////////////
-//  Interfaces & Types
 
 declare const timerBrand: unique symbol;
 declare const intervalBrand: unique symbol;
 
-/** Opaque one-shot timer handle. */
 export interface TimerHandle {
 	readonly [timerBrand]: true;
 }
 
-/** Opaque repeating timer handle. */
 export interface IntervalHandle {
 	readonly [intervalBrand]: true;
 }
@@ -28,13 +21,9 @@ export interface Ambient {
 	clearInterval(handle: IntervalHandle): void;
 }
 
-/** The clock alone, for a module that reads nothing else. */
 export type Clock = Pick<Ambient, "now">;
 
-////////////////////////////////
-//  Functions & Helpers
-
-/** The one reader of the globals, unref'd so no timer holds the runtime open. */
+// Globals enter through this reader. Timer handles are unref'd.
 export function processAmbient(): Ambient {
 	return {
 		now: () => Date.now(),

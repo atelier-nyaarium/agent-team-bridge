@@ -1,5 +1,3 @@
-// The fixed identity set, and how each runtime is seeded with its half of it.
-
 import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -10,9 +8,6 @@ import { CONTENT_KEYS_FILE, ContentKeyStore } from "../gateway/federation/conten
 import { type SignedAdmission, signAdmission } from "../shared/admission.js";
 import { deriveContentKey } from "../shared/content-envelope.js";
 import { generateIdentity, type Identity } from "../shared/crypto.js";
-
-////////////////////////////////
-//  Interfaces & Types
 
 export interface IdentitySet {
 	issuedAt: number;
@@ -29,9 +24,6 @@ export interface RouterTransportSeed {
 	routerCertFp: string;
 }
 
-////////////////////////////////
-//  Functions & Helpers
-
 const SET_FILE = path.resolve(import.meta.dirname, "../../tests/fixtures/identity/set.json");
 
 export function loadIdentitySet(): IdentitySet {
@@ -47,7 +39,7 @@ export interface MintIdentitySetOptions {
 	gatewayId: string;
 	isAdminDomain?: boolean;
 	issuedAt?: number;
-	/** Shared with the Router; a second Domain reuses the first set's. */
+	/** Reuse one Router identity when seeding multiple Domains. */
 	router?: Identity;
 	tokens?: IdentitySet["tokens"];
 	device?: string;
@@ -55,7 +47,6 @@ export interface MintIdentitySetOptions {
 	nonces?: { gateway: string; console: string };
 }
 
-/** A whole Domain's identities, admitted and keyed the way the committed set is. */
 export function mintIdentitySet(options: MintIdentitySetOptions): IdentitySet {
 	const issuedAt = options.issuedAt ?? Date.now();
 	const owner = generateIdentity();
@@ -110,7 +101,6 @@ export function mintIdentitySet(options: MintIdentitySetOptions): IdentitySet {
 	};
 }
 
-/** Writes the Router's federation file with the fixed identity, then opens the store over it. */
 export async function seedRouter(dataDir: string, set: IdentitySet): Promise<FileSecretStore> {
 	fs.mkdirSync(dataDir, { recursive: true });
 	fs.writeFileSync(
@@ -129,7 +119,6 @@ export async function seedRouter(dataDir: string, set: IdentitySet): Promise<Fil
 	return store;
 }
 
-/** Roots `set`'s Domain in an open Router store, admitting its gateway and console. */
 export async function seedDomain(store: FileSecretStore, set: IdentitySet): Promise<void> {
 	store.saveDomain(set.domain.id, {
 		ownerSignPub: set.domain.owner.sign.pub,
@@ -141,7 +130,6 @@ export async function seedDomain(store: FileSecretStore, set: IdentitySet): Prom
 	await store.flushDomain(set.domain.id);
 }
 
-/** Writes the federation files a gateway reads at boot; `contentKey: false` leaves the keyring empty. */
 export function seedGateway(
 	federationDir: string,
 	set: IdentitySet,

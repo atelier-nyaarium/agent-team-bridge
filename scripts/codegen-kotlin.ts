@@ -1,10 +1,3 @@
-// Generates committed Kotlin types from src/shared schemas.
-// Run: bun scripts/codegen-kotlin.ts
-// Encode unions use sealed classes. Decode unions stay open.
-// Non-discriminated unions emit JsonElement.
-// Integers emit Long. Optionals emit nullable types.
-// JSON Schema uses io:"input" and .meta ids.
-
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { z } from "zod";
@@ -182,7 +175,6 @@ const OUT_PATH =
 	process.env.KOTLIN_PROTOCOL_OUT ??
 	join(import.meta.dir, "../android/app/src/main/java/com/atelier_nyaarium/switchboard/proto/Protocol.kt");
 
-// Roots to emit, in output order. Every schema here must carry .meta({ id }).
 const ROOTS: z.ZodType[] = [
 	ChannelFileSchema,
 	TeamInfoSchema,
@@ -303,7 +295,6 @@ const ROOTS: z.ZodType[] = [
 	WireManifestSchema,
 ];
 
-// Listed unions are encoded; others stay open for decoding.
 const SEALED_ROOTS = new Set([
 	"ConsoleOp",
 	"EnrollOp",
@@ -318,8 +309,8 @@ const SEALED_ROOTS = new Set([
 
 type Json = Record<string, unknown>;
 
-/** Strip unsupported schema metadata. */
 function zodToCleanJsonSchema(schema: z.ZodType): Json {
+	// Strip format only; other schema metadata is preserved.
 	const json = z.toJSONSchema(schema, { io: "input" }) as Json;
 	delete json.$schema;
 	const walk = (node: unknown): void => {
@@ -329,7 +320,6 @@ function zodToCleanJsonSchema(schema: z.ZodType): Json {
 			return;
 		}
 		const record = node as Json;
-		// Remove only the format keyword.
 		if (typeof record.format === "string") delete record.format;
 		for (const key in record) walk(record[key]);
 	};
@@ -422,7 +412,6 @@ function emitParams(node: Json, defs: Map<string, Json>, omit: Set<string>): str
 		const description = prop.description as string | undefined;
 		if (description) lines.push(`${INDENT}/** ${escapeKdoc(description)} */`);
 		if (typeof constValue === "string") {
-			// Required consts must be encoded.
 			if (required.has(name)) lines.push(`${INDENT}@EncodeDefault`);
 			lines.push(`${INDENT}val ${name}: ${baseType} = ${kotlinString(constValue)},`);
 		} else if (constValue !== undefined) {
@@ -448,6 +437,7 @@ function emitDataClass(name: string, node: Json, defs: Map<string, Json>): strin
 }
 
 function emitSealedClass(name: string, node: Json, discriminator: string, defs: Map<string, Json>): string {
+	// SerialName carries the wire discriminator.
 	const members = (node.oneOf ?? node.anyOf) as Json[];
 	if (!members) throw new Error(`sealed root ${name} has no oneOf`);
 	const out: string[] = [
@@ -461,12 +451,10 @@ function emitSealedClass(name: string, node: Json, discriminator: string, defs: 
 		const kindValue = props[discriminator]?.const as string | undefined;
 		if (!kindValue) throw new Error(`sealed member of ${name} lacks const ${discriminator}`);
 		const memberName = pascal(kindValue);
-		// @SerialName supplies the discriminator.
 		const params = emitParams(member, defs, new Set([discriminator]));
 		out.push(`${INDENT}@Serializable`);
 		out.push(`${INDENT}@SerialName(${kotlinString(kindValue)})`);
 		if (params.length === 0) {
-			// Use data objects for parameterless members.
 			out.push(`${INDENT}data object ${memberName} : ${name}()`);
 		} else {
 			out.push(`${INDENT}data class ${memberName}(`);
@@ -488,7 +476,6 @@ for (const schema of ROOTS) {
 	const json = zodToCleanJsonSchema(schema);
 	const nested = (json.$defs ?? {}) as Record<string, Json>;
 	delete json.$defs;
-	// Shared definitions must keep identical bodies.
 	const guardedSet = (name: string, body: Json) => {
 		const existing = defs.get(name);
 		if (existing && JSON.stringify(existing) !== JSON.stringify(body)) {
@@ -567,7 +554,6 @@ const blocks: string[] = [];
 for (const name of order) {
 	const node = defs.get(name);
 	if (!node) continue;
-	// Skip scalar and enum aliases.
 	if (!node.properties && !node.oneOf && !node.anyOf) continue;
 	if (SEALED_ROOTS.has(name)) {
 		const schema = ROOTS.find((s) => idOf(s) === name);

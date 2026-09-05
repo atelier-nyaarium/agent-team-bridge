@@ -1,6 +1,3 @@
-// Copilot delegation: byte/shape bounds, opaque ID shapes, and agent/operation identity. The base
-// layer every other copilotAgent* file imports from; imports nothing from a sibling domain file.
-
 import { z } from "zod";
 import { COPILOT_BACKEND } from "./agent-backend.js";
 import { AgentOwnerKeySchema } from "./agent-execution-target.js";
@@ -15,9 +12,6 @@ import {
 	boundedUtf8,
 	sanitizeAgentErrorText,
 } from "./agent-record.js";
-
-////////////////////////////////
-//  Bounds
 
 export const COPILOT_PROMPT_MAX_BYTES = AGENT_PROMPT_MAX_BYTES;
 export const COPILOT_ACTIVITY_MAX_BYTES = AGENT_ACTIVITY_MAX_BYTES;
@@ -49,25 +43,14 @@ export const CopilotErrorTextSchema = boundedUtf8(COPILOT_ERROR_MAX_BYTES, "erro
 
 export { boundedUtf8 };
 
-////////////////////////////////
-//  Identity
-
 export function copilotAgentIdForOperation(operationId: string): string {
 	return agentIdForOperation("copilot", operationId);
 }
 
-/** What identifies a Copilot operation, with this family's legacy start spelling stamped on.
- *
- * The SOLE place that fact is written for Copilot, for the same reason as its Codex twin: the
- * service that mints a fingerprint and the schema that re-checks one must not hold different ideas
- * of which legacy spelling is tolerable. */
+/** Legacy modelless starts include a trailing separator in Copilot identity bytes. */
 export function copilotOperationIdentity(
 	fields: Omit<AgentOperationIdentity, "legacyModellessStart">,
 ): AgentOperationIdentity {
-	// Copilot always appended a separator and the model, so a pre-migration MODEL-LESS start reads
-	// `prompt + "\n"` where the shared encoding now writes `prompt`. That one recomputes exactly. A
-	// pre-migration start that NAMED a model wrote the same bytes the shared encoding writes today,
-	// so it verifies outright whenever the caller names the same model again.
 	return { ...fields, legacyModellessStart: "trailing-separator" };
 }
 

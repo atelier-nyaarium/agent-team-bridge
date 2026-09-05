@@ -4,7 +4,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
-/** What a connect attempt reaches beyond the identity door and the Router preflight. */
 internal interface ConnectHost {
 	var homeGatewayId: String
 	val firstRooted: Boolean
@@ -23,11 +22,6 @@ internal interface ConnectHost {
 	fun flushIngest()
 }
 
-/**
- * One connect attempt: the Router preflight, a pending Domain's first root, this console's
- * admission, then the connected roster. Every fact it learns is stamped against the blob the
- * attempt started on, so a re-provision mid-flight refuses them at the door.
- */
 internal class ConnectCoordinator(
 	private val identity: PhoneIdentity,
 	private val transport: () -> ConsoleReach,
@@ -35,13 +29,11 @@ internal class ConnectCoordinator(
 	private val host: ConnectHost,
 ) {
 	suspend fun connect() {
-		// Attach debug ingest before enrollment.
 		host.attachIngest()
 		DebugLog.log("Connect", "start gateway=${host.homeGatewayId.ifEmpty { "?" }} admitted=${host.consoleAdmitted}")
-		// Facts learned here belong to this blob.
+		// Fence learned facts to the starting provisioning blob.
 		val blob = identity.blob() ?: return
 		try {
-			// The token-only reach can learn the Domain id.
 			val reach = runCatchingCancellable { transport().apiReachable() }.getOrElse { e ->
 				val (cause, kind) = classifyConnError(e)
 				state.update {
@@ -55,11 +47,10 @@ internal class ConnectCoordinator(
 			}
 			DebugLog.log("Connect", "apiReachable ok")
 			reach?.domainId?.let { identity.learnDomainId(it, blob) }
-			// Root pending invites before admission.
+			// Root pending invites before submitting admission.
 			if (!host.firstRootIfPending()) return
-			// Reflect first-root state in the UI.
 			if (host.firstRooted && !state.value.firstRooted) state.update { it.copy(firstRooted = true) }
-			// Submit admission before sealed register.
+			// Admission precedes sealed Gateway registration.
 			runCatchingCancellable { host.submitConsoleAdmission() }.onFailure { e ->
 				val (cause, kind) = classifyConnError(e)
 				state.update {
@@ -84,7 +75,7 @@ internal class ConnectCoordinator(
 					pollFailStreak = 0,
 					homeGatewayId = host.homeGatewayId,
 					enrollingSince = 0L,
-					// Publish sessions and roster together.
+					// Publish sessions and roster as one state update.
 					admittedGateways = host.keyringGateways(),
 				)
 			}
@@ -94,14 +85,13 @@ internal class ConnectCoordinator(
 			host.refreshDisplayName()
 			DebugLog.log("Connect", "connected gateway=${host.homeGatewayId.ifEmpty { "?" }} domain=${boot?.domainId ?: "none"}")
 		} catch (e: Exception) {
-			// Rethrow cancellation before connection handling.
+			// Preserve coroutine cancellation semantics.
 			e.rethrowIfCancellation()
 			val (cause, kind) = classifyConnError(e)
-			// Retry stale admission state.
+			// Clear stale admission so enrollment can retry.
 			if (kind == ConnKind.ENROLLING) identity.setConsoleAdmitted(false, blob)
 			state.update { s ->
 				when (kind) {
-					// Allow post-enrollment sync lag.
 					ConnKind.ENROLLING -> {
 						val (override, since) = enrollFold(s.enrollingSince)
 						s.copy(
@@ -116,13 +106,12 @@ internal class ConnectCoordinator(
 				}
 			}
 		} finally {
-			// Flush debug ingest on exit.
 			host.flushIngest()
 		}
 	}
 
-	/** Keep the published gateway only while the keyring still admits it. */
 	private fun adoptHomeGateway() {
+		// Keep only a Gateway still admitted by the keyring.
 		val admitted = host.keyringGateways()
 		val id = state.value.homeGatewayId.takeIf { it in admitted } ?: admitted.firstOrNull().orEmpty()
 		if (id != host.homeGatewayId) {
@@ -132,8 +121,8 @@ internal class ConnectCoordinator(
 	}
 }
 
-/** The home gateway's Domain, as the signed roster reports it. */
 internal fun rosterDomainId(teams: List<Team>, homeGatewayId: String): String? =
+	// Read the Domain id from the signed home-Gateway roster.
 	teams.firstOrNull { (it.gatewayId.ifEmpty { homeGatewayId }) == homeGatewayId && !it.domainId.isNullOrEmpty() }?.domainId
 
 internal class ChatRepositoryConnectHost(private val repo: ChatRepository) : ConnectHost {
