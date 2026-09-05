@@ -6,7 +6,7 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
 
 - `src/main-mcp.ts` / `main-gateway.ts` / `main-host-daemon.ts` / `main-federation.ts` - four entry points
 - `src/gateway/` - Docker-side HTTP and WS router
-- `src/gateway/composeGateway.ts` - calls the thirteen compose stages in order and owns the cycles between them; `index.ts` is the Bun process adapter
+- `src/gateway/composeGateway.ts` - calls the fourteen compose stages in order, then builds the fault port, and owns the cycles between them; `index.ts` is the Bun process adapter
 - `src/gateway/compose/gatewayTypes.ts` - `GatewayConfig`, `GatewayDeps`, `GatewayGraph`, and the `GatewayFaultPort` the harness drives
 - `src/gateway/compose/federationContext.ts` - the one federation reader; activation publishes boot, Domain id, and slice together, and it posts the Router share record
 - `src/gateway/compose/composeBootstrap.ts` - directories, identity, keyring, boot decision, schema wipe
@@ -145,7 +145,7 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
     receiver stamps `at`; it decides cross-epoch merges. `ReadAnchor.kt` is the phone twin and
     resolves by row position.
 - `src/federation-server/gatewayBridge.ts` / `gatewayTransport.ts` - connection registry and frame dispatch; four trust callbacks required
-- `src/federation-server/bridge/registrationHandler.ts` / `relayRouter.ts` / `inboxFrames.ts` / `frameDispatch.ts` - gateway registration; cross-gateway relay and cross-Domain handshake; incarnation-gated inbox, blob, and value frames; the registered-frame table, where a frame registers with its mutation class and the migration fence holds the `value` ones, as the owner-op registry does for their twins
+- `src/federation-server/bridge/registrationHandler.ts` / `relayRouter.ts` / `inboxFrames.ts` / `frameDispatch.ts` - gateway registration; cross-gateway relay and cross-Domain handshake; incarnation-gated inbox, blob, and value frames; the gateway-frame catalog, one descriptor per frame the bridge dispatches, built-in or service, with its mutation class, its incarnation policy, and its handler; the migration fence holds every class but `read`, as the owner-op intake does
 - `src/federation-server/consoleSurface.ts` / `publicApproval.ts` - token-gated operations and token-exempt nonce routes
 - `src/federation-server/routerTls.ts` - persistent self-signed certificate; rotation re-provisions clients
 - `src/federation-server/*Coordinator.ts` - in-memory flow windows; restart loses and re-arms them

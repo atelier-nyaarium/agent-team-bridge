@@ -21,7 +21,7 @@ import {
 	InboxRowInputSchema,
 	parseInboxAddress,
 } from "../../shared/schemasInbox.js";
-import { GATEWAY_ERROR_STALE_INCARNATION, GATEWAY_REASON_NO_WAITER } from "../../shared/wire-vocabulary.js";
+import { GATEWAY_REASON_NO_WAITER } from "../../shared/wire-vocabulary.js";
 import type { ReferenceHeldStore } from "../blobs/referenceHeldStore.js";
 import type { RouterBlobCache } from "../blobs/routerBlobCache.js";
 import type { ConnGatewayRecord, GatewayRegistration } from "../gatewayBridge.js";
@@ -30,19 +30,6 @@ import type { BlobFetchRoute } from "../inbox/blobFetchRoute.js";
 import { type InboxService, type PeerRowGate, sessionTargetOf } from "../inbox/inboxService.js";
 import { OwnerQuarantined } from "../owner/ownerStateStore.js";
 import { GATEWAY_RELAY_TIMEOUT_MS } from "../relayTimeouts.js";
-
-/** Every built-in frame gated by the connection's current incarnation. */
-export const INCARNATION_GATED_FRAMES = new Set([
-	"inbox_append",
-	"inbox_ack",
-	"session_upsert",
-	"session_forget",
-	"blob_fetch",
-	"blob_fetch_reply",
-	"blob_begin",
-	"blob_chunk",
-	"value_result",
-]);
 
 /** Stable producer identity deduplicates retries. */
 const ProducerOpHashSchema = z.string().regex(/^[0-9a-f]{64}$/);
@@ -86,31 +73,12 @@ export class InboxFrames {
 		this.ownerRowPush = push;
 	}
 
-	handle(connId: ConnectionId, name: string, params: Record<string, unknown>): unknown {
-		const reg = this.deps.getRegistration(connId);
-		const incarnation = typeof params.incarnation === "number" ? params.incarnation : null;
-		if (!reg?.signPub || reg.incarnation === null) return { ok: false, error: "inbox_unavailable" };
-		if (incarnation !== reg.incarnation) {
-			console.warn(`[BridgeServer] stale gateway incarnation for ${name}`);
-			return { ok: false, error: GATEWAY_ERROR_STALE_INCARNATION };
-		}
-		if (name === "inbox_append") return this.handleInboxAppend(connId, params);
-		if (name === "inbox_ack") return this.handleInboxAck(connId, params);
-		if (name === "session_upsert") return this.handleSessionUpsert(connId, params);
-		if (name === "session_forget") return this.handleSessionForget(connId, params);
-		if (name === "blob_fetch") return this.handleBlobFetch(connId, params);
-		if (name === "blob_begin" || name === "blob_chunk") return this.handleBlobUpload(connId, name, params);
-		if (name === "value_result") return this.handleValueResult(connId, params);
-		return this.handleBlobFetchReply(connId, params);
-	}
-
-	private handleInboxAppend(connId: ConnectionId, params: Record<string, unknown>): unknown {
+	appendRow(reg: GatewayRegistration, params: Record<string, unknown>): unknown {
 		if (!this.deps.inbox) return { ok: false, error: "inbox unavailable" };
 		const parsed = InboxAppendParamsSchema.safeParse(params);
-		const reg = this.deps.getRegistration(connId);
 		const address = parsed.success ? parseInboxAddress(parsed.data.address) : null;
 		const row = parsed.success ? InboxRowInputSchema.safeParse(parsed.data.row) : null;
-		if (!reg || !parsed.success || !address || !row?.success) return { ok: false, error: "invalid inbox_append" };
+		if (!parsed.success || !address || !row?.success) return { ok: false, error: "invalid inbox_append" };
 		// Migration-fenced gateways must reconcile before writing.
 		if (this.deps.isMigrationFenced(reg.domainId, reg.gatewayId)) return { ok: false, error: "migrating" };
 		const origin = row.data.envelope.origin;
@@ -134,7 +102,7 @@ export class InboxFrames {
 				(origin.kind === "session" &&
 					!!origin.sessionId &&
 					this.deps.inbox.hasSession(reg.domainId, reg.gatewayId, origin.sessionId)));
-		if (!allowedDomain || !addressOwned || !originAllowed || !reg.signPub) return { ok: false, error: "refused" };
+		if (!allowedDomain || !addressOwned || !originAllowed) return { ok: false, error: "refused" };
 		// Share state authorizes friend rows and supplies generation.
 		let shareGeneration: number | undefined;
 		if (address.domainId !== reg.domainId && this.peerRowGate && !peerReply) {
@@ -157,13 +125,11 @@ export class InboxFrames {
 		return result;
 	}
 
-	private handleInboxAck(connId: ConnectionId, params: Record<string, unknown>): unknown {
+	ack(reg: GatewayRegistration, params: Record<string, unknown>): unknown {
 		if (!this.deps.inbox) return { ok: false, error: "inbox unavailable" };
 		const parsed = InboxAckParamsSchema.safeParse(params);
-		const reg = this.deps.getRegistration(connId);
 		const address = parsed.success ? parseInboxAddress(parsed.data.address) : null;
-		if (!reg || reg.incarnation === null || !parsed.success || !address)
-			return { ok: false, error: "invalid inbox_ack" };
+		if (!parsed.success || !address) return { ok: false, error: "invalid inbox_ack" };
 		return this.deps.inbox.ack({
 			address,
 			seq: parsed.data.seq,
@@ -174,84 +140,71 @@ export class InboxFrames {
 		});
 	}
 
-	private handleSessionUpsert(connId: ConnectionId, params: Record<string, unknown>): unknown {
+	upsertSession(reg: GatewayRegistration, params: Record<string, unknown>): unknown {
 		const parsed = SessionUpsertParamsSchema.safeParse(params);
-		const reg = this.deps.getRegistration(connId);
-		if (!reg || !parsed.success) return { ok: false, error: "invalid session_upsert" };
+		if (!parsed.success) return { ok: false, error: "invalid session_upsert" };
 		this.deps.inbox?.upsertSession(reg.domainId, reg.gatewayId, parsed.data.sessionId, parsed.data);
 		return { ok: true };
 	}
 
-	private handleSessionForget(connId: ConnectionId, params: Record<string, unknown>): unknown {
+	forgetSession(reg: GatewayRegistration, params: Record<string, unknown>): unknown {
 		const parsed = SessionForgetParamsSchema.safeParse(params);
-		const reg = this.deps.getRegistration(connId);
-		if (!reg || !parsed.success) return { ok: false, error: "invalid session_forget" };
+		if (!parsed.success) return { ok: false, error: "invalid session_forget" };
 		this.deps.inbox?.forgetSession(reg.domainId, reg.gatewayId, parsed.data.sessionId);
-		if (reg.signPub && reg.incarnation !== null) {
-			const identity = {
-				domainId: reg.domainId,
-				gatewayId: reg.gatewayId,
-				signPub: reg.signPub,
-				incarnation: reg.incarnation,
-			};
-			this.deps.notifySessionForgotten(identity, parsed.data.sessionId);
-		}
+		this.deps.notifySessionForgotten(reg, parsed.data.sessionId);
 		return { ok: true };
 	}
 
-	private async handleBlobFetch(connId: ConnectionId, params: Record<string, unknown>): Promise<unknown> {
+	async fetchBlob(reg: GatewayRegistration, params: Record<string, unknown>): Promise<unknown> {
 		const parsed = BlobFetchParamsSchema.safeParse(params);
-		const reg = this.deps.getRegistration(connId);
-		if (!reg || !parsed.success || !this.deps.blobFetch) return { ok: false, error: "invalid blob_fetch" };
+		if (!parsed.success || !this.deps.blobFetch) return { ok: false, error: "invalid blob_fetch" };
 		const origin = parsed.data.origin;
 		if (origin && origin.domainId !== reg.domainId && !this.deps.hasLinkEdge(reg.domainId, origin.domainId))
 			return { outcome: "unreachable" };
 		return this.deps.blobFetch.fetch(reg.domainId, parsed.data);
 	}
 
-	private handleBlobUpload(connId: ConnectionId, name: string, params: Record<string, unknown>): unknown {
-		const reg = this.deps.getRegistration(connId);
-		if (!reg) return { ok: false, error: "invalid blob upload" };
-		if (name === "blob_begin") {
-			const parsed = BlobBeginParamsSchema.safeParse(params);
-			if (!parsed.success) return { ok: false, error: "invalid blob_begin" };
-			const value = parsed.data;
-			if (value.store === "cache") {
-				if (!this.deps.blobCache) return { ok: false, error: "blob cache unavailable" };
-				return this.deps.blobCache.begin(
-					reg.domainId,
-					value.blobId,
-					{ domainId: reg.domainId, gatewayId: reg.gatewayId },
-					value.size,
-					value.ciphertextSize,
-					value.ciphertextDigest,
-					value.epoch,
-				);
-			}
-			if (!this.deps.referenceHeld || !value.ref) return { ok: false, error: "held blob requires a reference" };
-			const ref = parseBlobReference(value.ref.id);
-			if (!ref || ref.kind !== value.ref.kind) return { ok: false, error: "reference missing" };
-			let referenceExists = false;
-			try {
-				referenceExists = this.deps.referenceHeld.hasReference(reg.domainId, ref);
-			} catch (error) {
-				if (error instanceof OwnerQuarantined)
-					return { ok: false, error: "refused", reason: "durability_uncertain" };
-				throw error;
-			}
-			if (!referenceExists) return { ok: false, error: "reference missing" };
-			const begun = this.deps.referenceHeld.begin(
+	beginBlob(reg: GatewayRegistration, params: Record<string, unknown>): unknown {
+		const parsed = BlobBeginParamsSchema.safeParse(params);
+		if (!parsed.success) return { ok: false, error: "invalid blob_begin" };
+		const value = parsed.data;
+		if (value.store === "cache") {
+			if (!this.deps.blobCache) return { ok: false, error: "blob cache unavailable" };
+			return this.deps.blobCache.begin(
 				reg.domainId,
 				value.blobId,
+				{ domainId: reg.domainId, gatewayId: reg.gatewayId },
 				value.size,
 				value.ciphertextSize,
 				value.ciphertextDigest,
 				value.epoch,
 			);
-			if (begun.kind !== "quota")
-				this.deps.referenceHeld.applyRefs(reg.domainId, [{ ref, blobIds: [value.blobId] }]);
-			return begun;
 		}
+		if (!this.deps.referenceHeld || !value.ref) return { ok: false, error: "held blob requires a reference" };
+		const ref = parseBlobReference(value.ref.id);
+		if (!ref || ref.kind !== value.ref.kind) return { ok: false, error: "reference missing" };
+		let referenceExists = false;
+		try {
+			referenceExists = this.deps.referenceHeld.hasReference(reg.domainId, ref);
+		} catch (error) {
+			if (error instanceof OwnerQuarantined)
+				return { ok: false, error: "refused", reason: "durability_uncertain" };
+			throw error;
+		}
+		if (!referenceExists) return { ok: false, error: "reference missing" };
+		const begun = this.deps.referenceHeld.begin(
+			reg.domainId,
+			value.blobId,
+			value.size,
+			value.ciphertextSize,
+			value.ciphertextDigest,
+			value.epoch,
+		);
+		if (begun.kind !== "quota") this.deps.referenceHeld.applyRefs(reg.domainId, [{ ref, blobIds: [value.blobId] }]);
+		return begun;
+	}
+
+	chunkBlob(reg: GatewayRegistration, params: Record<string, unknown>): unknown {
 		const parsed = BlobChunkParamsSchema.safeParse(params);
 		if (!parsed.success) return { ok: false, error: "invalid blob_chunk" };
 		const value = parsed.data;
@@ -279,7 +232,7 @@ export class InboxFrames {
 				) ?? { ok: false, error: "held blob store unavailable" });
 	}
 
-	private handleBlobFetchReply(connId: ConnectionId, params: Record<string, unknown>): unknown {
+	settleBlobFetch(connId: ConnectionId, params: Record<string, unknown>): unknown {
 		const parsed = BlobFetchReplyParamsSchema.safeParse(params);
 		return parsed.success && this.deps.blobFetch?.settle(connId, parsed.data) ? { ok: true } : { ok: false };
 	}
@@ -350,12 +303,9 @@ export class InboxFrames {
 		});
 	}
 
-	private handleValueResult(connId: ConnectionId, params: Record<string, unknown>): unknown {
+	settleValue(reg: GatewayRegistration, params: Record<string, unknown>, connId: ConnectionId): unknown {
 		const parsed = ValueResultParamsSchema.safeParse(params);
-		const reg = this.deps.getRegistration(connId);
 		if (!parsed.success) return { settled: false, reason: "malformed" };
-		if (!reg || reg.incarnation !== parsed.data.incarnation)
-			return { settled: false, reason: GATEWAY_ERROR_STALE_INCARNATION };
 		const key = `${reg.domainId}/${reg.gatewayId}/${parsed.data.conversationId}/${parsed.data.opId}`;
 		const pending = this.pendingValues.get(key);
 		if (!pending || pending.every((waiter) => waiter.connId !== connId))

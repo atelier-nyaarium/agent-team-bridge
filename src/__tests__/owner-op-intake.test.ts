@@ -246,7 +246,6 @@ describe("OwnerOp intake", () => {
 		const cases = [
 			[{ kind: "send", to: "x", body: "y" }, ["to", "body"]],
 			[{ kind: "respond", session_id: "s" }, ["session_id"]],
-			[{ kind: "report_read", team: "t", epoch: 0, seq: 0 }, ["team", "epoch", "seq"]],
 			[{ kind: "tmux_send", target: "t" }, ["target"]],
 			[{ kind: "create_session", target: "t" }, ["target"]],
 			[{ kind: "list_dirs", path: "" }, ["path"]],

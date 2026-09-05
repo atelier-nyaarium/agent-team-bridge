@@ -14,15 +14,7 @@ function constantTimeBearerEquals(provided: string | null, expected: string): bo
 
 export type ConnectionId = string;
 
-export interface GatewayToolSchema {
-	name: string;
-	description: string;
-	parameters: Record<string, unknown>;
-}
-
 export interface ToolProvider {
-	listTools?(): GatewayToolSchema[];
-
 	handleCall(connId: ConnectionId, name: string, params: Record<string, unknown>): Promise<unknown>;
 
 	onConnect?(connId: ConnectionId): void;
@@ -62,10 +54,6 @@ export class GatewayTransport {
 		this.handleClose = this.handleClose.bind(this);
 	}
 
-	public start(): void {
-		throw new Error(`${this.label} requires RouterServer`);
-	}
-
 	public stop(): void {
 		for (const ws of this.connections.values()) {
 			try {
@@ -94,11 +82,6 @@ export class GatewayTransport {
 		this.connections.set(connId, ws);
 		this.reverseConnections.set(ws, connId);
 		console.log(`[${this.label}] Client ${connId} connected (${this.connections.size} active)`);
-		// Dormant: no provider implements listTools, so this never fires. It would not work if one did -
-		// `RouterInboundFrameSchema` has no `tool_registry` member, so the gateway drops the frame. Give
-		// the schema a member before giving this a sender.
-		const tools = this.provider.listTools?.();
-		if (tools) ws.send(JSON.stringify({ type: "tool_registry", tools }));
 		try {
 			this.provider.onConnect?.(connId);
 		} catch (err) {

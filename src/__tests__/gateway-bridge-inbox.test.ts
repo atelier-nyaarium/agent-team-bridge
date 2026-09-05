@@ -13,6 +13,7 @@ import { blobIdFor } from "../shared/blob-store.js";
 import { generateIdentity } from "../shared/crypto.js";
 import { formatInboxAddress, signRowEnvelope } from "../shared/schemasInbox.js";
 import { sealBlobChunk, sealedBlobSize } from "../shared/sealed-blob.js";
+import { GATEWAY_REASON_NO_WAITER } from "../shared/wire-vocabulary.js";
 
 function socket() {
 	const sent: Record<string, unknown>[] = [];
@@ -556,6 +557,81 @@ describe("GatewayBridge inbox", () => {
 				incarnation: 1,
 			}),
 		).toEqual({ outcome: "unreachable" });
+	});
+
+	// A name the catalog does not hold reaches no handler, and a name it holds cannot be claimed twice.
+	it("catalogues every frame it dispatches beside the register handshake", async () => {
+		const { bridge } = await registered(fakeInbox());
+		expect(bridge.frameNames().sort()).toEqual(
+			[
+				"blob_begin",
+				"blob_chunk",
+				"blob_fetch",
+				"blob_fetch_reply",
+				"cross_domain_handshake",
+				"cross_domain_handshake_reply",
+				"cross_domain_handshake_reveal",
+				"cross_domain_handshake_reveal_reply",
+				"gateway_relay",
+				"gateway_relay_reply",
+				"inbox_ack",
+				"inbox_append",
+				"list_gateways",
+				"session_forget",
+				"session_upsert",
+				"value_result",
+			].sort(),
+		);
+		await expect(bridge.handleCall("c1", "value_op", { incarnation: 1 })).rejects.toThrow(
+			"unsupported gateway action: value_op",
+		);
+	});
+
+	it("refuses a service frame that would shadow a built-in or a name already taken", async () => {
+		const { bridge } = await registered(fakeInbox());
+		expect(() => bridge.registerGatewayFrame("value_result", "value", () => ({ ok: true }))).toThrow(
+			'gateway frame "value_result" already registered',
+		);
+		bridge.registerGatewayFrame("probe", "read", () => ({ ok: true }));
+		expect(() => bridge.registerGatewayFrame("probe", "read", () => ({ ok: true }))).toThrow(
+			'gateway frame "probe" already registered',
+		);
+	});
+
+	it("holds a built-in writer under the Router migration window and lets a built-in read through", async () => {
+		const { bridge } = await registered(fakeInbox());
+		bridge.setMigrationReady(() => false);
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-builtin-fence-"));
+		const previousDataDir = process.env.DATA_DIR;
+		const previousEpoch = process.env.ROUTER_MIGRATION_EPOCH;
+		process.env.DATA_DIR = dir;
+		process.env.ROUTER_MIGRATION_EPOCH = "9";
+		try {
+			expect(
+				await bridge.handleCall("c1", "session_upsert", {
+					sessionId: "session",
+					kind: "shell",
+					label: "x",
+					recordExists: true,
+					incarnation: 1,
+				}),
+			).toEqual({ outcome: "refused", reason: "migrating" });
+			// Settling a waiter this Router already holds writes nothing of the owner's.
+			expect(
+				await bridge.handleCall("c1", "value_result", {
+					opId: "op",
+					conversationId: "conversation",
+					result: {},
+					incarnation: 1,
+				}),
+			).toEqual({ settled: false, reason: GATEWAY_REASON_NO_WAITER });
+		} finally {
+			if (previousDataDir === undefined) delete process.env.DATA_DIR;
+			else process.env.DATA_DIR = previousDataDir;
+			if (previousEpoch === undefined) delete process.env.ROUTER_MIGRATION_EPOCH;
+			else process.env.ROUTER_MIGRATION_EPOCH = previousEpoch;
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
 	});
 
 	it("keeps a superseding registration when the old connection closes", async () => {

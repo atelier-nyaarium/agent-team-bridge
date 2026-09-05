@@ -104,7 +104,8 @@ The coordinators and services behind the scenarios keep pure-rule suites beside 
 `cross-domain-handshake` (limits, cancellation, mismatch refusals), `router-coordinators`
 (rendezvous, approval, and tenant limits), `owner-op-intake` (in-flight duplicates, caps,
 admission refusals, quarantine), `cross-domain-presence` (consumer, pusher, reconciler, source),
-and `share-rules`. The host daemon's Codex service has its own bench in
+`share-rules`, and `console-cross-domain-share` (the mirror before the record, a refused record,
+the fence). The host daemon's Codex service has its own bench in
 `codex-daemon-service.test.ts`: the real `ThreadLifecycle`, tracker, and JSONL transport over a
 scripted App Server child, with only the launcher as a double.
 

@@ -5,7 +5,6 @@ import { ownerKeyId } from "../../shared/owner-id.js";
 import { DELIVERY_OP_KINDS, TOLERATED_DELIVERY_OP_KINDS, VALUE_OP_KINDS } from "../../shared/schemasConsoleOp.js";
 import { SpawnPoint, storeKey } from "../../shared/session-id.js";
 import { answerBlobOp } from "../blobOps.js";
-import { readAnchorsPlaneName } from "../readAnchors.js";
 import { createCrossDomainHandlers } from "./consoleCrossDomain.js";
 import { createSessionLifecycleHandlers } from "./consoleSessionLifecycle.js";
 import { createConsoleTargets } from "./consoleTargets.js";
@@ -32,8 +31,6 @@ export function createConsoleDispatcher({
 	dropSessionResume,
 	sessionStore,
 	domain,
-	planeRegistry,
-	readAnchors,
 	blobStore,
 	fetchBlobFromGateway,
 	relayToHost,
@@ -212,17 +209,6 @@ export function createConsoleDispatcher({
 					}
 				}
 				return { delivered: true };
-			}
-
-			case "report_read": {
-				if (!readAnchors) throw new Error("read-anchor sync is not available on this Gateway");
-				const advanced = readAnchors.report(ownerId, op.team, {
-					epoch: op.epoch,
-					seq: op.seq,
-					at: ambient.now(),
-				});
-				if (advanced) planeRegistry?.markDirty(readAnchorsPlaneName(ownerId));
-				return { advanced };
 			}
 
 			case "peek":

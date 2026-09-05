@@ -5,8 +5,8 @@ import { type InboxRow, parseInboxAddress } from "../shared/schemasInbox.js";
 import { GATEWAY_ERROR_STALE_INCARNATION } from "../shared/wire-vocabulary.js";
 import type { ReferenceHeldStore } from "./blobs/referenceHeldStore.js";
 import type { BlobOrigin, RouterBlobCache } from "./blobs/routerBlobCache.js";
-import { FrameDispatchTable } from "./bridge/frameDispatch.js";
-import { INCARNATION_GATED_FRAMES, InboxFrames } from "./bridge/inboxFrames.js";
+import { type GatedFrameHandler, GatewayFrameCatalog, type OpenFrameHandler } from "./bridge/frameDispatch.js";
+import { InboxFrames } from "./bridge/inboxFrames.js";
 import { RegistrationHandler } from "./bridge/registrationHandler.js";
 import { RelayRouter } from "./bridge/relayRouter.js";
 import type { DomainMeta } from "./enrollmentCoordinator.js";
@@ -55,7 +55,7 @@ export interface ConnGatewayRecord {
 }
 
 export class GatewayBridge implements ToolProvider {
-	private readonly frameTable = new FrameDispatchTable();
+	private readonly frames = new GatewayFrameCatalog();
 	private readonly sessionForgottenListeners: Array<(reg: GatewayRegistration, sessionId: string) => void> = [];
 	/** Whether a gateway is migration-fenced. */
 	private migrationFenced: ((domainId: string, gatewayId: string) => boolean) | null = null;
@@ -79,7 +79,6 @@ export class GatewayBridge implements ToolProvider {
 	private readonly getDomainMeta: (domainId: string) => DomainMeta | null;
 	private readonly hasLinkEdge: (srcDomainId: string, dstDomainId: string) => boolean;
 	private readonly adminDomainIdGetter: () => string | null;
-	private readonly now: () => number;
 
 	public constructor({
 		port,
@@ -94,7 +93,6 @@ export class GatewayBridge implements ToolProvider {
 		referenceHeld,
 		ambient,
 	}: GatewayBridgeParams) {
-		this.now = () => ambient.now();
 		this.port = port;
 		this.authToken = authToken;
 		this.getDomain = getDomain;
@@ -160,19 +158,41 @@ export class GatewayBridge implements ToolProvider {
 				for (const listener of this.sessionForgottenListeners) listener(identity, sessionId);
 			},
 		});
+		this.registerBuiltInFrames();
 		this.handleCall = this.handleCall.bind(this);
 		this.onConnect = this.onConnect.bind(this);
 		this.onDisconnect = this.onDisconnect.bind(this);
 	}
 
-	public start(): void {
-		this.transport = new GatewayTransport({
-			port: this.port,
-			authToken: this.authToken,
-			provider: this,
-			label: "BridgeServer",
-		});
-		this.transport.start();
+	/** The built-ins are catalogued like any service frame; only the register handshake stands outside. */
+	private registerBuiltInFrames(): void {
+		const gated = (name: string, mutation: OwnerOpMutation, handler: GatedFrameHandler): void =>
+			this.frames.register({ name, mutation, gated: true, handler });
+		const open = (name: string, handler: OpenFrameHandler): void =>
+			this.frames.register({ name, mutation: "read", gated: false, handler });
+		gated("inbox_append", "delivery", (reg, params) => this.inboxFrames.appendRow(reg, params));
+		gated("inbox_ack", "value", (reg, params) => this.inboxFrames.ack(reg, params));
+		gated("session_upsert", "value", (reg, params) => this.inboxFrames.upsertSession(reg, params));
+		gated("session_forget", "value", (reg, params) => this.inboxFrames.forgetSession(reg, params));
+		gated("blob_begin", "value", (reg, params) => this.inboxFrames.beginBlob(reg, params));
+		gated("blob_chunk", "value", (reg, params) => this.inboxFrames.chunkBlob(reg, params));
+		gated("blob_fetch", "read", (reg, params) => this.inboxFrames.fetchBlob(reg, params));
+		// The replies settle a waiter this Router is already holding, so they write nothing of the owner's.
+		gated("blob_fetch_reply", "read", (_reg, params, connId) => this.inboxFrames.settleBlobFetch(connId, params));
+		gated("value_result", "read", (reg, params, connId) => this.inboxFrames.settleValue(reg, params, connId));
+		open("gateway_relay", (connId, params) => this.relayRouter.handleGatewayRelay(connId, params));
+		open("gateway_relay_reply", (connId, params) => this.relayRouter.handleGatewayRelayReply(connId, params));
+		open("cross_domain_handshake", (connId, params) => this.relayRouter.handleCrossDomainHandshake(connId, params));
+		open("cross_domain_handshake_reply", (connId, params) =>
+			this.relayRouter.handleCrossDomainHandshakeReply(connId, params),
+		);
+		open("cross_domain_handshake_reveal", (connId, params) =>
+			this.relayRouter.handleCrossDomainHandshakeReveal(connId, params),
+		);
+		open("cross_domain_handshake_reveal_reply", (connId, params) =>
+			this.relayRouter.handleCrossDomainHandshakeRevealReply(connId, params),
+		);
+		open("list_gateways", (connId) => this.handleListGateways(connId));
 	}
 
 	public attach(): void {
@@ -288,9 +308,20 @@ export class GatewayBridge implements ToolProvider {
 		});
 	}
 
-	/** Handlers receive connection identity. */
+	/** Handlers receive connection identity. A built-in's name is taken, so a service asking for one throws. */
 	public registerGatewayFrame(name: string, mutation: OwnerOpMutation, handler: GatewayFrameHandler): void {
-		this.frameTable.register(name, mutation, handler);
+		this.frames.register({
+			name,
+			mutation,
+			gated: true,
+			// Strip caller-supplied identity fields.
+			handler: (reg, { domainId: _domainId, gatewayId: _gatewayId, ...payload }) => handler(reg, payload),
+		});
+	}
+
+	/** Every frame the bridge dispatches, beside the register handshake. */
+	public frameNames(): string[] {
+		return this.frames.names();
 	}
 
 	public onSessionForgotten(listener: (reg: GatewayRegistration, sessionId: string) => void): void {
@@ -375,45 +406,27 @@ export class GatewayBridge implements ToolProvider {
 
 	public async handleCall(connId: ConnectionId, name: string, params: Record<string, unknown>): Promise<unknown> {
 		if (name === "gateway_register") return this.registrationHandler.handle(connId, params);
-		if (INCARNATION_GATED_FRAMES.has(name)) return this.inboxFrames.handle(connId, name, params);
-		const frameHandler = this.frameTable.get(name);
-		if (frameHandler) {
-			const reg = this.connGateways.get(connId);
-			if (!reg?.signPub || reg.incarnation === null) return { ok: false, error: "inbox_unavailable" };
-			if (params.incarnation !== reg.incarnation) {
-				console.warn(`[BridgeServer] stale gateway incarnation for ${name}`);
-				return { ok: false, error: GATEWAY_ERROR_STALE_INCARNATION };
-			}
-			if (
-				readRouterMigrationWindow().fenced &&
-				this.frameTable.mutation(name) !== "read" &&
-				this.migrationReady &&
-				!this.migrationReady(reg.domainId)
-			)
-				return { outcome: "refused", reason: "migrating" };
-			// Strip caller-supplied identity fields.
-			const { domainId: _domainId, gatewayId: _gatewayId, ...payload } = params;
-			return frameHandler(
-				{
-					domainId: reg.domainId,
-					gatewayId: reg.gatewayId,
-					signPub: reg.signPub,
-					incarnation: reg.incarnation,
-				},
-				payload,
-			);
+		const frame = this.frames.get(name);
+		if (!frame) throw new Error(`unsupported gateway action: ${name}`);
+		if (!frame.gated) return frame.handler(connId, params);
+		const reg = this.connGateways.get(connId);
+		if (!reg?.signPub || reg.incarnation === null) return { ok: false, error: "inbox_unavailable" };
+		if (params.incarnation !== reg.incarnation) {
+			console.warn(`[BridgeServer] stale gateway incarnation for ${name}`);
+			return { ok: false, error: GATEWAY_ERROR_STALE_INCARNATION };
 		}
-		if (name === "gateway_relay") return this.relayRouter.handleGatewayRelay(connId, params);
-		if (name === "gateway_relay_reply") return this.relayRouter.handleGatewayRelayReply(connId, params);
-		if (name === "cross_domain_handshake") return this.relayRouter.handleCrossDomainHandshake(connId, params);
-		if (name === "cross_domain_handshake_reply")
-			return this.relayRouter.handleCrossDomainHandshakeReply(connId, params);
-		if (name === "cross_domain_handshake_reveal")
-			return this.relayRouter.handleCrossDomainHandshakeReveal(connId, params);
-		if (name === "cross_domain_handshake_reveal_reply")
-			return this.relayRouter.handleCrossDomainHandshakeRevealReply(connId, params);
-		if (name === "list_gateways") return this.handleListGateways(connId);
-		return this.handleActionCall(name, params);
+		if (
+			frame.mutation !== "read" &&
+			readRouterMigrationWindow().fenced &&
+			this.migrationReady &&
+			!this.migrationReady(reg.domainId)
+		)
+			return { outcome: "refused", reason: "migrating" };
+		return frame.handler(
+			{ domainId: reg.domainId, gatewayId: reg.gatewayId, signPub: reg.signPub, incarnation: reg.incarnation },
+			params,
+			connId,
+		);
 	}
 
 	public onConnect(_connId: ConnectionId): void {
@@ -512,9 +525,5 @@ export class GatewayBridge implements ToolProvider {
 			.filter((h) => h !== self)
 			.map((gatewayId) => ({ gatewayId, online: true }));
 		return { gateways };
-	}
-
-	private async handleActionCall(name: string, _params: Record<string, unknown>): Promise<unknown> {
-		throw new Error(`unsupported gateway action: ${name}`);
 	}
 }

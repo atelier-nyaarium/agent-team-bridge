@@ -1,41 +1,51 @@
-import type { GatewayFrameHandler } from "../gatewayBridge.js";
+import type { GatewayRegistration } from "../gatewayBridge.js";
+import type { ConnectionId } from "../gatewayTransport.js";
 import type { OwnerOpMutation } from "../ownerOpRegistry.js";
 
-export const BUILT_IN_FRAMES = new Set([
-	"gateway_register",
-	"inbox_append",
-	"inbox_ack",
-	"session_upsert",
-	"session_forget",
-	"blob_fetch",
-	"blob_fetch_reply",
-	"blob_begin",
-	"blob_chunk",
-	"gateway_relay",
-	"gateway_relay_reply",
-	"cross_domain_handshake",
-	"cross_domain_handshake_reply",
-	"cross_domain_handshake_reveal",
-	"cross_domain_handshake_reveal_reply",
-	"list_gateways",
-]);
+/** A gated frame runs after the bridge has verified the incarnation, so it is handed the identity. */
+export type GatedFrameHandler = (
+	reg: GatewayRegistration,
+	params: Record<string, unknown>,
+	connId: ConnectionId,
+) => unknown | Promise<unknown>;
 
-/** Registered service frames, keyed by name. */
-export class FrameDispatchTable {
-	private readonly entries = new Map<string, { mutation: OwnerOpMutation; handler: GatewayFrameHandler }>();
+/** An open frame claims no incarnation, so it resolves whatever it needs from the connection. */
+export type OpenFrameHandler = (connId: ConnectionId, params: Record<string, unknown>) => unknown | Promise<unknown>;
 
-	/** Handlers receive connection identity; the class is what the migration fence reads. */
-	register(name: string, mutation: OwnerOpMutation, handler: GatewayFrameHandler): void {
-		if (this.entries.has(name) || BUILT_IN_FRAMES.has(name))
-			throw new Error(`gateway frame "${name}" already registered`);
-		this.entries.set(name, { mutation, handler });
+interface FrameCommon {
+	readonly name: string;
+	/** `read` passes the migration fence; every other class waits behind it. */
+	readonly mutation: OwnerOpMutation;
+}
+
+export interface GatedFrameDescriptor extends FrameCommon {
+	readonly gated: true;
+	readonly handler: GatedFrameHandler;
+}
+
+/** An open frame names no owner the fence could hold it for, so it may only ever be a `read`. */
+export interface OpenFrameDescriptor extends FrameCommon {
+	readonly gated: false;
+	readonly mutation: "read";
+	readonly handler: OpenFrameHandler;
+}
+
+export type GatewayFrameDescriptor = GatedFrameDescriptor | OpenFrameDescriptor;
+
+/** Every frame the bridge dispatches, built-in or service. Dispatch, gating, and the fence read this alone. */
+export class GatewayFrameCatalog {
+	private readonly entries = new Map<string, GatewayFrameDescriptor>();
+
+	register(descriptor: GatewayFrameDescriptor): void {
+		if (this.entries.has(descriptor.name)) throw new Error(`gateway frame "${descriptor.name}" already registered`);
+		this.entries.set(descriptor.name, descriptor);
 	}
 
-	get(name: string): GatewayFrameHandler | undefined {
-		return this.entries.get(name)?.handler;
+	get(name: string): GatewayFrameDescriptor | undefined {
+		return this.entries.get(name);
 	}
 
-	mutation(name: string): OwnerOpMutation | undefined {
-		return this.entries.get(name)?.mutation;
+	names(): string[] {
+		return [...this.entries.keys()];
 	}
 }

@@ -82,11 +82,11 @@ export class FederationContext {
 		this.state = { phase: "arming", arming };
 	}
 
-	/** Drops the boot, the Domain id, and the slice together, so nothing survives the phase. */
+	/** Drops the boot and the slice; the Domain id falls back to the on-disk stand-in, as at construction. */
 	standalone(): void {
 		this.state = { phase: "standalone" };
 		this.activeBoot = null;
-		this.domain = null;
+		this.domain = this.deps.initialDomainId;
 	}
 
 	/** Builds the slice first, so a failed build leaves the phase untouched. */

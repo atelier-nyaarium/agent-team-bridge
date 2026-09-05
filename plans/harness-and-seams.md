@@ -795,7 +795,7 @@ stale, `respond` calls it for every bridge handshake reply. `createHttpRouter` i
 `routes` reaches it as a thunk because federation activation rebuilds them. `send`, `respond`,
 and `taskBoard` stay one function each, over 200 lines apiece; their locals are the closure.
 
-**The gateway root:** `composeGateway.ts` is 193 lines calling thirteen stages under
+**The gateway root:** `composeGateway.ts` is 193 lines calling fourteen stages under
 `src/gateway/compose/` in order, with the four late-bound cycles as closures and thunks for a
 stage that needs a later one. `GatewayGraph` is `router`, `wsHandlers`, `close`, and `faults`
 (`dropRouterLink`, `routerRegistered`, `routerIncarnation`, `heldEpochs`, `sessionRecord`,
@@ -824,11 +824,15 @@ the phone cannot compose), with the typed union applied per kind at dispatch. Th
 kinds the list had missed and two raw `capabilities_report` literals on the phone. The bridge
 is 519 lines over `bridge/frameDispatch.ts`, `registrationHandler.ts`, `relayRouter.ts`, and
 `inboxFrames.ts`; the inbox service 426 over `inboxAppend.ts`, `inboxRetire.ts`, `inboxSweep.ts`,
-`inboxOpResult.ts`, and `inboxCore.ts`. A gateway frame registers with its mutation class and both
-fences, the intake's and the bridge's, hold every class but `read`; the hand list the bridge had
-missed `board_session_end`, and the first class rule held only `value` while the intake held
+`inboxOpResult.ts`, and `inboxCore.ts`. Every frame the bridge dispatches, built-in or service,
+is one descriptor in `GatewayFrameCatalog` (`bridge/frameDispatch.ts`) holding its mutation class,
+whether it is incarnation-gated, and its handler; `handleCall` reads it for dispatch, the
+incarnation check, and the fence, and nothing else lists a frame name, so a shadowed or
+uncatalogued name is a construction error. Both fences, the intake's and the bridge's, hold every
+class but `read`. The two hand lists the catalog replaced had missed `board_session_end` and
+disagreed on `value_result`, and the first class rule held only `value` while the intake held
 everything else, so `share_job_live` became `read` and the key ops `value` to give the three
-words one meaning. The Router's construction fails closed when a catalogued kind has no handler,
+words one meaning; the six gated built-in writers now meet the same fence. The Router's construction fails closed when a catalogued kind has no handler,
 and a gateway's share frame is authorized by the target's Domain and gateway segments, not by a
 string prefix.
 
@@ -851,17 +855,30 @@ to `PresencePort`. `ConnectCoordinator` owns the connect sequence over `PhoneIde
 `ConsoleReach`, with a JVM behavior test; `ChatRepository.kt` is 577 lines after the inbox and
 migration extensions moved out.
 
+**Repairs the audits named:** the console's `report_read` lane was dead on both sides (no lane
+set admitted it, and the phone posts read reports to the Router), so the branch, the union
+member, the generated Kotlin class, and five console deps nothing read (`domainStatus`,
+`presence`, `intentTracker`, `crossDomainPresenceConsumer`, `linkedDomainIds`, plus
+`planeRegistry` and `readAnchors`) are gone. `FederationContext.standalone()` restores the
+on-disk Domain id the constructor seeds, so both standalone paths mint the same addresses. The
+host-op runner narrows to `never`, so an eighth `HostOp` fails `tsc`. `websocket.ts` no longer
+re-exports `wsTypes.ts`; its twenty-two importers read the source.
+
 **Sizes:** No source file over 600 lines. The Codex and Copilot services, the daemon service,
 the local runtime, the shared Copilot family, the cross-Domain presence family, and the console
 handler each split by cohesion with unchanged public surfaces.
 
 ### Bug classes
 
-- Structural: held. The root is thirteen readable stages; `routes.ts` is a composer.
+- Structural: held. The root is fourteen readable stages and a fault port; `routes.ts` is a
+  composer.
 - The clock seam: held as one context with a fence; the handshake timers are now testable.
 - An owner-op kind with no schema, handler, or classification: held by the registry, and at
   construction.
 - A gateway frame that mutates owner state outside the fence: held by the registration class.
+  The bridge fence took two rounds in one mechanism: a hand list, then a class rule that held
+  `value` alone while the intake held everything but `read`. The second round gave both fences
+  the one rule; a third patch to that mechanism is a design fault.
 - Not held: the three long route handlers; the `board_op` frame's own schema and the 22 kinds
   with no answer schema; an answer off its schema is logged, not refused; `OwnerOp.op` typed as a
   record at the envelope.
@@ -885,6 +902,23 @@ into the app; no wire field changes. Gateway first as usual.
   locals, each a redesign rather than a move.
 - A fake host that can refuse: every HostOp succeeds today, so tmux refusals and error
   classification have no scenario; the dedupe scenarios still settle on fixed sleeps.
+- Console-op lanes from one catalog. `DELIVERY_OP_KINDS` and `VALUE_OP_KINDS` are hand sets beside
+  `ConsoleOpSchema`, each Kotlin call site picks its lane by hand, and a kind in neither set is
+  refused at both entries with no compile error. One entry per kind carrying schema and lane,
+  the sets derived, the Kotlin lane generated beside `ConsoleOpKind`.
+- One injected migration-window reader on the Router. `readRouterMigrationWindow` reads the
+  process environment on every call from six surfaces, so two Routers in one harness process
+  share one window and no scenario can cut one Domain alone. Thread it from
+  `RouterDomainBootstrap` the way `Ambient` is threaded, and extend the residue fence to it.
+- A crash-atomic share. The mirror and the Router record are two authorities with a compensation
+  that covers a refusal, not a process death between them; nothing replays on activation, and the
+  attestor heartbeats only recorded shares, so an orphan mirror is never noticed. A durable
+  operation record written before either write and cleared after both, replayed on activation,
+  with reads distinguishing desired from Router-confirmed state.
+- Typed late-binding ports in the gateway root. Five mutable stage slots, two `require*` thunks,
+  and an `onActivate` that re-checks four of them hold composition order at runtime; a stage in
+  the wrong place typechecks and throws on the first activation. Ports installed during assembly
+  make the order a type error.
 - `inbox_advance` and `consumer_register` are catalogued `read` and move consumer cursors, so a
   cursor advanced inside a migration window is lost to the cut and the phone re-reads those rows.
   Decide whether cursor moves must survive the cut, then label from that.

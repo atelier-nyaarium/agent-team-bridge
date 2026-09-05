@@ -62,7 +62,6 @@ export type ReadAnchorWireEntry = z.infer<typeof ReadAnchorWireEntrySchema>;
 export type CrossDomainPresenceEntry = z.infer<typeof CrossDomainPresenceEntrySchema>;
 export type BoardEntry = z.infer<typeof BoardEntrySchema>;
 export type BoardAttachment = z.infer<typeof BoardAttachmentSchema>;
-export type ConsoleReportReadOp = Extract<ConsoleOp, { kind: "report_read" }>;
 export type ConsoleSendOp = Extract<ConsoleOp, { kind: "send" }>;
 export type ConsoleRespondOp = Extract<ConsoleOp, { kind: "respond" }>;
 export type ConsolePeekOp = Extract<ConsoleOp, { kind: "peek" }>;

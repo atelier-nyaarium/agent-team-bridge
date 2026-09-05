@@ -37,12 +37,6 @@ export const ConsoleOpSchema = z
 			files: ChannelFilesSchema.optional(),
 		}),
 		z.object({
-			kind: z.literal("report_read"),
-			team: z.string().min(1).max(128),
-			epoch: z.number().int().nonnegative().max(0x7fffffff),
-			seq: z.number().int().nonnegative(),
-		}),
-		z.object({
 			kind: z.literal("peek"),
 			target: z.string().min(1).max(128),
 			sinceHash: z.string().max(64).optional(),

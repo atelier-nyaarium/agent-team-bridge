@@ -100,7 +100,6 @@ object Protocol {
 		object ConsoleOpKind {
 			const val SEND: String = "send"
 			const val RESPOND: String = "respond"
-			const val REPORT_READ: String = "report_read"
 			const val PEEK: String = "peek"
 			const val TMUX_SEND: String = "tmux_send"
 			const val CREATE_SESSION: String = "create_session"
@@ -270,14 +269,6 @@ sealed class ConsoleOp {
 		val response: String? = null,
 		val replyAsJson: JsonObject? = null,
 		val files: List<ChannelFile>? = null,
-	) : ConsoleOp()
-
-	@Serializable
-	@SerialName("report_read")
-	data class ReportRead(
-		val team: String,
-		val epoch: Long,
-		val seq: Long,
 	) : ConsoleOp()
 
 	@Serializable

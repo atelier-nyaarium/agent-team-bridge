@@ -24,17 +24,7 @@ export interface RouterFramesStageDeps {
 	ambient: Ambient;
 	context: FederationContext;
 	stores: Pick<StoresStage, "blobStore" | "jobs" | "durableOpStore">;
-	sessions: Pick<
-		SessionsStage,
-		| "registry"
-		| "conversationRegistry"
-		| "isTrustedCatalogProject"
-		| "presence"
-		| "planeRegistry"
-		| "intentTracker"
-		| "readAnchors"
-		| "crossDomainPresenceConsumer"
-	>;
+	sessions: Pick<SessionsStage, "registry" | "conversationRegistry" | "isTrustedCatalogProject" | "presence">;
 	host: Pick<HostStage, "relayToHost" | "wakeService" | "wakeCoordinator">;
 	routes: () => GatewayRoutes;
 }
@@ -75,13 +65,6 @@ export function composeRouterFrames(deps: RouterFramesStageDeps): RouterFramesSt
 				const snapshot = slice.allowlist.getSnapshot() ?? null;
 				return snapshot ? { version: slice.allowlist.version() ?? "", snapshot } : null;
 			},
-			domainStatus: () => slice.domainMeta?.domainStatus,
-			planeRegistry: sessions.planeRegistry,
-			presence: sessions.presence,
-			intentTracker: sessions.intentTracker,
-			readAnchors: sessions.readAnchors,
-			crossDomainPresenceConsumer: sessions.crossDomainPresenceConsumer,
-			linkedDomainIds: () => context.linkedDomainIds(),
 			relayToHost: host.relayToHost,
 			tryWakeTeam: (team) => host.wakeService.tryWakeTeam(team),
 			isWakeInFlight: (team) => host.wakeService.isWakeInFlight(team),

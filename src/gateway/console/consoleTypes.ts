@@ -16,15 +16,11 @@ import type {
 } from "../../shared/console-protocol.js";
 import type { SignedXDomainLink } from "../../shared/federation-protocol.js";
 import type { HostOp, HostOpResult } from "../../shared/host-op.js";
-import type { PlaneRegistry } from "../../shared/plane-registry.js";
 import { MAX_POLL_HOLD_MS } from "../../shared/schemas.js";
 import type { SessionStore } from "../../shared/session-store.js";
 import type { GatewaySpawnPoints, TeamInfo } from "../../shared/types.js";
 import type { DeliverToOwner } from "../consolePushOps.js";
-import type { CrossDomainPresenceConsumer } from "../federation/crossDomainPresenceConsumer.js";
 import type { ShareMirrorOutcome } from "../federation/crossDomainShareState.js";
-import type { IntentTracker } from "../intent.js";
-import type { ReadAnchors } from "../readAnchors.js";
 import type { WakeResult } from "../wake.js";
 import type { ConversationRegistry, TeamRegistry } from "../wsTypes.js";
 import type { DurableOpStore } from "./durableOpStore.js";
@@ -106,49 +102,11 @@ export interface ConsoleHandlerDeps {
 	/** The current keyring + its version hash. The poll reply carries the snapshot only when
 	 * the Console's known version differs. */
 	domain?: () => { version: string; snapshot: DomainSnapshot } | null;
-	/** This Gateway's own Domain lifecycle status, learned from the Router's register reply, and
-	 * returned on the console register. A Gateway exists only for a Domain past rooting, so this
-	 * is "rooted" (or "unrooted" for a fresh admin Domain) and never "pending" (the pending case
-	 * reaches the app via the provisioning blob's pendingTenant). Undefined against a pre-feature
-	 * Router, where the app treats the Domain as already rooted. */
-	domainStatus?: () => string | undefined;
-	/** The versioned-state-plane registry: the poll op races `waitForBump` alongside the mailbox's
-	 * own `waitForAppend`, and piggybacks the presence plane's snapshot onto the reply when the
-	 * Console's `knownPresenceVersions` is behind - the same shape as the `domain`/`domainStatus`
-	 * piggyback above, generalized. Absent when presence is not wired (the poll then behaves
-	 * exactly as before: no second wait primitive, no presence field ever attached). */
-	planeRegistry?: PlaneRegistry;
-	/** Read access to the presence plane's current rows, for the poll piggyback. A narrow seam
-	 * (matching routes.ts's own `presence` dep) rather than importing PresenceFacade directly. */
-	presence?: { snapshot(): TeamInfo[] };
-	/** Resolves each device's peek cadence from the union of every device's declared focus. The
-	 * poll op declares (refreshes) the calling device's intent here whenever the op carries a
-	 * `focus` field. Absent when presence/intent is not wired (a poll's `focus` is then just
-	 * ignored, matching today's behavior for a Gateway with no daemon derivation). */
-	intentTracker?: IntentTracker;
-	/** Per-owner cross-device read-position sync (see readAnchors.ts's own doc): `report_read`
-	 * writes through here, and the poll case reads/piggybacks this OWNER's own plane (never
-	 * another owner's). Absent when not wired (report_read then errors; the poll piggyback is
-	 * simply skipped, matching every other plane's own opt-in shape). */
-	readAnchors?: ReadAnchors;
-	/** The landed side of a linked friend's `presence_push` (crossDomainPresence.ts): the poll case
-	 * eagerly ensures a plane for every currently-linked Domain (via `linkedDomainIds` below) before
-	 * racing `waitForBump` - a plane that does not exist yet cannot wake an in-flight held poll on
-	 * its own first bump (`PlaneRegistry.wake`'s membership-gated dispatch) - then piggybacks
-	 * whichever linked Domains' planes actually changed. Absent when not wired (the poll piggyback
-	 * is simply skipped, matching every other plane's own opt-in shape). */
-	crossDomainPresenceConsumer?: CrossDomainPresenceConsumer;
-	/** This Gateway's currently-linked Domain ids, enumerated fresh on every poll call (never
-	 * cached) - the roster `crossDomainPresenceConsumer` above is ensured/versioned against. */
-	linkedDomainIds?: () => string[];
-	/** Relay a tmux op to the local host daemon and await its reply. Drives the console terminal
-	 * view; absent when no host daemon is wired (the op then errors "terminal unavailable"). */
-	/** The gateway's byte store. Absent only in tests that never exercise a blob op; the three
-	 * blob cases refuse rather than inventing a location to write to. */
+	/** Absent turns every blob op into a refusal. */
 	blobStore?: BlobStore;
-	/** Pulls a blob in from the Gateway holding it. The console always asks its route Gateway, which
-	 * is often not the holder, so without this a cross-Gateway attachment is unfetchable. */
+	/** Pulls a blob in from the Gateway holding it. */
 	fetchBlobFromGateway?: (blobId: string, fromGateway: string) => Promise<import("../blobOps.js").BlobFetchOutcome>;
+	/** Absent answers every terminal op "terminal unavailable". */
 	relayToHost?: (op: HostOp) => Promise<HostOpResult>;
 	/** Wake a team (the same trigger send() uses for an asleep target), bringing up a devcontainer's
 	 * cold container if needed. create_session uses this instead of relayToHost for a devcontainer

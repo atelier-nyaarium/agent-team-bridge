@@ -35,10 +35,7 @@ import {
 	ReportReadSchema,
 } from "../shared/schemasTier1.js";
 
-/**
- * What the intake does with an operation. `delivery` appends a row and carries its own nonce;
- * `value` changes owner state and waits behind the migration fence; `read` does neither.
- */
+/** `read` passes the migration fence; `delivery` appends a row with its own nonce; `value` is the rest. */
 export type OwnerOpMutation = "delivery" | "value" | "read";
 
 export interface OwnerOpCatalogEntry<Kind extends string = string, Value extends z.ZodType = z.ZodType> {

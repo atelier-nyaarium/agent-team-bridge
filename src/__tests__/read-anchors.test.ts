@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { ReadAnchors, readAnchorsPlaneName } from "../gateway/readAnchors.js";
 import { processAmbient } from "../shared/ambient.js";
 import { PlaneRegistry } from "../shared/plane-registry.js";
-import { ConsoleOpSchema } from "../shared/schemas.js";
+import { ReportReadSchema } from "../shared/schemasTier1.js";
 
 describe("ReadAnchors", () => {
 	it("the first report for a team always advances (nothing stored yet)", () => {
@@ -148,22 +148,10 @@ describe("ReadAnchors", () => {
 
 	describe("abuse hardening", () => {
 		it("report_read's wire schema rejects an epoch outside the range a real device could ever mint", () => {
-			const tooLarge = ConsoleOpSchema.safeParse({
-				kind: "report_read",
-				team: "team-a",
-				epoch: 0x7fffffff + 1,
-				seq: 0,
-			});
-			expect(tooLarge.success).toBe(false);
-			const negative = ConsoleOpSchema.safeParse({ kind: "report_read", team: "team-a", epoch: -1, seq: 0 });
-			expect(negative.success).toBe(false);
-			const atCeiling = ConsoleOpSchema.safeParse({
-				kind: "report_read",
-				team: "team-a",
-				epoch: 0x7fffffff,
-				seq: 0,
-			});
-			expect(atCeiling.success).toBe(true);
+			const report = (epoch: number) => ({ kind: "report_read", team: "team-a", epoch, seq: 0, at: 0 });
+			expect(ReportReadSchema.safeParse(report(0x7fffffff + 1)).success).toBe(false);
+			expect(ReportReadSchema.safeParse(report(-1)).success).toBe(false);
+			expect(ReportReadSchema.safeParse(report(0x7fffffff)).success).toBe(true);
 		});
 
 		it("report() refuses a genuinely NEW team beyond the per-owner cap, without disturbing already-tracked teams", () => {
