@@ -38,7 +38,8 @@ and the delta list are in `docs/federation.md` under Owner state.
 - The store opens through `openDurable`, so a poisoned file starts fresh. A revocation or a
   session-end drop is written with `saveChecked` and reported once the snapshot is installed.
   Grants and expiry sweeps are best effort.
-- `vault_grants` lists the live grants. `vault_revoke` drops a grant or a helper token by id.
+- `vault_grants` lists the live grants. `vault_revoke` drops a grant or a helper token by id; a
+  revoked token takes its grants and open requests with it.
 
 ## Request road
 
@@ -56,6 +57,9 @@ and the delta list are in `docs/federation.md` under Owner state.
 - An approval on an entry request also records the grant. The answer waits for its collector until
   the deadline, and the first collector takes it.
 - A session's end refuses its open requests and drops its grants.
+- **Every settlement sends a `retract` row:** an answer, a denial, the deadline, a withdraw, or a
+  session's end. The phone drops the request and its notification on it, so a second console never
+  keeps a request another already answered. An unknown id is nothing to drop.
 
 ## Loopback routes
 
@@ -111,9 +115,9 @@ and git run it with the prompt as its one argument and read the value from stdou
   the tty as the only road. With no tty either, the helper exits 1. It prints nothing but the value
   to stdout; notes go to stderr. Loopback calls go through `node:http`, so a proxy variable cannot
   divert them.
-- A withdrawn request is closed on the gateway only. The phone's row stays until its deadline, and
-  answering it reads as expired. Any local process holding the token can withdraw a helper request;
-  that denies one prompt and diverts nothing, since an answer is sealed to its request id.
+- A withdrawn request is retracted from the phone; an answer that crosses it reads as expired. Any
+  local process holding the token can withdraw a helper request; that denies one prompt and diverts
+  nothing, since an answer is sealed to its request id.
 - The token file is `VAULT_ASKPASS_TOKEN_FILE`, which the wrapper sets, or
   `~/.config/switchboard/vault-askpass.token`; the gateway is `BRIDGE_ROUTER_URL`, default
   `http://127.0.0.1:20000`. The helper needs a token but no session.
@@ -147,7 +151,8 @@ and git run it with the prompt as its one argument and read the value from stdou
   pushed is not offered again, so the refresh retries twice on its own.
 - A request reaches `VaultPlugin` as the `vault:request` action and is held with the conversation
   it landed in; that conversation's gateway segment answers it. A duplicate dispatch and a request
-  past its deadline are dropped. A restart drops expired ones.
+  past its deadline are dropped. A restart drops expired ones. The `vault:retract` action drops one
+  by id.
 - **One notification per pending request:** swipe denies. Once and 30 min buttons exist only while
   Vault approvals is off. Tap opens the sheet. The sheet answers with `vault_answer` through the
   gateway value op. Save as entry puts a typed value as a new entry after the answer.

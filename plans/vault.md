@@ -470,8 +470,9 @@ run one at a time. Work begun before a wipe lands nothing after it. A save keeps
 phone cannot open, and the gateway chips never widen a scope by emptying it: only Every gateway
 clears it. A typed value saved as an entry is scoped to the gateway that asked, and the gateway
 settles a typed answer as once whatever tier the phone named. The secret fields use the password
-keyboard. Known and left: a second admitted phone keeps a request the first one answered until its
-deadline, and a phone clock ahead of the gateway drops a request early. The three list consumers
+keyboard. Known and left: a phone clock ahead of the gateway drops a request early. A second
+admitted phone kept a request the first one answered until its deadline; Phase 4's retract row
+ended that. The three list consumers
 (gateway client, phone vault, phone board) fold through one shared rule, `versioned-list.ts` with its
 Kotlin twin and vectors. `ContentSealing` is the one sealing door the board and vault subclass.
 `ApprovalGate` owns the policy, the window, and the prompt. `sealDraft` is the pure draft-to-sealed
@@ -479,7 +480,7 @@ rule. `PluginHost.onRetract` is how the vault drops its pending requests when it
 plugin-owned request surface (pending items, their notification, their modal) is not registered: a
 later plugin's request kind costs edits in the service, the receiver, and the activity.
 
-## Phase 4 - Askpass helper
+## Phase 4 - Askpass helper ✅
 
 - `src/main-vault-askpass.ts`, a second entry in `scripts/build.ts` beside `main-mcp.js`, bundled
   into `dist/`. Reads `/proc/<ppid>/cmdline`,
@@ -488,6 +489,30 @@ later plugin's request kind costs edits in the service, the receiver, and the ac
 - Installer script: mints the token through the gateway, writes the binary and the 0600 token
   under the owner's home, prints the three profile exports. Documents that `force` is optional
   and that sudo needs `-A`.
+
+Shipped beyond the bullets: the decision is `src/vault-askpass/askpass.ts`, pure over gateway, tty,
+and clock ports, with the entry point wiring `/proc`, `/dev/tty`, `node:http`, and the signals. The
+opening `/vault/askpass` call asks for no wait, so the request id is known before the human can
+win; collects hold 25 s beside a tty and `VAULT_ROUTE_WAIT_CAP_MS` without one. A tty win withdraws
+the phone's request through the new `/vault/withdraw` route, bounded to three seconds; a caller's
+SIGINT, SIGTERM, or SIGHUP withdraws too. An empty line asks again; a closed tty leaves the phone
+road running; an owner's refusal or an unreachable gateway leaves the tty as the road. When the
+phone wins, the sh child is killed, half-typed input drained, and echo restored. The brief replaces
+its first word with `/proc/<ppid>/exe`, drops sudo's `-A` ahead of the command, and is sent only
+for a prompt naming a password, passphrase, secret, token, or PIN: ssh's host-key confirmation and
+git's username prompt stay at the tty, so a grant never answers a yes/no (red team). A helper's
+session tap records a window, since every process on the host shares the token (red team, R4).
+`withdraw` refuses a request already answered. Minting a helper token needs an enrolled gateway.
+Revoking a helper token ends its grants and open requests, closing the Phase 2 painpoint. Every
+settlement, whichever road, sends a `vault:retract` row that the phone's `VaultPlugin` claims and
+drops the request on, so a second console never keeps an answered request (architecture). The
+installer bakes the bun that ran it, the token path (`VAULT_ASKPASS_TOKEN_FILE`), and the gateway
+into the wrapper, so a caller that resets HOME or PATH still reaches the helper; the token file is
+created fresh at 0600. Loopback calls go through `node:http`, which no proxy variable diverts.
+Known and left: the brief names the operation and cannot vouch for the caller (R4); any local
+process with the token can withdraw a helper request, which denies one prompt and diverts nothing;
+a helper hold under sudo runs to the request's deadline, since sudo's password timeout does not
+cover an askpass child.
 
 ## Phase 5 - MCP tools
 
@@ -531,9 +556,6 @@ Collected after Phase 1. Nothing here is fixed; each names the mechanism.
 
 Collected after Phase 2.
 
-- A helper's grants key on `helper.<tokenId>`, and nothing ends that session: `sessionEnded` runs
-  for swept teams only, so a helper window lives its full 30 minutes after the token is revoked.
-  `helperTokens.revoke` would have to drop the grants under its target too.
 - `DurableStore.saveChecked` throws `DurableStoreInstalledError` after the snapshot is at its final
   name. Every checked writer must know that one exception means committed: `session-store.ts` marks
   the revision unconfirmed, the vault stores treat it as success. A `saveChecked` that returned

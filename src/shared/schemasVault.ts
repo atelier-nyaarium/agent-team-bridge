@@ -125,6 +125,9 @@ export const VaultRequestSchema = z
 	])
 	.meta({ id: "VaultRequest" });
 
+/** The `vault:retract` payload: the request settled elsewhere, so the phone drops it. */
+export const VaultRetractSchema = z.object({ requestId }).meta({ id: "VaultRetract" });
+
 export const VaultGrantSchema = z
 	.object({
 		grantId: z.string().min(1).max(128),
@@ -189,6 +192,7 @@ export type VaultWriteResult = z.infer<typeof VaultWriteResultSchema>;
 export type VaultListResult = z.infer<typeof VaultListResultSchema>;
 export type VaultDecision = z.infer<typeof VaultDecisionSchema>;
 export type VaultRequest = z.infer<typeof VaultRequestSchema>;
+export type VaultRetract = z.infer<typeof VaultRetractSchema>;
 export type VaultGrant = z.infer<typeof VaultGrantSchema>;
 export type VaultPublicEntry = z.infer<typeof VaultPublicEntrySchema>;
 export type VaultApprovedDecision = z.infer<typeof VaultApprovedDecisionSchema>;

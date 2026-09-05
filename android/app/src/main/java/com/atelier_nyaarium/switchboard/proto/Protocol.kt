@@ -1487,6 +1487,11 @@ sealed class VaultRequest {
 }
 
 @Serializable
+data class VaultRetract(
+	val requestId: String,
+)
+
+@Serializable
 data class VaultGrant(
 	val grantId: String,
 	val tier: String,

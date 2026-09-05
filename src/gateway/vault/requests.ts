@@ -34,6 +34,8 @@ export interface VaultRequestsDeps {
 	/** Opens typed values with request AAD. */
 	openTyped: (envelope: ContentEnvelope, requestId: string) => string | null;
 	onApproved?: (request: VaultRequest, decision: VaultDecision) => void;
+	/** Once per request, however it settled. */
+	onSettled?: (request: VaultRequest) => void;
 	deadlineMs?: number;
 }
 
@@ -88,6 +90,10 @@ export function createVaultRequests(deps: VaultRequestsDeps) {
 				if (entry.settled) return;
 				entry.settled = true;
 				settle(result);
+				// A listener's failure never leaves a settled entry behind.
+				try {
+					deps.onSettled?.(request);
+				} catch {}
 			},
 			settled: false,
 			// The deadline ends an uncollected answer too.

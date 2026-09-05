@@ -149,6 +149,7 @@ import {
 	VaultPutSchema,
 	VaultPutValueSchema,
 	VaultRequestSchema,
+	VaultRetractSchema,
 	VaultStoredEntrySchema,
 	VaultWriteResultSchema,
 } from "../src/shared/schemasVault.js";
@@ -303,6 +304,7 @@ const ROOTS: z.ZodType[] = [
 	VaultPutValueSchema,
 	VaultDeleteValueSchema,
 	VaultRequestSchema,
+	VaultRetractSchema,
 	VaultGrantSchema,
 	ConsoleVaultAnswerResultSchema,
 	ConsoleVaultGrantsResultSchema,

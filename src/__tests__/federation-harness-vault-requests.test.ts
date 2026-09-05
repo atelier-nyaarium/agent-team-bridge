@@ -6,7 +6,12 @@ import {
 	VAULT_VALUE_KIND,
 	vaultAadKind,
 } from "../shared/content-envelope.js";
-import { VaultListResultSchema, type VaultRequest, VaultRequestSchema } from "../shared/schemasVault.js";
+import {
+	VaultListResultSchema,
+	type VaultRequest,
+	VaultRequestSchema,
+	VaultRetractSchema,
+} from "../shared/schemasVault.js";
 import { composeSessionName } from "../shared/session-id.js";
 import { attachFakeSession, type FakeSession } from "../testing/fakeSession.js";
 import { type FederationHarness, startFederationHarness } from "../testing/federationHarness.js";
@@ -41,14 +46,27 @@ describe("federation harness: vault requests", () => {
 		const response = await caller.post(path, body);
 		return { status: response.status, json: (await response.json()) as UseAnswer & Record<string, unknown> };
 	};
-	/** Oldest vault requests first. */
-	const requestRows = async (): Promise<VaultRequest[]> =>
+	const vaultRows = async (actionType: string) =>
 		h.phone
 			.entries(await h.phone.inboxRead())
-			.filter((entry) => entry.kind === "plugin_action" && entry.pluginId === "vault")
-			.map((entry) => VaultRequestSchema.parse(entry.payload));
+			.filter(
+				(entry) =>
+					entry.kind === "plugin_action" && entry.pluginId === "vault" && entry.actionType === actionType,
+			);
+	/** Oldest vault requests first. */
+	const requestRows = async (): Promise<VaultRequest[]> =>
+		(await vaultRows("request")).map((entry) => VaultRequestSchema.parse(entry.payload));
 	const nextRequest = async (seen: number): Promise<VaultRequest> =>
 		h.waitFor(async () => (await requestRows())[seen], "the request row");
+	/** A settled request is retracted from every console. */
+	const retracted = (requestId: string): Promise<unknown> =>
+		h.waitFor(
+			async () =>
+				(await vaultRows("retract")).find(
+					(entry) => VaultRetractSchema.parse(entry.payload).requestId === requestId,
+				),
+			"the retract row",
+		);
 
 	beforeAll(async () => {
 		h = await startFederationHarness();
@@ -120,6 +138,7 @@ describe("federation harness: vault requests", () => {
 		const answered = await h.phone.value({ kind: "vault_answer", requestId: request.requestId, decision: "once" });
 		expect(answered.result).toEqual({ ok: true });
 		expect((await use).json).toEqual({ outcome: "approved", decision: "once", value: "hunter2" });
+		await retracted(request.requestId);
 		// Once grants leave no residue.
 		const again = await post(alice, "/vault/use", { entryId, operation: "ssh deploy@prod uptime", waitMs: 200 });
 		expect(again.json).toMatchObject({ outcome: "pending" });
@@ -207,7 +226,7 @@ describe("federation harness: vault requests", () => {
 		});
 		const minted = await gatewayPost("/vault/helper-token", { "x-host-token": h.set.tokens.host }, {});
 		expect(minted.status).toBe(200);
-		const { token } = (await minted.json()) as { token: string };
+		const { token, tokenId } = (await minted.json()) as { token: string; tokenId: string };
 		const askpass = async (cmdline: string, waitMs: number) =>
 			(await gatewayPost("/vault/askpass", { "x-vault-helper-token": token }, { cmdline, waitMs })).json();
 		expect((await gatewayPost("/vault/askpass", {}, { cmdline: "sudo apt install foo" })).status).toBe(401);
@@ -265,6 +284,24 @@ describe("federation harness: vault requests", () => {
 			value: "k3y",
 		});
 		expect((await requestRows()).length).toBe(seen + 2);
+		// Revoking the token ends its grants with it.
+		const listed = (await h.phone.value({ kind: "vault_grants" })).result as {
+			grants: Array<{ sessionTarget: string }>;
+		};
+		expect(listed.grants.some((grant) => grant.sessionTarget === `helper.${tokenId}`)).toBe(true);
+		expect((await h.phone.value({ kind: "vault_revoke", grantId: tokenId })).result).toEqual({ revoked: true });
+		const after = (await h.phone.value({ kind: "vault_grants" })).result as {
+			grants: Array<{ sessionTarget: string }>;
+		};
+		expect(after.grants.some((grant) => grant.sessionTarget === `helper.${tokenId}`)).toBe(false);
+		expect(
+			(await gatewayPost("/vault/askpass", { "x-vault-helper-token": token }, { cmdline: "ssh deploy@prod" }))
+				.status,
+		).toBe(404);
+		const revived = await gatewayPost("/vault/helper-token", { "x-host-token": h.set.tokens.host }, {});
+		const fresh = ((await revived.json()) as { token: string }).token;
+		const askpassFresh = async (cmdline: string, waitMs: number) =>
+			(await gatewayPost("/vault/askpass", { "x-vault-helper-token": fresh }, { cmdline, waitMs })).json();
 
 		// Duplicate titles require typed input.
 		const shadow = attachFakeSession(h.gateway, {
@@ -276,7 +313,7 @@ describe("federation harness: vault requests", () => {
 		await shadow.ready();
 		const planted = await post(shadow, "/vault/capture", { publicTitle: "ssh deploy@prod", value: "planted" });
 		expect(planted.status).toBe(200);
-		expect(await askpass("ssh deploy@prod uptime", 200)).toMatchObject({ outcome: "pending" });
+		expect(await askpassFresh("ssh deploy@prod uptime", 200)).toMatchObject({ outcome: "pending" });
 		expect((await nextRequest(seen + 2)).kind).toBe("typed");
 	});
 
@@ -320,6 +357,7 @@ describe("federation harness: vault requests", () => {
 		const second = await nextRequest(seen + 1);
 		typed("fr0m-tty");
 		expect(await raced).toEqual({ kind: "value", value: "fr0m-tty", from: "tty" });
+		await retracted(second.requestId);
 		// The withdrawn request refuses the phone's late answer.
 		const late = await h.phone.value({
 			kind: "vault_answer",

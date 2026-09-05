@@ -10,6 +10,7 @@ function bench(options: { deliverable?: boolean } = {}) {
 	const ambient = fakeAmbient({ drive: "manual", now: () => 1_000_000 });
 	const delivered: VaultRequest[] = [];
 	const approved: Array<{ requestId: string; decision: string }> = [];
+	const settled: string[] = [];
 	const requests = createVaultRequests({
 		ambient,
 		deliver: (request) => {
@@ -19,8 +20,9 @@ function bench(options: { deliverable?: boolean } = {}) {
 		},
 		openTyped: (value, requestId) => (value.ciphertext === `typed:${requestId}` ? "hunter2" : null),
 		onApproved: (request, decision) => approved.push({ requestId: request.requestId, decision }),
+		onSettled: (request) => settled.push(request.requestId),
 	});
-	return { ambient, requests, delivered, approved };
+	return { ambient, requests, delivered, approved, settled };
 }
 
 describe("vault requests", () => {
@@ -49,7 +51,7 @@ describe("vault requests", () => {
 	});
 
 	it("a deny and the deadline both refuse, and an undeliverable row never opens", async () => {
-		const { ambient, requests, delivered } = bench();
+		const { ambient, requests, delivered, settled } = bench();
 		const denied = requests.open({
 			kind: "entry",
 			entryId: "deploy",
@@ -65,6 +67,10 @@ describe("vault requests", () => {
 		await expect(expired.answer).resolves.toEqual({ kind: "refused" });
 		expect(requests.collect(expired.request.requestId, "helper.h1")).toBeUndefined();
 		expect(delivered).toHaveLength(2);
+		// Each settlement retracts once, whichever road it took.
+		expect(settled).toEqual([denied.request.requestId, expired.request.requestId]);
+		requests.answer(denied.request.requestId, "deny");
+		expect(settled).toHaveLength(2);
 
 		const undeliverable = bench({ deliverable: false }).requests.open({
 			kind: "entry",
@@ -130,7 +136,7 @@ describe("vault requests", () => {
 	});
 
 	it("only the opener withdraws, an answer already given stands, and a late answer grants nothing", async () => {
-		const { requests, approved } = bench();
+		const { requests, approved, settled } = bench();
 		const open = (sessionTarget: string) => {
 			const opened = requests.open({
 				kind: "entry",
@@ -145,6 +151,7 @@ describe("vault requests", () => {
 		expect(requests.withdraw(withdrawn.request.requestId, "host.alice")).toBe(false);
 		expect(requests.withdraw(withdrawn.request.requestId, "helper.h1")).toBe(true);
 		await expect(withdrawn.answer).resolves.toEqual({ kind: "refused" });
+		expect(settled).toEqual([withdrawn.request.requestId]);
 		expect(requests.answer(withdrawn.request.requestId, "session")).toMatchObject({ ok: false });
 		expect(approved).toEqual([]);
 
