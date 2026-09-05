@@ -385,7 +385,7 @@ the Router sweep holds them under the fence. The bridge checks admission on ever
 evicts a revoked signer through the one drop path, and names its frame refusals in
 `wire-vocabulary.ts`.
 
-## Phase 2 - Gateway: vault client, decisions, request road
+## Phase 2 - Gateway: vault client, decisions, request road ✅
 
 - `src/gateway/compose/composeVault.ts`: the stage that builds the client, the decisions, and the
   request road, after the stores and the Router client. Deps typed on `GatewayDeps`; every clock
@@ -399,7 +399,7 @@ evicts a revoked signer through the one drop path, and names its frame refusals 
   session, ends with the session or the settings cap.
 - `src/gateway/vault/requests.ts`: a request (id, operation text, shape, entry id or typed,
   session, 9-minute deadline on `ambient.setTimer`) delivered as a `plugin_action` row
-  `vault:request` through `deliverToOwner`, durable in `OwnerRowOutbox`. The `vault_answer` value
+  `vault:request` through `deliverToOwner`, volatile in `OwnerRowOutbox`. The `vault_answer` value
   op reaches `consoleHandler.ts` through the console dispatcher in `composeRouterFrames.ts` and
   resolves the request. Deny and timeout answer the same refusal.
 - Harness scenarios under both timer drives: request then answer once; answer 30
@@ -464,7 +464,8 @@ still holds, and an answer to a request the gateway no longer holds reads as exp
 
 ## Phase 6 - Docs, residue, audit
 
-- `docs/vault.md`; AGENTS.md map entries; `docs/console.md` OwnerOps; `docs/environment.md`.
+- `docs/vault.md` (written with Phase 2; each phase extends it); AGENTS.md map entries;
+  `docs/console.md` OwnerOps; `docs/environment.md`.
 - Residue tests: vault door, `DATA_DIR_ENTRIES`, AAD vectors, no tool answers a value. The
   ambient fence covers the new directories by construction.
 - Luna audit of each phase before its push.
@@ -492,3 +493,21 @@ Collected after Phase 1. Nothing here is fixed; each names the mechanism.
   ends. Small, and nothing else revisits a Domain that left the registry.
 - `TerminalView.kt` still carries the multi-line comment blocks the crunch never reached, since
   no plan touched it.
+
+Collected after Phase 2.
+
+- A helper's grants key on `helper.<tokenId>`, and nothing ends that session: `sessionEnded` runs
+  for swept teams only, so a helper window lives its full 30 minutes after the token is revoked.
+  `helperTokens.revoke` would have to drop the grants under its target too.
+- `DurableStore.saveChecked` throws `DurableStoreInstalledError` after the snapshot is at its final
+  name. Every checked writer must know that one exception means committed: `session-store.ts` marks
+  the revision unconfirmed, the vault stores treat it as success. A `saveChecked` that returned
+  `installed | durable` instead of throwing would end the per-writer catch.
+- `OwnerOpIntake` records a value op's nonce after the handler commits, so a `vault_answer` reposted
+  across a crash settles nothing and answers `request expired`. Same mechanism as the Phase 1 entry.
+- The console sites that raced a promise against a bound timer each rebuilt the race by hand and
+  each skipped the timer clear on rejection; `withinMs` replaced three of them. Two remain on the
+  MCP side, in `localAgentHandlers.ts` and `refResolve.ts`, where no ambient is threaded.
+- A prose Luna crunching comments removed meaning four times this lap ("Null means owner timeout"
+  lost the owner; a plan status line vanished). The snapshot guard catches deletions, not a
+  sentence shortened past its fact.
