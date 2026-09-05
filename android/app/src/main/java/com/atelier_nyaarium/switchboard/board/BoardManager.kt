@@ -5,6 +5,9 @@ import androidx.compose.runtime.mutableStateListOf
 import com.atelier_nyaarium.switchboard.Attachments
 import com.atelier_nyaarium.switchboard.ClearsOnReprovision
 import com.atelier_nyaarium.switchboard.DebugLog
+import com.atelier_nyaarium.switchboard.VersionedFold
+import com.atelier_nyaarium.switchboard.VersionedList
+import com.atelier_nyaarium.switchboard.foldVersionedList
 import com.atelier_nyaarium.switchboard.localFieldOrSelf
 import com.atelier_nyaarium.switchboard.proto.BoardEntry
 import com.atelier_nyaarium.switchboard.proto.BoardStoredEntry
@@ -139,15 +142,19 @@ class BoardManager(private val store: BoardStore) : ClearsOnReprovision {
 		return opId
 	}
 
+	// The board is always a full list to the shared fold.
+	private fun landed(revision: Long, entries: List<BoardStoredEntry>): VersionedFold<BoardStoredEntry> =
+		foldVersionedList(blob.routerRevision, blob.stored, VersionedList(revision, 0L, entries), { it.clear.id }, { it.clear.version })
+
 	// Settle and retire the pending write atomically.
 	fun settleWrite(opId: String, revision: Long, entries: List<BoardStoredEntry>, at: Long = System.currentTimeMillis()) {
 		val next = renderIncoming(entries)
 		synchronized(stateLock) {
-			val lands = revision >= blob.routerRevision
-			val landed = if (lands) {
+			val fold = landed(revision, entries)
+			val landed = if (fold is VersionedFold.Apply) {
 				blob.copy(
-					routerRevision = revision,
-					stored = entries,
+					routerRevision = fold.revision,
+					stored = fold.entries,
 					text = next?.rendered?.cache ?: blob.text,
 					lastRouterSyncAt = at,
 				)
@@ -155,7 +162,7 @@ class BoardManager(private val store: BoardStore) : ClearsOnReprovision {
 				blob
 			}
 			persist(landed.copy(pending = landed.pending.filterNot { it.opId == opId }))
-			if (lands) memo = next
+			if (fold is VersionedFold.Apply) memo = next
 		}
 	}
 
@@ -172,12 +179,11 @@ class BoardManager(private val store: BoardStore) : ClearsOnReprovision {
 	fun applyRouterBoard(revision: Long, entries: List<BoardStoredEntry>, at: Long = System.currentTimeMillis()): Boolean {
 		val next = renderIncoming(entries)
 		synchronized(stateLock) {
-			// Ignore snapshots older than the current Router revision.
-			if (revision < blob.routerRevision) return false
+			val fold = landed(revision, entries) as? VersionedFold.Apply ?: return false
 			persist(
 				blob.copy(
-					routerRevision = revision,
-					stored = entries,
+					routerRevision = fold.revision,
+					stored = fold.entries,
 					text = next?.rendered?.cache ?: blob.text,
 					lastRouterSyncAt = at,
 				),

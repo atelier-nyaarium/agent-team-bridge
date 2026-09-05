@@ -1,0 +1,77 @@
+{
+	"_comment": "Cross-runtime vectors for the Router-held list fold. Read by src/__tests__/versioned-list.test.ts and android/.../VersionedListVectorsTest.kt, so the Kotlin twin cannot drift from src/shared/versioned-list.ts. Entries are {id, revision}; expected.entries lists the held result in order.",
+	"cases": [
+		{
+			"name": "a full list replaces whatever was held, in its own order",
+			"held": { "revision": 2, "entries": [{ "id": "a", "revision": 1 }, { "id": "b", "revision": 2 }] },
+			"incoming": {
+				"revision": 5,
+				"since": 0,
+				"entries": [{ "id": "c", "revision": 5 }, { "id": "a", "revision": 1 }]
+			},
+			"expected": {
+				"kind": "apply",
+				"revision": 5,
+				"entries": [{ "id": "c", "revision": 5 }, { "id": "a", "revision": 1 }]
+			}
+		},
+		{
+			"name": "a delta lands in held order and appends what is new",
+			"held": { "revision": 2, "entries": [{ "id": "a", "revision": 1 }, { "id": "b", "revision": 2 }] },
+			"incoming": {
+				"revision": 4,
+				"since": 2,
+				"entries": [{ "id": "c", "revision": 4 }, { "id": "a", "revision": 3 }]
+			},
+			"expected": {
+				"kind": "apply",
+				"revision": 4,
+				"entries": [{ "id": "a", "revision": 3 }, { "id": "b", "revision": 2 }, { "id": "c", "revision": 4 }]
+			}
+		},
+		{
+			"name": "an entry never moves backward, even inside an accepted delta",
+			"held": { "revision": 3, "entries": [{ "id": "a", "revision": 3 }] },
+			"incoming": {
+				"revision": 4,
+				"since": 3,
+				"entries": [{ "id": "a", "revision": 2 }, { "id": "b", "revision": 4 }]
+			},
+			"expected": {
+				"kind": "apply",
+				"revision": 4,
+				"entries": [{ "id": "a", "revision": 3 }, { "id": "b", "revision": 4 }]
+			}
+		},
+		{
+			"name": "an empty delta at the held revision only stamps the revision",
+			"held": { "revision": 3, "entries": [{ "id": "a", "revision": 3 }] },
+			"incoming": { "revision": 3, "since": 3, "entries": [] },
+			"expected": { "kind": "apply", "revision": 3, "entries": [{ "id": "a", "revision": 3 }] }
+		},
+		{
+			"name": "a delta from a Router behind the held revision asks for a full list",
+			"held": { "revision": 9, "entries": [{ "id": "a", "revision": 9 }] },
+			"incoming": { "revision": 3, "since": 9, "entries": [] },
+			"expected": { "kind": "restart" }
+		},
+		{
+			"name": "a delta resting on another revision than the held one asks for a full list",
+			"held": { "revision": 3, "entries": [{ "id": "a", "revision": 3 }] },
+			"incoming": { "revision": 5, "since": 4, "entries": [{ "id": "b", "revision": 5 }] },
+			"expected": { "kind": "restart" }
+		},
+		{
+			"name": "a full list older than the held revision is a late answer",
+			"held": { "revision": 5, "entries": [{ "id": "a", "revision": 5 }] },
+			"incoming": { "revision": 4, "since": 0, "entries": [{ "id": "a", "revision": 4 }] },
+			"expected": { "kind": "ignore" }
+		},
+		{
+			"name": "nothing held accepts any full list, a Router reset included",
+			"held": { "revision": 0, "entries": [] },
+			"incoming": { "revision": 3, "since": 0, "entries": [{ "id": "a", "revision": 1 }] },
+			"expected": { "kind": "apply", "revision": 3, "entries": [{ "id": "a", "revision": 1 }] }
+		}
+	]
+}

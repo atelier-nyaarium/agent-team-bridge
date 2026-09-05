@@ -56,6 +56,12 @@ class ChatRepository(
 
 	val vault = com.atelier_nyaarium.switchboard.vault.VaultManager(store)
 
+	internal val approvalGate = com.atelier_nyaarium.switchboard.vault.ApprovalGate(
+		policy = { store.vaultUnlock },
+		persist = { store.vaultUnlock = it },
+		authenticate = { activity -> requireOwnerPresent(true, activity) },
+	)
+
 	@Volatile internal var homeGatewayId: String = store.loadGatewayId()
 	@Volatile internal var gapFloor: Long = 0L
 	@Volatile internal var gapDropped: Long = 0L

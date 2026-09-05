@@ -18,6 +18,7 @@
 		"session-id",
 		"sync-cursor",
 		"transport-request",
+		"versioned-list",
 		"xdomain-link"
 	]
 }

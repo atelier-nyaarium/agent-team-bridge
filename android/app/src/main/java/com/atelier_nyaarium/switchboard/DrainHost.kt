@@ -37,7 +37,8 @@ internal interface DrainHost {
 	fun decodeAttachments(files: List<ChannelFile>?): List<MessageFile>
 	fun fetchPendingAttachments()
 	suspend fun dispatchInboxRows(rows: List<InboxRow>)
-	suspend fun applyPlane(name: String, payload: JsonElement?): Boolean
+	/** True acknowledges `version`. */
+	suspend fun applyPlane(name: String, version: Long, payload: JsonElement?): Boolean
 
 	suspend fun poll(known: Map<String, Long>): TickOutcome
 	/** Planes newer than the held versions. */
@@ -71,14 +72,14 @@ internal class ChatRepositoryDrainHost(private val repo: ChatRepository) : Drain
 	override fun decodeAttachments(files: List<ChannelFile>?) = Attachments.decode(files)
 	override fun fetchPendingAttachments() { repo.attachments.fetchPendingAttachments() }
 	override suspend fun dispatchInboxRows(rows: List<InboxRow>) { repo.dispatchInboxRows(rows) }
-	override suspend fun applyPlane(name: String, payload: JsonElement?) = repo.applyPlane(name, payload)
+	override suspend fun applyPlane(name: String, version: Long, payload: JsonElement?) = repo.applyPlane(name, version, payload)
 
 	override suspend fun poll(known: Map<String, Long>) = drainTick(
 		repo.client(),
 		repo.transportCoordinator,
 		known,
 		onRows = { dispatchInboxRows(it) },
-		onPlane = { name, _, payload -> applyPlane(name, payload) },
+		onPlane = { name, version, payload -> applyPlane(name, version, payload) },
 	)
 
 	override suspend fun readPlanes(held: JsonObject) = repo.client().planesRead(held)?.planes

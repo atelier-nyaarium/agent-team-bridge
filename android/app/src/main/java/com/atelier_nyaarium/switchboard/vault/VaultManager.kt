@@ -4,6 +4,9 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import com.atelier_nyaarium.switchboard.ClearsOnReprovision
 import com.atelier_nyaarium.switchboard.DebugLog
+import com.atelier_nyaarium.switchboard.VersionedFold
+import com.atelier_nyaarium.switchboard.VersionedList
+import com.atelier_nyaarium.switchboard.foldVersionedList
 import com.atelier_nyaarium.switchboard.crypto.VAULT_GATEWAYS_KIND
 import com.atelier_nyaarium.switchboard.crypto.VAULT_PRIVATE_DESCRIPTION_KIND
 import com.atelier_nyaarium.switchboard.crypto.VAULT_PRIVATE_TITLE_KIND
@@ -78,28 +81,29 @@ class VaultManager(private val store: VaultStore) : ClearsOnReprovision {
 
 	val routerRevision: Long get() = snapshot().revision
 
-	/**
-	 * A full list replaces and a delta merges. A delta from a Router below the held revision asks for a
-	 * full list next; a full list below it is a late answer and is dropped.
-	 */
+	/** The shared fold decides; a restart asks for a full list next. */
 	fun applyList(result: VaultListResult, at: Long = System.currentTimeMillis(), generation: Long = this.generation): Boolean {
 		synchronized(stateLock) {
 			if (generation != this.generation) return false
 			val current = blob
-			if (result.revision < current.revision) {
-				if (result.since != 0L) persist(current.copy(revision = 0L))
-				return false
-			}
-			val base = if (result.since == 0L) emptyMap() else current.stored.associateBy { it.clear.id }
-			val merged = base + result.entries.associateBy { it.clear.id }
-			persist(
-				current.copy(
-					revision = result.revision,
-					stored = merged.values.sortedBy { it.clear.id },
-					lastRouterSyncAt = at,
-				),
+			val fold = foldVersionedList(
+				current.revision,
+				current.stored,
+				VersionedList(result.revision, result.since, result.entries),
+				{ it.clear.id },
+				{ it.clear.revision },
 			)
-			return true
+			return when (fold) {
+				is VersionedFold.Apply -> {
+					persist(current.copy(revision = fold.revision, stored = fold.entries, lastRouterSyncAt = at))
+					true
+				}
+				VersionedFold.Restart -> {
+					persist(current.copy(revision = 0L))
+					false
+				}
+				VersionedFold.Ignore -> false
+			}
 		}
 	}
 
@@ -110,7 +114,7 @@ class VaultManager(private val store: VaultStore) : ClearsOnReprovision {
 			val current = blob
 			val held = current.stored.firstOrNull { it.clear.id == entry.clear.id }
 			if (held != null && held.clear.revision >= entry.clear.revision) return
-			val stored = (current.stored.associateBy { it.clear.id } + (entry.clear.id to entry)).values.sortedBy { it.clear.id }
+			val stored = (current.stored.associateBy { it.clear.id } + (entry.clear.id to entry)).values.toList()
 			val next = if (revision == current.revision + 1) revision else current.revision
 			persist(current.copy(revision = next, stored = stored, lastRouterSyncAt = at))
 		}

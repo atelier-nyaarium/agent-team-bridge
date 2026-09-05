@@ -74,7 +74,6 @@ internal fun PluginsSettings(plugins: PluginManager, repo: ChatRepository) {
 				onCheckedChange = { on ->
 					status = plugins.setEnabled(p.id, on) ?: ""
 					refresh++
-					if (!on && p.id == "vault") repo.vault.clearRequests()
 					// Report changes for the next session.
 					repo.command { reportEnabledPlugins() }
 				},
@@ -435,7 +434,7 @@ internal fun SecuritySettings(state: ChatState, repo: ChatRepository, onToggleBi
 	)
 	HorizontalDivider()
 	Text("Vault approvals", style = MaterialTheme.typography.titleMedium)
-	var vaultUnlock by remember { mutableStateOf(repo.store.vaultUnlock) }
+	var vaultUnlock by remember { mutableStateOf(repo.approvalGate.policy()) }
 	val choices = listOf(
 		com.atelier_nyaarium.switchboard.vault.VAULT_UNLOCK_OFF to "Off",
 		com.atelier_nyaarium.switchboard.vault.VAULT_UNLOCK_EVERY to "Every approval",
@@ -444,14 +443,7 @@ internal fun SecuritySettings(state: ChatState, repo: ChatRepository, onToggleBi
 	for ((value, label) in choices) {
 		Row(
 			Modifier.fillMaxWidth().hapticClickable {
-				// Loosening the gate asks for the owner first.
-				scope.launch {
-					if (value != vaultUnlock && (value == com.atelier_nyaarium.switchboard.vault.VAULT_UNLOCK_EVERY ||
-							requireOwnerPresent(true, activity))) {
-						repo.store.vaultUnlock = value
-						vaultUnlock = value
-					}
-				}
+				scope.launch { if (repo.approvalGate.changePolicy(value, activity)) vaultUnlock = value }
 			},
 			verticalAlignment = Alignment.CenterVertically,
 		) {

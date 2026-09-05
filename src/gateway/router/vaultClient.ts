@@ -19,6 +19,7 @@ import {
 	type VaultStoredEntry,
 	VaultWriteResultSchema,
 } from "../../shared/schemasVault.js";
+import { foldVersionedList } from "../../shared/versioned-list.js";
 import type { ContentKeyStore } from "../federation/contentKeyStore.js";
 
 export interface VaultEntryView {
@@ -86,7 +87,7 @@ export function createVaultClient(deps: VaultClientDeps) {
 		return opened.kind === "ok" ? opened.plaintext.toString("utf8") : null;
 	};
 
-	/** Deltas merge; full or lower revisions replace held state. */
+	/** The shared fold decides; a restart lists from zero. */
 	async function refresh(): Promise<VaultRefresh> {
 		const answer = await deps.call("vault_read", held ? { sinceRevision: held.revision } : {});
 		if (answer.error) return { kind: "unavailable", error: answer.error };
@@ -94,14 +95,18 @@ export function createVaultClient(deps: VaultClientDeps) {
 			return { kind: "unavailable", error: "vault durability is uncertain" };
 		const parsed = VaultListResultSchema.safeParse(answer.result);
 		if (!parsed.success) return { kind: "unavailable", error: "malformed vault_read answer" };
-		if (held && parsed.data.revision < held.revision) {
+		const fold = foldVersionedList(
+			{ revision: held?.revision ?? 0, entries: [...(held?.entries.values() ?? [])] },
+			parsed.data,
+			{ id: (entry) => entry.clear.id, revision: (entry) => entry.clear.revision },
+		);
+		if (fold.kind === "restart") {
 			held = null;
 			return refresh();
 		}
-		const entries = held && parsed.data.since !== 0 ? held.entries : new Map<string, VaultStoredEntry>();
-		for (const entry of parsed.data.entries) entries.set(entry.clear.id, entry);
-		held = { revision: parsed.data.revision, entries };
-		return { kind: "ok", revision: parsed.data.revision };
+		if (fold.kind === "ignore") return { kind: "ok", revision: held?.revision ?? 0 };
+		held = { revision: fold.revision, entries: new Map(fold.entries.map((entry) => [entry.clear.id, entry])) };
+		return { kind: "ok", revision: fold.revision };
 	}
 
 	const live = (): VaultStoredEntry[] =>

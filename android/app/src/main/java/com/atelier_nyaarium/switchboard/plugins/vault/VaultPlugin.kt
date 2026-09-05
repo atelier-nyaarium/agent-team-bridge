@@ -22,5 +22,7 @@ class VaultPlugin : PluginEntry {
 		})
 		host.threadForgetHandlers.claim("vault:forget", ThreadForgetHandler { _, team -> repo.vault.forgetTeam(team) })
 		host.accountWipeHandlers.claim("vault:wipe", AccountWipeHandler { _ -> repo.vault.wipe() })
+		// Off leaves nothing to answer.
+		host.onRetract { id -> if (id == "vault") repo.vault.clearRequests() }
 	}
 }

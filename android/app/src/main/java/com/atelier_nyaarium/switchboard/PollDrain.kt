@@ -203,14 +203,14 @@ internal class PollDrain(private val host: DrainHost, private val presence: Pres
 			if (!newer) return@withDrainMutex
 			host.readPlanes(knownPlanesJson())?.forEach { plane ->
 				if (!mayApplyPlane(plane.name, plane.version)) return@forEach
-				if (host.applyPlane(plane.name, plane.payload)) notePlane(plane.name, plane.version)
+				if (host.applyPlane(plane.name, plane.version, plane.payload)) notePlane(plane.name, plane.version)
 			}
 		}
 	}
 
 	internal suspend fun applyPlane(name: String, version: Long, payload: JsonElement?) {
 		withDrainMutex {
-			if (mayApplyPlane(name, version) && host.applyPlane(name, payload)) notePlane(name, version)
+			if (mayApplyPlane(name, version) && host.applyPlane(name, version, payload)) notePlane(name, version)
 		}
 	}
 

@@ -98,7 +98,8 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
 - `android/.../RendererPoolBindings.kt` / `AppOverlays.kt` / `LinkMenu.kt` - WebView pool, overlays, and link actions
 - `android/.../SettingsSections.kt` / `SettingsSystem.kt` / `SettingsVoice.kt` - settings leaf screens
 - `android/.../MainTabsScreen.kt` / `SessionsHeaders.kt` / `SessionCard.kt` / `SessionCardPreview.kt` / `SessionsEmptyState.kt` - sessions tab shell, cards, rules, and empty-state machine
-- `android/.../vault/` - `VaultSealing.kt` / `VaultManager.kt` / `VaultRouterWriter.kt` / `VaultScreen.kt` / `VaultEntryDialog.kt` / `VaultRequestSheet.kt` - the sealing twin, the held entry set with pending requests, the owner-op writer, the tab, the editor, the request sheet
+- `android/.../vault/` - `VaultSealing.kt` / `VaultManager.kt` / `VaultRouterWriter.kt` / `VaultDraft.kt` / `ApprovalGate.kt` / `VaultScreen.kt` / `VaultEntryDialog.kt` / `VaultRequestSheet.kt` - the sealing door, the held entry set with pending requests, the owner-op writer, the draft-to-sealed rule, the one owner-presence gate, the tab, the editor, the request sheet
+- `android/.../crypto/ContentSealing.kt` - the one sealing door the board and the vault subclass; only the AAD builder differs
 - `android/.../plugins/vault/VaultPlugin.kt` - claims `vault:request`, forget, and wipe
 - `android/.../board/` - board reducers and durable `BoardManager`
 - `android/.../board/BoardSealing.kt` / `BoardRender.kt` / `BoardIntent.kt` / `BoardOptimistic.kt` / `BoardRouterWriter.kt` - board text sealing, render with cached fallback, edits held as intent, optimistic apply, and the CAS drain
@@ -149,6 +150,7 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
 - `src/federation-server/migration/` - leases, serve gate, and cursor translation
 - `src/shared/board-authority.ts` / `board-cascade.ts` / `board-structure.ts` / `board-observations.ts` - pure board rules shared by the gateway and the Router
 - `src/shared/share-rules.ts` / `presence-projection.ts` / `presence-identity.ts` / `read-anchor-rules.ts` / `capability-fold.ts` - pure state rules shared by the gateway and the Router
+- `src/shared/versioned-list.ts` - the fold every Router-held list consumer applies (a full list replaces, a delta merges, a stale answer restarts or is ignored); `android/.../VersionedList.kt` is the twin, pinned by `tests/fixtures/versioned-list/vectors.json`
   - **A mailbox epoch is a random tag, never a counter:** `mintEpoch` draws it. Compare epochs for
     EQUALITY only. Sequence orders rows within an epoch. Across epochs, the later report wins. The
     receiver stamps `at`; it decides cross-epoch merges. `ReadAnchor.kt` is the phone twin and

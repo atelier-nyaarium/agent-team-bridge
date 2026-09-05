@@ -181,4 +181,7 @@ class PluginHost internal constructor(
 	 * (matching [attachmentOpeners]' first-claim-wins). No claimant, or all null -> the plain chip. */
 	val attachmentChipDecorators: PluginRegistry<AttachmentChipDecorator> =
 		runtime.createRegistry("attachment-chip-decorators")
+
+	/** Hears every retract; a subscription made while registering drops with its own plugin. */
+	fun onRetract(callback: (retractedId: String) -> Unit) = runtime.lifecycle.onRetract(callback)
 }

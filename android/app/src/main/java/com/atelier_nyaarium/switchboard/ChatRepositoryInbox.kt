@@ -27,15 +27,17 @@ internal suspend fun ChatRepository.reportConsumerCapabilities() {
 	client().postOwnerOp(signed)
 }
 
-internal suspend fun ChatRepository.applyPlane(name: String, payload: JsonElement?): Boolean {
-	// Board and vault pushes carry revisions only.
+/** True acknowledges the version; a revision plane is acknowledged only once the list has landed. */
+internal suspend fun ChatRepository.applyPlane(name: String, version: Long, payload: JsonElement?): Boolean {
 	if (name == "taskBoard") {
+		if (board.routerRevision >= version) return true
 		boardOps.refreshBoard()
-		return true
+		return false
 	}
 	if (name == "vault") {
+		if (vault.routerRevision >= version) return true
 		vaultOps.refresh()
-		return true
+		return false
 	}
 	if (name != "presence" || payload == null) return false
 	val projection = runCatching {

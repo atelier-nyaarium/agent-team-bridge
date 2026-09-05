@@ -1,34 +1,27 @@
 package com.atelier_nyaarium.switchboard
 
 import androidx.fragment.app.FragmentActivity
-import com.atelier_nyaarium.switchboard.crypto.VAULT_GATEWAYS_KIND
-import com.atelier_nyaarium.switchboard.crypto.VAULT_PRIVATE_DESCRIPTION_KIND
-import com.atelier_nyaarium.switchboard.crypto.VAULT_PRIVATE_TITLE_KIND
-import com.atelier_nyaarium.switchboard.crypto.VAULT_PUBLIC_DESCRIPTION_KIND
-import com.atelier_nyaarium.switchboard.crypto.VAULT_PUBLIC_TITLE_KIND
 import com.atelier_nyaarium.switchboard.crypto.VAULT_TYPED_KIND
-import com.atelier_nyaarium.switchboard.crypto.VAULT_VALUE_KIND
 import com.atelier_nyaarium.switchboard.proto.ConsoleOp
-import com.atelier_nyaarium.switchboard.proto.ContentEnvelope
 import com.atelier_nyaarium.switchboard.proto.ConsoleVaultAnswerResult
 import com.atelier_nyaarium.switchboard.proto.ConsoleVaultGrantsResult
 import com.atelier_nyaarium.switchboard.proto.ConsoleVaultRevokeResult
 import com.atelier_nyaarium.switchboard.proto.Protocol
-import com.atelier_nyaarium.switchboard.proto.VaultEntrySealed
 import com.atelier_nyaarium.switchboard.proto.VaultPut
 import com.atelier_nyaarium.switchboard.proto.VaultRequest
 import com.atelier_nyaarium.switchboard.proto.VaultStoredEntry
+import com.atelier_nyaarium.switchboard.vault.ApprovalGate
 import com.atelier_nyaarium.switchboard.vault.VAULT_DECISION_DENY
 import com.atelier_nyaarium.switchboard.vault.VAULT_DECISION_SESSION
 import com.atelier_nyaarium.switchboard.vault.VAULT_DECISION_WINDOW
-import com.atelier_nyaarium.switchboard.vault.VAULT_UNLOCK_EVERY
-import com.atelier_nyaarium.switchboard.vault.VAULT_UNLOCK_WINDOW
-import com.atelier_nyaarium.switchboard.vault.VAULT_UNLOCK_WINDOW_MS
+import com.atelier_nyaarium.switchboard.vault.VaultDraft
 import com.atelier_nyaarium.switchboard.vault.VaultEntryView
 import com.atelier_nyaarium.switchboard.vault.VaultManager
 import com.atelier_nyaarium.switchboard.vault.VaultPendingRequest
 import com.atelier_nyaarium.switchboard.vault.VaultRouterWriter
+import com.atelier_nyaarium.switchboard.vault.VaultSaveOutcome
 import com.atelier_nyaarium.switchboard.vault.VaultSealing
+import com.atelier_nyaarium.switchboard.vault.sealDraft
 import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
@@ -37,8 +30,6 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.serialization.json.buildJsonArray
-import kotlinx.serialization.json.add
 
 internal interface VaultOpsCollaborators {
 	val vault: VaultManager
@@ -46,30 +37,7 @@ internal interface VaultOpsCollaborators {
 	fun sealing(): VaultSealing?
 	val client: ConsoleClient?
 	fun admittedGateways(): List<String>
-	fun vaultUnlock(): String
-}
-
-/** What the editor hands over; a null value keeps the sealed one. */
-data class VaultDraft(
-	val id: String? = null,
-	val publicTitle: String = "",
-	val publicDescription: String = "",
-	val privateTitle: String = "",
-	val privateDescription: String = "",
-	val value: String? = null,
-	/** Null admits every gateway. */
-	val gateways: List<String>? = null,
-)
-
-sealed interface VaultSaveOutcome {
-	data class Applied(val id: String) : VaultSaveOutcome
-
-	/** The Router's copy moved since the editor opened. */
-	data object Conflict : VaultSaveOutcome
-
-	data class Refused(val reason: String) : VaultSaveOutcome
-
-	data object Unreachable : VaultSaveOutcome
+	val gate: ApprovalGate
 }
 
 /** Repository-side vault operations. */
@@ -80,12 +48,10 @@ internal class VaultOps(
 ) {
 	private val manager get() = collaborators.vault
 
-	@Volatile private var unlockedAt = 0L
-
 	// One list in flight, so answers land in order.
 	private val refreshMutex = Mutex()
 
-	/** A plane bump is acknowledged before the list lands, so a failed list retries here. */
+	/** A plane bump the socket pushed is not re-offered, so a failed list retries here. */
 	fun refresh() {
 		repoScope.launch {
 			for (delayMs in REFRESH_RETRY_DELAYS_MS) {
@@ -127,48 +93,13 @@ internal class VaultOps(
 		return manager.stored(id)?.let { manager.openValue(it, sealing) }
 	}
 
-	/** A field this phone cannot open stays sealed as it was when the draft leaves it blank. */
 	suspend fun save(draft: VaultDraft): VaultSaveOutcome {
 		val sealing = collaborators.sealing() ?: return VaultSaveOutcome.Unreachable
 		val existing = draft.id?.let { manager.stored(it) }
 		val opened = existing?.let { manager.view(it, sealing) }
 		val id = draft.id ?: newEntryId()
 		val generation = manager.generation
-		val seal = { text: String, kind: String, held: ContentEnvelope?, readable: Boolean ->
-			val trimmed = text.trim()
-			if (trimmed.isEmpty() && held != null && !readable) held else trimmed.takeIf { it.isNotEmpty() }?.let { sealing.seal(it, kind, id) }
-		}
-		val value = when {
-			draft.value == null -> existing?.sealed?.value
-			draft.value.isEmpty() -> null
-			else -> sealing.seal(draft.value, VAULT_VALUE_KIND, id) ?: return VaultSaveOutcome.Unreachable
-		}
-		val gateways = when {
-			draft.gateways != null -> {
-				val text = buildJsonArray { draft.gateways.forEach { add(it) } }.toString()
-				sealing.seal(text, VAULT_GATEWAYS_KIND, id) ?: return VaultSaveOutcome.Unreachable
-			}
-			opened?.gatewaysUnreadable == true -> existing?.sealed?.gateways
-			else -> null
-		}
-		val sealed = VaultEntrySealed(
-			publicTitle = seal(draft.publicTitle, VAULT_PUBLIC_TITLE_KIND, existing?.sealed?.publicTitle, opened?.publicTitle != null),
-			publicDescription = seal(
-				draft.publicDescription,
-				VAULT_PUBLIC_DESCRIPTION_KIND,
-				existing?.sealed?.publicDescription,
-				opened?.publicDescription != null,
-			),
-			privateTitle = seal(draft.privateTitle, VAULT_PRIVATE_TITLE_KIND, existing?.sealed?.privateTitle, opened?.privateTitle != null),
-			privateDescription = seal(
-				draft.privateDescription,
-				VAULT_PRIVATE_DESCRIPTION_KIND,
-				existing?.sealed?.privateDescription,
-				opened?.privateDescription != null,
-			),
-			value = value,
-			gateways = gateways,
-		)
+		val sealed = sealDraft(draft, id, existing, opened, sealing) ?: return VaultSaveOutcome.Unreachable
 		if (sealed.publicTitle == null && sealed.privateTitle == null) return VaultSaveOutcome.Refused("untitled")
 		val put = VaultPut(id = id, expectedRevision = existing?.clear?.revision ?: 0L, sealed = sealed)
 		val result = runCatchingCancellable { collaborators.writer.put(put, newOpId()) }
@@ -203,17 +134,7 @@ internal class VaultOps(
 
 	fun pendingRequest(requestId: String): VaultPendingRequest? = manager.request(requestId)
 
-	/** The gate the security setting asks for before an approval or a reveal. */
-	suspend fun ownerPresent(activity: FragmentActivity?, now: Long = System.currentTimeMillis()): Boolean {
-		val prompt = when (collaborators.vaultUnlock()) {
-			VAULT_UNLOCK_EVERY -> true
-			VAULT_UNLOCK_WINDOW -> now - unlockedAt > VAULT_UNLOCK_WINDOW_MS
-			else -> false
-		}
-		if (!requireOwnerPresent(prompt, activity)) return false
-		if (prompt) unlockedAt = now
-		return true
-	}
+	suspend fun ownerPresent(activity: FragmentActivity?): Boolean = collaborators.gate.require(activity)
 
 	/** Answers one request; a typed value seals under the request id. */
 	suspend fun answer(pending: VaultPendingRequest, decision: String, typedValue: String? = null): Boolean {

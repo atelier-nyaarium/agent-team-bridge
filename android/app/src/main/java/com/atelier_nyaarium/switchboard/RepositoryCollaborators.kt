@@ -119,7 +119,7 @@ internal class ChatRepositoryVaultCollaborators(private val repo: ChatRepository
 	override fun sealing() = repo.vaultSealing()
 	override val client: ConsoleClient? get() = repo.clientOrNull()
 	override fun admittedGateways() = repo.sessions.keyringGateways()
-	override fun vaultUnlock() = repo.store.vaultUnlock
+	override val gate: com.atelier_nyaarium.switchboard.vault.ApprovalGate get() = repo.approvalGate
 }
 
 internal class ChatRepositoryTrustCollaborators(private val repo: ChatRepository) : TrustOpsCollaborators {

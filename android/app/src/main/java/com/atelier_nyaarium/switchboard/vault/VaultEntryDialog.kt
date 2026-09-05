@@ -38,8 +38,6 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.fragment.app.FragmentActivity
 import com.atelier_nyaarium.switchboard.ChatRepository
 import com.atelier_nyaarium.switchboard.ChatState
-import com.atelier_nyaarium.switchboard.VaultDraft
-import com.atelier_nyaarium.switchboard.VaultSaveOutcome
 import com.atelier_nyaarium.switchboard.hapticClick
 import kotlinx.coroutines.launch
 

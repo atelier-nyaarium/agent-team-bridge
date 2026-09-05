@@ -47,7 +47,7 @@ class PollDrainTest {
 		override fun decodeAttachments(files: List<ChannelFile>?) = emptyList<MessageFile>()
 		override fun fetchPendingAttachments() = Unit
 		override suspend fun dispatchInboxRows(rows: List<InboxRow>) { dispatched += rows.size }
-		override suspend fun applyPlane(name: String, payload: JsonElement?): Boolean {
+		override suspend fun applyPlane(name: String, version: Long, payload: JsonElement?): Boolean {
 			drainGate.withDrainMutex { applied += name }
 			return true
 		}

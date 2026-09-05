@@ -83,27 +83,32 @@ and the delta list are in `docs/federation.md` under Owner state.
 
 `android/.../vault/` and `VaultOps.kt`. The `vault` plugin gates the tab and reports the capability.
 
-- **`VaultSealing` is the phone's only door:** it seals and opens under `vaultAadKind`, the twin of
+- **`VaultSealing` is the phone's only door:** a `ContentSealing` under `vaultAadKind`, the twin of
   the gateway client. A typed value seals under the request id.
-- `VaultManager` holds the Router's entries under one store key. A full list replaces, a delta
-  merges, tombstones stay hidden, and a delta from a Router below the held revision asks for a full
-  list next; a full list below it is a late answer and is dropped. A write's own entry lands at
-  once unless a newer one is held; the held revision advances only when nothing was skipped. A wipe
-  bumps a generation, so work begun before it lands nothing after.
-- **A save keeps every field this phone cannot open.** The gateway chips never widen a scope by
-  emptying it; only Every gateway clears it.
+- `VaultManager` holds the Router's entries under one store key and folds every list through
+  `foldVersionedList`, the rule the gateway client and the board share: a full list replaces, a
+  delta merges in held order, an entry never moves backward, a delta from a Router behind the held
+  revision restarts from zero, and a full list behind it is a late answer. A write's own entry lands
+  at once unless a newer one is held; the held revision advances only when nothing was skipped. A
+  wipe bumps a generation, so work begun before it lands nothing after.
+- **A save keeps every field this phone cannot open:** `sealDraft` is the rule, tested on its own.
+  The gateway chips never widen a scope by emptying it; only Every gateway clears it.
 - `VaultRouterWriter` posts `vault_list`, `vault_put`, and `vault_delete` as signed owner ops.
-- **The `vault` plane carries the revision:** the Router pushes it on every applied write and
-  reports it in `planes_read`. The phone answers a bump with a list after its held revision, and
-  retries twice when the list fails.
+- **A revision plane is acknowledged once its list has landed:** the Router pushes the `vault`
+  plane on every applied write and reports it in `planes_read`. The phone answers a bump with a list
+  after its held revision and acknowledges the version only when the held revision reaches it, so
+  an unacknowledged bump is offered again. A bump the socket pushed is not offered again, so the
+  refresh retries twice on its own.
 - A request reaches `VaultPlugin` as the `vault:request` action and is held with the conversation
   it landed in; that conversation's gateway segment answers it. A duplicate dispatch and a request
   past its deadline are dropped. A restart drops expired ones.
 - **One notification per pending request:** swipe denies. Once and 30 min buttons exist only while
   Vault approvals is off. Tap opens the sheet. The sheet answers with `vault_answer` through the
   gateway value op. Save as entry puts a typed value as a new entry after the answer.
-- Vault approvals, under Settings and Security: Off, Every approval, 30-minute unlock. The gate
-  runs before an approval and before a reveal. Loosening it asks for the owner first.
+- Vault approvals, under Settings and Security: Off, Every approval, 30-minute unlock.
+  `ApprovalGate` is the one gate: it runs before an entry approval, a reveal, and a save that
+  changes a stored value; a typed value never prompts. Tightening the policy is free, loosening it
+  asks the owner, and any change ends the window.
 - Grants are read per admitted gateway through `vault_grants` when the tab opens and after an
   approval. The session card shows YOLO for a whole-session grant and vault for a window. The tab
   lists them with Revoke.

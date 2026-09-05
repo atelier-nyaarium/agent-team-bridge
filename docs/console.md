@@ -151,6 +151,12 @@ no TTL.
   values cannot cross a non-inline lambda.
 - **Inbound pipeline:** handlers receive wire fields and file names, never file bytes. Subscribers
   run synchronously before persistence commit.
+- **Plane acknowledgement** (`ChatRepository.applyPlane`): a plane version is noted only when the
+  answer is true. The presence plane applies its payload; the board and vault planes carry a
+  revision and answer true only once the held revision has reached it, so a list that failed is
+  offered again.
+- **Plugin retract** (`PluginHost.onRetract`): a plugin that holds state outside the registries
+  drops it here when it goes off; the vault clears its pending requests.
 - **Row re-render** (`ThreadRenderer`): any changing row payload must enter its fingerprint. JS
   bridge state mutates in place and intentionally does not.
 - **Presence authority** (`Presence.kt`): the gateway's own presence is pushed; other machines are

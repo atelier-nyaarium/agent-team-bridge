@@ -470,7 +470,15 @@ phone cannot open, and the gateway chips never widen a scope by emptying it: onl
 clears it. A typed value saved as an entry is scoped to the gateway that asked, and the gateway
 settles a typed answer as once whatever tier the phone named. The secret fields use the password
 keyboard. Known and left: a second admitted phone keeps a request the first one answered until its
-deadline, and a phone clock ahead of the gateway drops a request early.
+deadline, and a phone clock ahead of the gateway drops a request early. The architecture pass
+folded the three list consumers (gateway client, phone vault, phone board) through one shared rule,
+`versioned-list.ts` with its Kotlin twin and vectors, and made the phone acknowledge a revision
+plane only once its list landed. `ContentSealing` is the one sealing door the board and vault
+subclass. `ApprovalGate` owns the policy, the window, and the prompt. `sealDraft` is the pure
+draft-to-sealed rule. `PluginHost.onRetract` lets the vault drop its pending requests when it goes
+off, without a settings special case. Left for a later pass: a plugin-owned request surface (pending
+items, their notification, their modal) as one registration, so a later plugin's request kind costs
+one claim instead of edits in the service, the receiver, and the activity.
 
 ## Phase 4 - Askpass helper
 
