@@ -59,6 +59,7 @@ export function composeGateway(deps: GatewayDeps): GatewayGraph {
 	const context = new FederationContext({
 		contentKeys: bootstrap.contentKeyStore,
 		initialDomainId: bootstrap.initialDomainId,
+		domainIdOnDisk: bootstrap.domainIdOnDisk,
 		buildSlice: (boot) => {
 			if (!federation) throw new Error("the federation stage is not composed yet");
 			return federation.buildSlice(boot);

@@ -95,6 +95,7 @@ export function composeSessions({ localGatewayId, ambient, stores, context }: Se
 		send: (action, params) => context.slice()?.routerClient.callInboxTool(action, params) ?? Promise.resolve(),
 		incarnation: () => context.slice()?.routerClient.incarnation() ?? null,
 		localGatewayId,
+		ambient,
 	});
 	sessionReporter.attach();
 

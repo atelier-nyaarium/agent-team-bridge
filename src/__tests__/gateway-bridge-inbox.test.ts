@@ -598,8 +598,9 @@ describe("GatewayBridge inbox", () => {
 		);
 	});
 
-	it("holds a built-in writer under the Router migration window and lets a built-in read through", async () => {
-		const { bridge } = await registered(fakeInbox());
+	it("holds every gated built-in writer under the Router migration window and lets every built-in read through", async () => {
+		const cache = { stat: () => ({ kind: "miss" }) };
+		const { bridge } = await registered(fakeInbox(), false, cache as never);
 		bridge.setMigrationReady(() => false);
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-builtin-fence-"));
 		const previousDataDir = process.env.DATA_DIR;
@@ -607,15 +608,34 @@ describe("GatewayBridge inbox", () => {
 		process.env.DATA_DIR = dir;
 		process.env.ROUTER_MIGRATION_EPOCH = "9";
 		try {
+			const writers = [
+				"inbox_append",
+				"inbox_ack",
+				"session_upsert",
+				"session_forget",
+				"blob_begin",
+				"blob_chunk",
+			];
+			for (const name of writers)
+				expect(await bridge.handleCall("c1", name, { incarnation: 1 })).toEqual({
+					outcome: "refused",
+					reason: "migrating",
+				});
 			expect(
-				await bridge.handleCall("c1", "session_upsert", {
-					sessionId: "session",
-					kind: "shell",
-					label: "x",
-					recordExists: true,
+				await bridge.handleCall("c1", "blob_fetch", {
+					opId: "op",
+					blobId: `sha256-${"0".repeat(64)}`,
 					incarnation: 1,
 				}),
-			).toEqual({ outcome: "refused", reason: "migrating" });
+			).toEqual({ outcome: "absent" });
+			expect(
+				await bridge.handleCall("c1", "blob_fetch_reply", {
+					opId: "op",
+					outcome: "absent",
+					sealed: false,
+					incarnation: 1,
+				}),
+			).toEqual({ ok: false });
 			// Settling a waiter this Router already holds writes nothing of the owner's.
 			expect(
 				await bridge.handleCall("c1", "value_result", {

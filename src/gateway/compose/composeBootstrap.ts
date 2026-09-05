@@ -25,6 +25,8 @@ export interface BootstrapStage {
 	/** The boot decision made at construction. */
 	gatewayBoot: GatewayBoot;
 	initialDomainId: string | null;
+	/** The Domain id on disk right now, after any install. */
+	domainIdOnDisk: () => string | null;
 	/** Re-reads the federation directory after an enrollment install. */
 	resolveBoot: (enrollNonce: string | null) => GatewayBoot;
 }
@@ -75,6 +77,7 @@ export function composeBootstrap(deps: GatewayDeps): BootstrapStage {
 		contentKeyStore,
 		gatewayBoot,
 		initialDomainId,
+		domainIdOnDisk: () => resolveLocalDomainId(federationDir),
 		resolveBoot,
 	};
 }

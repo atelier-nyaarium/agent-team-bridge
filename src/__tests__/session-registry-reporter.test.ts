@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { createSessionRegistryReporter } from "../gateway/router/sessionRegistryReporter.js";
+import { createSessionRegistryReporter, SESSION_REGISTRY_RETRY_MS } from "../gateway/router/sessionRegistryReporter.js";
 import { processAmbient } from "../shared/ambient.js";
 import { SessionStore } from "../shared/session-store.js";
+import { fakeAmbient } from "../testing/fakeAmbient.js";
 
 const flush = () => new Promise((resolve) => queueMicrotask(resolve));
 
@@ -14,6 +15,7 @@ describe("session registry reporter", () => {
 			send: async (action, params) => sent.push({ action, params }),
 			incarnation: () => 3,
 			localGatewayId: "gateway",
+			ambient: fakeAmbient({ drive: "manual" }),
 		});
 		reporter.attach();
 		store.mint({ spawn: "host", sessionLabel: "Work" });
@@ -32,6 +34,7 @@ describe("session registry reporter", () => {
 			send: async (action, params) => sent.push({ action, params }),
 			incarnation: () => 3,
 			localGatewayId: "gateway",
+			ambient: fakeAmbient({ drive: "manual" }),
 		});
 		reporter.attach();
 		store.mint({ spawn: "host" });
@@ -51,6 +54,7 @@ describe("session registry reporter", () => {
 			send: async (action, params) => sent.push({ action, params }),
 			incarnation: () => incarnation,
 			localGatewayId: "gateway",
+			ambient: fakeAmbient({ drive: "manual" }),
 		});
 		reporter.attach();
 		const record = store.mint({ spawn: "host" });
@@ -76,6 +80,7 @@ describe("session registry reporter", () => {
 			},
 			incarnation: () => incarnation,
 			localGatewayId: "gateway",
+			ambient: fakeAmbient({ drive: "manual" }),
 		});
 		reporter.attach();
 		incarnation = null;
@@ -102,6 +107,7 @@ describe("session registry reporter", () => {
 			},
 			incarnation: () => incarnation,
 			localGatewayId: "gateway",
+			ambient: fakeAmbient({ drive: "manual" }),
 		});
 		reporter.attach();
 		incarnation = null;
@@ -124,6 +130,7 @@ describe("session registry reporter", () => {
 			send: async (action, params) => sent.push({ action, params }),
 			incarnation: () => 3,
 			localGatewayId: "gateway",
+			ambient: fakeAmbient({ drive: "manual" }),
 		});
 		const record = store.mint({ spawn: "host" });
 		reporter.reconcile();
@@ -143,6 +150,7 @@ describe("session registry reporter", () => {
 			send: async (action, params) => sent.push({ action, params }),
 			incarnation: () => incarnation,
 			localGatewayId: "gateway",
+			ambient: fakeAmbient({ drive: "manual" }),
 		});
 		reporter.attach();
 		store.mint({ spawn: "host" });
@@ -154,5 +162,57 @@ describe("session registry reporter", () => {
 
 		expect(sent).toHaveLength(1);
 		expect(sent[0]).toMatchObject({ action: "session_upsert", params: { sessionId: "host.one", incarnation: 4 } });
+	});
+
+	it("re-sends an upsert the Router refused once the window lifts", async () => {
+		const store = new SessionStore({ ambient: processAmbient(), idGen: () => "one" });
+		const ambient = fakeAmbient({ drive: "manual" });
+		const sent: string[] = [];
+		let fenced = true;
+		const reporter = createSessionRegistryReporter({
+			sessionStore: store,
+			send: async (action) => {
+				sent.push(action);
+				return fenced ? { result: { outcome: "refused", reason: "migrating" } } : { result: { ok: true } };
+			},
+			incarnation: () => 3,
+			localGatewayId: "gateway",
+			ambient,
+		});
+		reporter.attach();
+		store.mint({ spawn: "host" });
+		await flush();
+		fenced = false;
+		await ambient.advance(SESSION_REGISTRY_RETRY_MS);
+		await ambient.advance(SESSION_REGISTRY_RETRY_MS);
+
+		expect(sent).toEqual(["session_upsert", "session_upsert"]);
+	});
+
+	it("re-sends a forget the Router refused, and not the upsert it replaced", async () => {
+		const store = new SessionStore({ ambient: processAmbient(), idGen: () => "one" });
+		const ambient = fakeAmbient({ drive: "manual" });
+		const sent: string[] = [];
+		let fenced = true;
+		const reporter = createSessionRegistryReporter({
+			sessionStore: store,
+			send: async (action) => {
+				sent.push(action);
+				return fenced ? { result: { outcome: "refused", reason: "migrating" } } : { result: { ok: true } };
+			},
+			incarnation: () => 3,
+			localGatewayId: "gateway",
+			ambient,
+		});
+		reporter.attach();
+		const record = store.mint({ spawn: "host" });
+		await flush();
+		store.forget(store.teamOf(record));
+		await flush();
+		fenced = false;
+		await ambient.advance(SESSION_REGISTRY_RETRY_MS);
+		await ambient.advance(SESSION_REGISTRY_RETRY_MS);
+
+		expect(sent).toEqual(["session_upsert", "session_forget", "session_forget"]);
 	});
 });

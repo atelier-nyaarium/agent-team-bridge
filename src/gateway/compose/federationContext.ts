@@ -14,6 +14,8 @@ export interface FederationContextDeps {
 	contentKeys: ContentKeyStore;
 	/** The Domain id read from disk, before any enrollment delivers one. */
 	initialDomainId: string | null;
+	/** The Domain id on disk right now, read again after an install. */
+	domainIdOnDisk: () => string | null;
 	buildSlice: (boot: GatewayBootstrap) => FederationSlice;
 	/** Runs once the slice is published, never before. */
 	onActivate: (slice: FederationSlice) => void;
@@ -82,11 +84,11 @@ export class FederationContext {
 		this.state = { phase: "arming", arming };
 	}
 
-	/** Drops the boot and the slice; the Domain id falls back to the on-disk stand-in, as at construction. */
+	/** Drops the boot and the slice; the Domain id falls back to what disk holds now. */
 	standalone(): void {
 		this.state = { phase: "standalone" };
 		this.activeBoot = null;
-		this.domain = this.deps.initialDomainId;
+		this.domain = this.deps.domainIdOnDisk();
 	}
 
 	/** Builds the slice first, so a failed build leaves the phase untouched. */

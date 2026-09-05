@@ -783,7 +783,7 @@ waiter, so the call held for the whole budget.
 
 ## Phase 5 - Split ✅
 
-### Slices, as shipped (`d76a9d37`, `cc54aa0a`, `7ba3cb65`, audits answered in `090a7ae1`) ✅
+### Slices, as shipped (`d76a9d37`, `cc54aa0a`, `7ba3cb65`; audits answered in `090a7ae1`, `86a08de6`, `63d3d741`) ✅
 
 **Routes and the HTTP router:** `routes.ts` is a 266-line composer over twelve modules under
 `src/gateway/routes/` (addressing, the caller guards, the relay, status, capabilities, presence,
@@ -832,7 +832,9 @@ uncatalogued name is a construction error. Both fences, the intake's and the bri
 class but `read`. The two hand lists the catalog replaced had missed `board_session_end` and
 disagreed on `value_result`, and the first class rule held only `value` while the intake held
 everything else, so `share_job_live` became `read` and the key ops `value` to give the three
-words one meaning; the six gated built-in writers now meet the same fence. The Router's construction fails closed when a catalogued kind has no handler,
+words one meaning; the six gated built-in writers now meet the same fence, and the session
+registry reporter, which fired and forgot, keeps a refused upsert or forget pending and retries it
+on a timer, so a session created or destroyed inside a window reaches the Router once it lifts. The Router's construction fails closed when a catalogued kind has no handler,
 and a gateway's share frame is authorized by the target's Domain and gateway segments, not by a
 string prefix.
 
@@ -859,8 +861,9 @@ migration extensions moved out.
 set admitted it, and the phone posts read reports to the Router), so the branch, the union
 member, the generated Kotlin class, and five console deps nothing read (`domainStatus`,
 `presence`, `intentTracker`, `crossDomainPresenceConsumer`, `linkedDomainIds`, plus
-`planeRegistry` and `readAnchors`) are gone. `FederationContext.standalone()` restores the
-on-disk Domain id the constructor seeds, so both standalone paths mint the same addresses. The
+`planeRegistry` and `readAnchors`) are gone. `FederationContext.standalone()` re-reads the
+Domain id from disk, so both standalone paths mint the same addresses and a failed re-enrollment
+install holds the id the new credentials carry, not the boot's. The
 host-op runner narrows to `never`, so an eighth `HostOp` fails `tsc`. `websocket.ts` no longer
 re-exports `wsTypes.ts`; its twenty-two importers read the source.
 
@@ -878,7 +881,8 @@ handler each split by cohesion with unchanged public surfaces.
 - A gateway frame that mutates owner state outside the fence: held by the registration class.
   The bridge fence took two rounds in one mechanism: a hand list, then a class rule that held
   `value` alone while the intake held everything but `read`. The second round gave both fences
-  the one rule; a third patch to that mechanism is a design fault.
+  the one rule; the architecture pass then replaced both hand lists with the catalog, so a
+  frame with no class, no incarnation policy, or a shadowed name cannot be registered.
 - Not held: the three long route handlers; the `board_op` frame's own schema and the 22 kinds
   with no answer schema; an answer off its schema is logged, not refused; `OwnerOp.op` typed as a
   record at the envelope.
@@ -919,6 +923,9 @@ into the app; no wire field changes. Gateway first as usual.
   and an `onActivate` that re-checks four of them hold composition order at runtime; a stage in
   the wrong place typechecks and throws on the first activation. Ports installed during assembly
   make the order a type error.
+- `leases.complete()` has no production caller, so `leases.ready()` stays false for a Domain with
+  an active lease for as long as the window holds; the migration's own completion step should
+  call it, or the lease service should read completion from the migrated store.
 - `inbox_advance` and `consumer_register` are catalogued `read` and move consumer cursors, so a
   cursor advanced inside a migration window is lost to the cut and the phone re-reads those rows.
   Decide whether cursor moves must survive the cut, then label from that.
@@ -1039,6 +1046,14 @@ into the app; no wire field changes. Gateway first as usual.
   frames that arrived beside them, and the name list written to close that gap still missed
   `board_session_end`; the owner-op twins were held by class. A fence keyed on a name list
   drifts; keyed on the registration's mutation class it cannot.
+- **Two hand sets deciding admission hide a dead lane.** The console's `report_read` case sat
+  behind `DELIVERY_OP_KINDS` and `VALUE_OP_KINDS`, in neither, unreachable on both runtimes for
+  laps, with two deps and a doc block kept alive for it. Admission derived from the schema
+  cannot strand a member; a hand set beside the schema can.
+- **A compensating write is the next audit's finding.** The first fenced-mirror fix withdrew the
+  Router record after a refused mirror; the re-audit showed the withdrawal could itself fail and
+  strand a record that admits the friend. Ordering the writes so the dangerous state is
+  unreachable beat retrying the compensation.
 - **A port callback is not bookkeeping.** One audit removed `expect(ctx.retired)` from the unlink
   test as a fake's call log; the next audit wanted it back, since `retireRevokedPeerRows` is the
   service's outbound effect on the inbox. A dep the service calls to change a peer is the peer's

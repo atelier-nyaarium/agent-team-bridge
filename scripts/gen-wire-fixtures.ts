@@ -323,6 +323,7 @@ const sessionReporter = createSessionRegistryReporter({
 	sessionStore,
 	localGatewayId: set.gateway.id,
 	incarnation: () => 1,
+	ambient: fixtureAmbient(),
 	send: async (name, params) => {
 		sessionFrames.push({ name, params });
 		return { result: { ok: true } };
