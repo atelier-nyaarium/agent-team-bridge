@@ -168,6 +168,36 @@ class VaultManagerTest {
 	}
 
 	@Test
+	fun aRepeatSoonAfterAnAnswerCountsItsAttemptAndAnOldOneDoesNot() {
+		val vault = VaultManager(FakeStore())
+		val team = "dom.gw.owner.claude"
+		vault.addRequest(team, typedRequest("r1", 600_000L), now = 1_000L)
+		assertEquals(1, vault.request("r1")!!.attempt)
+		vault.recordAnswer(vault.request("r1")!!, now = 2_000L)
+		vault.settleRequest("r1")
+
+		vault.addRequest(team, typedRequest("r2", 600_000L), now = 5_000L)
+		val second = vault.request("r2")!!
+		assertEquals(2, second.attempt)
+		assertEquals(3_000L, second.sinceAnswerMs)
+		vault.recordAnswer(second, now = 6_000L)
+		vault.settleRequest("r2")
+
+		// The count chains through the latest answer even once the first has left the window.
+		vault.addRequest(team, typedRequest("r3", 600_000L), now = 6_000L + REPEAT_WINDOW_MS)
+		assertEquals(3, vault.request("r3")!!.attempt)
+
+		// Another command, another team, or a stale answer starts over.
+		vault.addRequest(team, entryRequest("other", 600_000L), now = 7_000L)
+		assertEquals(1, vault.request("other")!!.attempt)
+		vault.addRequest("dom.gw.host.alice", typedRequest("r4", 600_000L), now = 7_000L)
+		assertEquals(1, vault.request("r4")!!.attempt)
+		vault.addRequest(team, typedRequest("r5", 600_000L), now = 7_000L + REPEAT_WINDOW_MS)
+		assertEquals(1, vault.request("r5")!!.attempt)
+		assertNull(vault.request("r5")!!.sinceAnswerMs)
+	}
+
+	@Test
 	fun aReopenKeepsEntriesAndLiveRequestsOnly() {
 		val store = FakeStore()
 		val first = VaultManager(store)

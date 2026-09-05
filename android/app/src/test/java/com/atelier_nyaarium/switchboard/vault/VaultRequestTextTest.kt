@@ -1,0 +1,56 @@
+package com.atelier_nyaarium.switchboard.vault
+
+import com.atelier_nyaarium.switchboard.ChatState
+import com.atelier_nyaarium.switchboard.proto.VaultRequest
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class VaultRequestTextTest {
+	private fun typed(operation: String, team: String = "dom.sakura.owner.claude", attempt: Int = 1, since: Long? = null) =
+		VaultPendingRequest(team, VaultRequest.Typed(1L, "r", operation, "sudo apt", "helper.abc", 10L), 0L, attempt, since)
+
+	private fun entry(team: String = "dom.hoshi.evie-bot.0713b7") =
+		VaultPendingRequest(team, VaultRequest.Entry("e1", 1L, "r", "gh auth login", "gh auth", "evie-bot.0713b7", 10L), 0L)
+
+	@Test
+	fun theRequesterIsTheMachineThenTheBoardName() {
+		val state = ChatState(labels = mapOf("dom.hoshi.evie-bot.0713b7" to "Evie Auto Shutdown"))
+		assertEquals("hoshi · Evie Auto Shutdown", requester(state, entry()))
+		assertEquals("hoshi · 0713b7", requester(ChatState(), entry()))
+		assertEquals("sakura", requester(ChatState(), typed("sudo apt upgrade")))
+	}
+
+	@Test
+	fun theTitleNamesTheEntryOrTheProgramAskingForAPassword() {
+		assertEquals("GitHub token", requestTitle(entry(), "GitHub token"))
+		assertEquals("e1", requestTitle(entry(), null))
+		assertEquals("Sudo request", requestTitle(typed("sudo apt upgrade"), null))
+		assertEquals("Sudo request", requestTitle(typed("/usr/bin/sudo -k apt upgrade"), null))
+		assertEquals("Password request", requestTitle(typed("ssh deploy@prod"), null))
+	}
+
+	@Test
+	fun theCountdownStepsIntoSecondsUnderTwoMinutesAndReadsUrgent() {
+		assertEquals(Expiry("Expires in 8 min", false), expiresIn(8 * 60_000L + 30_000L, now = 0L))
+		assertEquals(Expiry("Expires in 2 min", false), expiresIn(EXPIRY_SECONDS_BELOW_MS, now = 0L))
+		assertEquals(Expiry("Expires in 120 s", true), expiresIn(EXPIRY_SECONDS_BELOW_MS - 1, now = 0L))
+		assertEquals(Expiry("Expires in 1 s", true), expiresIn(1L, now = 0L))
+		assertEquals(Expiry("Expired", true), expiresIn(0L, now = 0L))
+		assertFalse(expiresIn(600_000L, now = 0L).urgent)
+	}
+
+	@Test
+	fun theRepeatNoticeCountsSudoTriesAndStaysQuietOnAFirstAsk() {
+		assertNull(repeatNotice(typed("sudo apt upgrade")))
+		assertNull(repeatNotice(typed("sudo apt upgrade", attempt = 2)))
+		assertEquals(
+			"Asked again 20 s after your answer. Likely wrong password. 2 of 3.",
+			repeatNotice(typed("sudo apt upgrade", attempt = 2, since = 20_400L)),
+		)
+		assertEquals("Asked again 5 s after your answer.", repeatNotice(typed("ssh deploy@prod", attempt = 2, since = 5_000L)))
+		assertTrue(repeatNotice(typed("sudo -k apt upgrade", attempt = 3, since = 1_000L))!!.endsWith("3 of 3."))
+	}
+}

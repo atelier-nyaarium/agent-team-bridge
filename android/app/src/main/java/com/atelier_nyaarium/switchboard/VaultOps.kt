@@ -153,7 +153,10 @@ internal class VaultOps(
 		}.onFailure { DebugLog.log("Vault", "answer failed: ${it.message?.take(80)}") }.getOrNull()
 		when {
 			result == null -> report("Vault: the gateway could not be reached")
-			result.ok -> manager.settleRequest(pending.requestId)
+			result.ok -> {
+				if (decision != VAULT_DECISION_DENY) manager.recordAnswer(pending)
+				manager.settleRequest(pending.requestId)
+			}
 			else -> {
 				manager.settleRequest(pending.requestId)
 				report("Vault: ${result.reason ?: "the answer was refused"}")

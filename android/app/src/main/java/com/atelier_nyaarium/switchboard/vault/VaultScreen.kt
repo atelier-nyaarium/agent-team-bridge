@@ -75,7 +75,8 @@ fun VaultScreen(
 			item(key = "sect:requests") { SectionLabel("Requests") }
 			for (request in pending) {
 				item(key = "request:${request.requestId}") {
-					RequestCard(state, request) { onOpenRequest(request.requestId) }
+					val entryTitle = request.entryId?.let { id -> views.firstOrNull { it.id == id }?.title }
+					RequestCard(state, request, entryTitle) { onOpenRequest(request.requestId) }
 				}
 			}
 		}
@@ -133,31 +134,20 @@ fun VaultScreen(
 	}
 }
 
-/** Who is asking, for a request card or the sheet. */
-internal fun requester(state: ChatState, request: VaultPendingRequest): String =
-	if (request.fromHelper) "Askpass helper" else state.label(request.team)
-
-internal fun expiresIn(deadlineAt: Long, now: Long = System.currentTimeMillis()): String {
-	val left = deadlineAt - now
-	return when {
-		left <= 0 -> "expired"
-		left < 60_000 -> "expires in under a minute"
-		else -> "expires in ${left / 60_000}m"
-	}
-}
-
 @Composable
-private fun RequestCard(state: ChatState, request: VaultPendingRequest, onClick: () -> Unit) {
+private fun RequestCard(state: ChatState, request: VaultPendingRequest, entryTitle: String?, onClick: () -> Unit) {
+	val expiry = expiresIn(request.deadlineAt)
 	Card(Modifier.fillMaxWidth().clickable(onClick = hapticClick(onClick))) {
 		Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
 			Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-				Text(requester(state, request), style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+				Text(requestTitle(request, entryTitle), style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
 				Text(
-					expiresIn(request.deadlineAt),
+					expiry.text,
 					style = MaterialTheme.typography.labelSmall,
-					color = MaterialTheme.colorScheme.onSurfaceVariant,
+					color = if (expiry.urgent) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
 				)
 			}
+			Text(requester(state, request), style = MaterialTheme.typography.bodySmall)
 			Text(
 				request.operation,
 				style = MaterialTheme.typography.bodySmall,
@@ -218,10 +208,10 @@ private fun GrantRow(
 			)
 			Text(
 				listOfNotNull(
-					if (grant.tier == VAULT_DECISION_SESSION) "Whole session" else "30 minutes",
+					if (grant.tier == VAULT_DECISION_SESSION) "This session" else "30 minutes",
 					entryTitle,
 					grant.shape,
-					grant.expiresAt?.let { expiresIn(it) },
+					grant.expiresAt?.let { expiresIn(it).text },
 				).joinToString(" - "),
 				style = MaterialTheme.typography.bodySmall,
 				color = MaterialTheme.colorScheme.onSurfaceVariant,

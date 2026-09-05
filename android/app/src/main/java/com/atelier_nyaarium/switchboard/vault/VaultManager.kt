@@ -157,13 +157,31 @@ class VaultManager(private val store: VaultStore) : ClearsOnReprovision {
 	fun openValue(entry: VaultStoredEntry, sealing: VaultSealing): String? =
 		entry.sealed.value?.let { sealing.open(it, VAULT_VALUE_KIND, entry.clear.id) }
 
-	/** A duplicate dispatch or an expired request is dropped. */
+	/** A duplicate dispatch or an expired request is dropped; a repeat inside the window counts its attempt. */
 	fun addRequest(team: String, request: VaultRequest, now: Long = System.currentTimeMillis()): Boolean {
 		synchronized(stateLock) {
 			if (request.deadlineAt <= now) return false
 			if (blob.requests.any { it.requestId == request.requestId }) return false
-			persist(blob.copy(requests = blob.requests + VaultPendingRequest(team, request, now)))
+			val recent = blob.answered.filter {
+				it.team == team && it.operation == request.operation && now - it.answeredAt <= REPEAT_WINDOW_MS
+			}
+			val pending = VaultPendingRequest(
+				team,
+				request,
+				now,
+				attempt = (recent.maxOfOrNull { it.attempt } ?: 0) + 1,
+				sinceAnswerMs = recent.minOfOrNull { now - it.answeredAt },
+			)
+			persist(blob.copy(requests = blob.requests + pending))
 			return true
+		}
+	}
+
+	/** Remembers an approval for the repeat window. */
+	fun recordAnswer(pending: VaultPendingRequest, now: Long = System.currentTimeMillis()) {
+		mutate { current ->
+			val kept = current.answered.filter { now - it.answeredAt <= REPEAT_WINDOW_MS }
+			current.copy(answered = kept + VaultAnswered(pending.team, pending.operation, now, pending.attempt))
 		}
 	}
 

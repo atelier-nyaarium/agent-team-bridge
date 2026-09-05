@@ -41,7 +41,7 @@ import com.atelier_nyaarium.switchboard.hapticClick
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-/** The brief names the operation; the owner picks how long the approval holds. */
+/** What is asked for, who asks, and the command; the owner picks how long the approval holds. */
 @Composable
 fun VaultRequestSheet(
 	repo: ChatRepository,
@@ -66,14 +66,16 @@ fun VaultRequestSheet(
 	var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
 	// The ticker also retires the request once its deadline passes.
 	LaunchedEffect(requestId) {
+		val deadlineAt = request.deadlineAt
 		while (true) {
-			delay(15_000)
+			delay(if (deadlineAt - now < EXPIRY_SECONDS_BELOW_MS) 1_000 else 15_000)
 			now = System.currentTimeMillis()
 			repo.vault.sweepRequests(now)
 		}
 	}
 	val typedRequest = request.entryId == null
 	val expired = request.deadlineAt <= now
+	val expiry = expiresIn(request.deadlineAt, now)
 
 	fun answer(decision: String) {
 		busy = true
@@ -103,33 +105,32 @@ fun VaultRequestSheet(
 		Surface(shape = RoundedCornerShape(28.dp), tonalElevation = 6.dp, modifier = Modifier.fillMaxWidth(0.95f)) {
 			Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
 				Row(verticalAlignment = Alignment.CenterVertically) {
-					Text("Vault request", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
 					Text(
-						expiresIn(request.deadlineAt, now),
+						requestTitle(request, entry?.title),
+						style = MaterialTheme.typography.titleMedium,
+						modifier = Modifier.weight(1f),
+					)
+					Text(
+						expiry.text,
 						style = MaterialTheme.typography.labelSmall,
-						color = MaterialTheme.colorScheme.onSurfaceVariant,
+						color = if (expiry.urgent) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
 					)
 				}
-				Text(
-					"${requester(state, request)} wants to run",
-					style = MaterialTheme.typography.bodyMedium,
-				)
+				Text(requester(state, request), style = MaterialTheme.typography.titleSmall)
 				Text(
 					request.operation,
 					style = MaterialTheme.typography.bodyMedium,
 					fontFamily = FontFamily.Monospace,
 				)
+				repeatNotice(request)?.let {
+					Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+				}
 				if (typedRequest) {
-					Text(
-						"No entry is titled ${request.shape}. Type the value to hand over once.",
-						style = MaterialTheme.typography.bodySmall,
-						color = MaterialTheme.colorScheme.onSurfaceVariant,
-					)
 					OutlinedTextField(
 						value = typed,
 						onValueChange = { typed = it },
 						singleLine = true,
-						label = { Text("Value") },
+						label = { Text("Password") },
 						keyboardOptions = SECRET_KEYBOARD,
 						visualTransformation = if (shown) VisualTransformation.None else PasswordVisualTransformation(),
 						trailingIcon = { TextButton(onClick = { shown = !shown }) { Text(if (shown) "Hide" else "Show") } },
@@ -137,27 +138,17 @@ fun VaultRequestSheet(
 					)
 					Row(verticalAlignment = Alignment.CenterVertically) {
 						Checkbox(checked = saveAsEntry, onCheckedChange = { saveAsEntry = it })
-						Text("Save as entry", style = MaterialTheme.typography.bodyMedium)
+						Text("Save this for next time", style = MaterialTheme.typography.bodyMedium)
 					}
 					if (saveAsEntry) {
 						OutlinedTextField(
 							value = saveTitle,
 							onValueChange = { saveTitle = it },
 							singleLine = true,
-							label = { Text("Public title") },
+							label = { Text("Title") },
 							modifier = Modifier.fillMaxWidth(),
 						)
 					}
-				} else {
-					Text(
-						"using ${entry?.title ?: request.entryId}",
-						style = MaterialTheme.typography.bodyMedium,
-					)
-					Text(
-						"30 minutes covers ${request.shape}. Whole session covers every use of this entry by that session.",
-						style = MaterialTheme.typography.bodySmall,
-						color = MaterialTheme.colorScheme.onSurfaceVariant,
-					)
 				}
 				FlowRow(
 					horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -168,12 +159,12 @@ fun VaultRequestSheet(
 					OutlinedButton(onClick = hapticClick { answer(VAULT_DECISION_DENY) }, enabled = !busy) { Text("Deny") }
 					if (typedRequest) {
 						Button(onClick = hapticClick { answer(VAULT_DECISION_ONCE) }, enabled = open && typed.isNotEmpty()) {
-							Text("Send once")
+							Text("Send")
 						}
 					} else {
 						Button(onClick = hapticClick { answer(VAULT_DECISION_ONCE) }, enabled = open) { Text("Once") }
-						Button(onClick = hapticClick { answer(VAULT_DECISION_WINDOW) }, enabled = open) { Text("30 minutes") }
-						Button(onClick = hapticClick { answer(VAULT_DECISION_SESSION) }, enabled = open) { Text("Whole session") }
+						Button(onClick = hapticClick { answer(VAULT_DECISION_WINDOW) }, enabled = open) { Text("30 min") }
+						Button(onClick = hapticClick { answer(VAULT_DECISION_SESSION) }, enabled = open) { Text("This session") }
 					}
 				}
 			}

@@ -16,6 +16,7 @@ import com.atelier_nyaarium.switchboard.SwitchboardService.Companion.EXTRA_OPEN_
 import com.atelier_nyaarium.switchboard.SwitchboardService.Companion.EXTRA_VAULT_REQUEST
 import com.atelier_nyaarium.switchboard.vault.VAULT_UNLOCK_OFF
 import com.atelier_nyaarium.switchboard.vault.VaultPendingRequest
+import com.atelier_nyaarium.switchboard.vault.requestTitle
 import com.atelier_nyaarium.switchboard.vault.requester
 import com.atelier_nyaarium.switchboard.SwitchboardService.Companion.STATUS_NOTIFICATION_ID
 import com.atelier_nyaarium.switchboard.SwitchboardService.Companion.TRANSPORT_NOTIFICATION_ID
@@ -269,11 +270,12 @@ internal class ServiceNotifications(private val context: Context) {
 		if (!canNotify()) return
 		val who = requester(repo.state.value, pending)
 		val typed = pending.entryId == null
+		val entryTitle = pending.entryId?.let { repo.vaultOps.view(it)?.title }
 		val builder = NotificationCompat.Builder(context, CHANNEL_VAULT)
 			.setSmallIcon(android.R.drawable.ic_lock_lock)
-			.setContentTitle(if (typed) "$who asks for a value" else "$who wants a secret")
-			.setContentText(pending.operation.take(120))
-			.setStyle(NotificationCompat.BigTextStyle().bigText(pending.operation))
+			.setContentTitle(requestTitle(pending, entryTitle))
+			.setContentText("$who: ${pending.operation}".take(120))
+			.setStyle(NotificationCompat.BigTextStyle().bigText("$who\n${pending.operation}"))
 			.setAutoCancel(true)
 			.setContentIntent(vaultContentIntent(pending.requestId))
 			.setDeleteIntent(vaultActionIntent(pending.requestId, NotificationReceiver.ACTION_VAULT_DENY))

@@ -11,6 +11,10 @@ data class VaultPendingRequest(
 	val team: String,
 	val request: VaultRequest,
 	val receivedAt: Long,
+	/** One more than the answered asks of this command it followed within the repeat window. */
+	val attempt: Int = 1,
+	/** Since the latest such answer, when there was one. */
+	val sinceAnswerMs: Long? = null,
 ) {
 	val requestId: String get() = request.requestId
 
@@ -58,6 +62,15 @@ val VaultRequest.sessionTarget: String
 		is VaultRequest.Typed -> sessionTarget
 	}
 
+/** An approval the same command may come back from. */
+@Serializable
+data class VaultAnswered(
+	val team: String,
+	val operation: String,
+	val answeredAt: Long,
+	val attempt: Int = 1,
+)
+
 @Serializable
 data class VaultBlob(
 	/** The vault revision the held entries reach; 0 asks for a full list. */
@@ -65,6 +78,8 @@ data class VaultBlob(
 	/** Sealed Router entries, tombstones included. */
 	val stored: List<VaultStoredEntry> = emptyList(),
 	val requests: List<VaultPendingRequest> = emptyList(),
+	/** Approvals inside the repeat window, oldest first. */
+	val answered: List<VaultAnswered> = emptyList(),
 	val lastRouterSyncAt: Long = 0,
 )
 
