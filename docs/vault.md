@@ -15,8 +15,10 @@ and the delta list are in `docs/federation.md` under Owner state.
 - **It is the sole sealer and opener of vault fields:** `vault-door-residue.test.ts` fences the
   directory. Every field seals under `vaultAadKind(kind, id)`, so a field opens only under its own
   entry.
-- `refresh()` reads `vault_read` after the held revision and merges the delta. A full list or a
-  lower Router revision replaces the held copy. A `durability_uncertain` answer reads as unavailable.
+- `refresh()` reads `vault_read` after the held revision and merges the delta through the shared
+  `foldVersionedList`: a full list replaces the held copy, an older full list is a late answer and
+  is ignored, and a delta that rests on another revision restarts from zero. A
+  `durability_uncertain` answer reads as unavailable.
 - `view` opens every field but the value. `openValue` opens the value. `openTyped` opens a value the
   owner typed for one request, under that request's id.
 - **The sealed `gateways` field is the allowlist:** A JSON array of gateway ids. An absent field
@@ -153,8 +155,8 @@ and git run it with the prompt as its one argument and read the value from stdou
 session holds a binding token. `vaultRun.ts` is the child run.
 
 - `vault_search` lists the public view of the entries this gateway may use.
-- `vault_run` posts `/vault/use` with the command as the operation, then runs `sh -c command` in
-  its own process group with the value in `$VAULT_VALUE` (or `envName`), on stdin followed by a
+- `vault_run` with an `entryId` posts `/vault/use` with the command as the operation, then runs
+  `sh -c command` in its own process group with the value in `$VAULT_VALUE` (or `envName`), on stdin followed by a
   newline, or in a 0600 file named by `$VAULT_FILE`, on `/dev/shm` when it takes one and the temp
   directory otherwise, unlinked on exit. Switchboard's own secrets are scrubbed from the child's
   environment. Output is held raw up to 1 MiB, scrubbed of the value's bytes into `[vault]`, then

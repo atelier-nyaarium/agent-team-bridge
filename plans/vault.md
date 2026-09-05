@@ -555,8 +555,8 @@ against the rule that a denial and a timeout read alike.
 
 ### Request dialog, revised with the owner after Phase 5
 
-The session name never rides the request: `sessionTarget` is the local `spawn.session` field, or
-`helper.<tokenId>`. The row's `session_id` carries the full address, the drain keeps it as the
+The session's display name never rides the request: `sessionTarget` is the local `spawn.session`
+field, or `helper.<tokenId>`. The row's `session_id` carries the full address, the drain keeps it as the
 request's `team`, and the phone resolves the name the way the board card does. What the dialog had
 dropped was the gateway segment, which tells two machines apart. `VaultRequestText.kt` holds the
 rules: the title is what is asked for (the entry's title, `Sudo request`, or `Password request`);
@@ -565,8 +565,8 @@ else. The countdown reads whole minutes, then seconds in the error color under t
 each second there. The manager stamps `attempt` and `sinceAnswerMs` on a request that repeats an
 answered command on the same team inside `REPEAT_WINDOW_MS`, chained through the latest answer, and
 the sheet shows the red repeat line, with `n of 3` when the program is sudo. The typed field is
-`Password`, the checkbox `Save this for next time`, the buttons `Send`, `Once`, `30 min`, `This
-session`. The notification title is the dialog title and its text the requester and the command.
+`Password`. The buttons and the save checkbox of this revision were replaced by the split button
+below. The notification title is the dialog title and its text the requester and the command.
 
 The owner then asked for a definitive retry signal and the session name on a sudo run. Probing
 showed sudo hands the helper the caller's environment and its own pid. The helper now sends
@@ -574,9 +574,9 @@ showed sudo hands the helper the caller's environment and its own pid. The helpe
 has one. `principal` takes the route's kinds in order, so `/vault/askpass` names a verified session
 as the asker and falls back to the helper; the request lands in the session's thread, and its
 grants apply. `asker` is an optional field on both request arms and the askpass body. The phone
-counts a repeat under the same asker as the same run, window or not, and says `Wrong password. 2 of
-3.` for sudo and `Not accepted. Try 2.` otherwise; without an asker the command-and-window guess
-stays for an older helper.
+counts a repeat under the same team and asker as the same run, window or not, and says `Wrong
+password. 2 of 3.` for sudo and `Not accepted. Try 2.` otherwise; without an asker the same team,
+command, and window guess stays for an older helper.
 
 Deny steers. Tapping Deny swaps the approve row for a `Steer` field and `Back` and `Deny`; the
 second Deny sends the note, empty or not. The note is an optional field on `vault_answer` and on
@@ -619,7 +619,8 @@ matches on entry, shape, and session together, so narrowing the shape can never 
 - `docs/vault.md` (written with Phase 2; each phase extends it); AGENTS.md map entries;
   `docs/console.md` OwnerOps; `docs/environment.md`.
 - Residue tests: vault door, `DATA_DIR_ENTRIES`, AAD vectors, no tool answers a value. The
-  ambient fence covers the new directories by construction.
+  ambient fence covers `src/gateway/vault` by construction; the helper takes its clock through
+  `AskpassPorts` and the MCP side has no ambient, so neither is fenced.
 - Luna audit of each phase before its push.
 
 Shipped: the vault door and the Router fences and the AAD vectors were already in place from the

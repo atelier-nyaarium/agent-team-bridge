@@ -54,8 +54,9 @@ A delegated agent's model is a field on the request, never an environment variab
 ## Askpass helper (host)
 
 `BRIDGE_ROUTER_URL` (default `http://127.0.0.1:20000`) and `VAULT_ASKPASS_TOKEN_FILE` (default
-`~/.config/switchboard/vault-askpass.token`), both baked into the wrapper by
-`scripts/install-vault-askpass.ts`. `SUDO_ASKPASS`, `SSH_ASKPASS`, and `GIT_ASKPASS` are the callers'
+`~/.config/switchboard/vault-askpass.token`). `scripts/install-vault-askpass.ts` bakes the token
+path into the wrapper always, and the gateway URL only when `--gateway` names a non-default one.
+`SUDO_ASKPASS`, `SSH_ASKPASS`, and `GIT_ASKPASS` are the callers'
 variables; the installer prints them. `SSH_ASKPASS_REQUIRE=force` is optional: without it ssh asks
 the helper only when it has no tty; with it every ssh prompt goes through the helper, which still
 offers the tty.

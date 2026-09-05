@@ -164,8 +164,9 @@ class VaultManager(private val store: VaultStore) : ClearsOnReprovision {
 			if (blob.requests.any { it.requestId == request.requestId }) return false
 			val asker = request.asker
 			val recent = blob.answered.filter {
-				if (asker != null) it.asker == asker
-				else it.asker == null && it.team == team && it.operation == request.operation && now - it.answeredAt <= REPEAT_WINDOW_MS
+				it.team == team &&
+					if (asker != null) it.asker == asker
+					else it.asker == null && it.operation == request.operation && now - it.answeredAt <= REPEAT_WINDOW_MS
 			}
 			val pending = VaultPendingRequest(
 				team,
