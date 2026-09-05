@@ -72,7 +72,13 @@ and the delta list are in `docs/federation.md` under Owner state.
   for the entries this gateway may use.
 - `/vault/use` (session): an entry id and the operation. A covering grant answers at once. Otherwise
   a request opens and the route waits up to `waitMs`, capped at `VAULT_ROUTE_WAIT_CAP_MS`. A wait
-  that runs out answers `pending` with the request id and deadline.
+  that runs out answers `pending` with the request id and deadline. A second use of the same entry
+  and operation while one is open joins that request rather than asking the owner twice; both
+  waiters take the value the one approval covers, while a typed value still goes to one collector.
+- **A caller holds at most `MAX_OPEN_PER_TARGET` open requests:** past that the route refuses with
+  429, so a loop cannot bury the phone in notifications.
+- **A caller that leaves takes no answer:** every wait also ends when the request's signal aborts,
+  and the answer stays for the next collector.
 - `/vault/collect` (session or helper): waits on a pending request the caller opened.
 - `/vault/withdraw` (session or helper): closes a pending request the caller opened. A late answer
   from the phone then reads as expired and records no grant.
@@ -130,6 +136,35 @@ and git run it with the prompt as its one argument and read the value from stdou
   `SSH_ASKPASS_REQUIRE=force` is optional: without it ssh asks the helper only when it has no tty.
   `vault_revoke` on the phone drops the token by id.
 
+## MCP tools
+
+`src/mcp/vault/vaultTools.ts`, registered when the console reports the `vault` capability and the
+session holds a binding token. `vaultRun.ts` is the child run.
+
+- `vault_search` lists the public view of the entries this gateway may use.
+- `vault_run` posts `/vault/use` with the command as the operation, then runs `sh -c command` in
+  its own process group with the value in `$VAULT_VALUE` (or `envName`), on stdin followed by a
+  newline, or in a 0600 file named by `$VAULT_FILE`, on `/dev/shm` when it takes one and the temp
+  directory otherwise, unlinked on exit. Switchboard's own secrets are scrubbed from the child's
+  environment. Output is held raw up to 1 MiB, scrubbed of the value's bytes into `[vault]`, then
+  capped at 65536 characters per stream, so a value never straddles a cut. A capture whose output
+  was cut stores nothing, since a piece of a secret is not the secret.
+- **The wait is capped at `VAULT_ROUTE_WAIT_CAP_MS` per call:** an unanswered request answers
+  `pending` and a command still running answers `running`, both with a `jobId`. `vault_collect`
+  continues either; `vault_withdraw` withdraws the request or stops the command, and says so when
+  the gateway could not confirm. A job keeps one id from `pending` through `running`. Two collects
+  on one job share an answer rather than starting the command twice. Long polls are posted once,
+  never retried; a repeated run joins the request still open. The process holds the child's output
+  until collected. Shutdown stops every child before it waits on anything, and the entry point
+  bounds the whole of it to three seconds.
+- `capture` stores the command's raw stdout as a new entry through `/vault/capture` and answers
+  its id; stdout is never returned. With no `entryId` the command runs at once with nothing
+  injected.
+- A refusal from the route, the owner, or the request's own deadline all answer `refused` with the
+  reason. A wait that runs out is `pending` or `running`, never a refusal.
+- **No tool answers a value.** Every shape is still readable by another process of the same uid,
+  through `/proc/<pid>/environ` or the file itself. That boundary is the plan's, not this code's.
+
 ## Phone
 
 `android/.../vault/` and `VaultOps.kt`. The `vault` plugin gates the tab and reports the capability.
@@ -170,6 +205,7 @@ and git run it with the prompt as its one argument and read the value from stdou
 - `src/gateway/compose/composeVault.ts` - the stage: stores, request delivery, routes, console handlers.
 - `src/gateway/router/vaultClient.ts` - sealing, opening, the delta copy, the create.
 - `src/gateway/vault/decisions.ts`, `requests.ts`, `helperTokens.ts`, `vaultRoutes.ts` - grants, requests, helper tokens, routes.
+- `src/mcp/vault/vaultTools.ts`, `vaultRun.ts` - the session's tools and the scrubbed child run.
 - `src/main-vault-askpass.ts`, `src/vault-askpass/askpass.ts` - the helper entry and its decision over ports.
 - `scripts/install-vault-askpass.ts` - the helper's installer.
 - `src/shared/schemasVault.ts` - wire shapes, the request row, the loopback shapes, the constants.

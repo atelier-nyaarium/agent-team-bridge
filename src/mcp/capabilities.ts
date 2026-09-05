@@ -51,6 +51,7 @@ export const GATED_CAPABILITY_IDS = [
 	"designer",
 	"references",
 	"taskboard",
+	"vault",
 	CODEX_AGENT_CAPABILITY_ID,
 	COPILOT_AGENT_CAPABILITY_ID,
 ] as const;

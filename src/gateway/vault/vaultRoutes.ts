@@ -48,9 +48,15 @@ type Principal = { kind: "session"; target: string } | { kind: "helper"; target:
 const refused = (reason: string, status = 403): Response =>
 	json({ outcome: "refused", reason } satisfies VaultValueAnswer, status);
 
-/** Migration refusal differs from unreachable owner. */
-const unopened = (reason: "migrating" | "unreachable"): Response =>
-	json({ outcome: "refused", reason: reason === "migrating" ? MIGRATING : "the owner cannot be reached" }, 503);
+/** Migration, an unreachable owner, and too many open requests each read differently. */
+const unopened = (reason: "migrating" | "unreachable" | "flooded"): Response => {
+	if (reason === "flooded")
+		return json({ outcome: "refused", reason: "too many vault requests are already open for this caller" }, 429);
+	return json(
+		{ outcome: "refused", reason: reason === "migrating" ? MIGRATING : "the owner cannot be reached" },
+		503,
+	);
+};
 
 const publicView = (entry: VaultEntryView): VaultPublicEntry => ({
 	id: entry.id,
@@ -97,8 +103,28 @@ export function createVaultRoutes(deps: VaultRoutesDeps): Map<string, Handler> {
 		return { entry, value: () => client.openValue(stored) };
 	};
 
-	/** Grants answer immediately; otherwise requests wait. */
+	/** The wait ends at the answer, the budget, or the caller leaving; a leaver takes no answer. */
+	async function waitAnswer(
+		answer: Promise<VaultRequestAnswer>,
+		waitMs: number,
+		signal: AbortSignal,
+	): Promise<VaultRequestAnswer | null | "gone"> {
+		if (signal.aborted) return "gone";
+		let onAbort: () => void = () => undefined;
+		const gone = new Promise<"gone">((resolve) => {
+			onAbort = () => resolve("gone");
+			signal.addEventListener("abort", onAbort, { once: true });
+		});
+		try {
+			return await Promise.race([withinMs(deps.ambient, answer, waitMs), gone]);
+		} finally {
+			signal.removeEventListener("abort", onAbort);
+		}
+	}
+
+	/** Grants answer immediately; otherwise requests wait. A retry joins the request still open. */
 	async function decide(
+		req: Request,
 		scope: GrantScope,
 		operation: string,
 		value: () => string | null,
@@ -106,14 +132,11 @@ export function createVaultRoutes(deps: VaultRoutesDeps): Map<string, Handler> {
 	): Promise<Response> {
 		const covering = deps.decisions.covers(scope, deps.ambient.now());
 		if (covering) return approved(covering.tier, value());
-		const opened = deps.requests.open({
-			kind: "entry",
-			entryId: scope.entryId,
-			operation,
-			sessionTarget: scope.sessionTarget,
-		});
+		const input = { kind: "entry" as const, entryId: scope.entryId, operation, sessionTarget: scope.sessionTarget };
+		const existing = deps.requests.find(input);
+		const opened = existing ? { kind: "opened" as const, ...existing } : deps.requests.open(input);
 		if (opened.kind !== "opened") return unopened(opened.reason);
-		return settle(await withinMs(deps.ambient, opened.answer, waitMs), opened.request, value);
+		return settle(await waitAnswer(opened.answer, waitMs, req.signal), opened.request, value);
 	}
 
 	function approved(decision: VaultApprovedDecision, value: string | null): Response {
@@ -121,16 +144,22 @@ export function createVaultRoutes(deps: VaultRoutesDeps): Map<string, Handler> {
 		return json({ outcome: "approved", decision, value } satisfies VaultValueAnswer);
 	}
 
-	function settle(answer: VaultRequestAnswer | null, request: VaultRequest, value: () => string | null): Response {
-		if (answer === null)
+	function settle(
+		answer: VaultRequestAnswer | null | "gone",
+		request: VaultRequest,
+		value: () => string | null,
+	): Response {
+		if (answer === null || answer === "gone")
 			return json({
 				outcome: "pending",
 				requestId: request.requestId,
 				deadlineAt: request.deadlineAt,
 			} satisfies VaultValueAnswer);
-		// First collector wins.
-		if (!deps.requests.forget(request.requestId)) return refused(REFUSAL);
+		const taken = deps.requests.forget(request.requestId);
 		if (answer.kind === "refused") return refused(REFUSAL);
+		// A typed value is handed over once. An entry's value follows the approval, which named this
+		// caller's own operation, so a second waiter on the same request takes it too.
+		if (!taken && answer.typedValue !== undefined) return refused(REFUSAL);
 		return approved(answer.decision, answer.typedValue ?? value());
 	}
 
@@ -170,7 +199,7 @@ export function createVaultRoutes(deps: VaultRoutesDeps): Map<string, Handler> {
 			shape: operationShape(parsed.data.operation),
 			sessionTarget: who.target,
 		};
-		return decide(scope, parsed.data.operation, found.value, waitFor(parsed.data.waitMs));
+		return decide(req, scope, parsed.data.operation, found.value, waitFor(parsed.data.waitMs));
 	};
 
 	const collect: Handler = async (req, body) => {
@@ -180,8 +209,8 @@ export function createVaultRoutes(deps: VaultRoutesDeps): Map<string, Handler> {
 		if (!parsed.success) return json({ error: "invalid vault collect request" }, 400);
 		const pending = deps.requests.collect(parsed.data.requestId, who.target);
 		if (!pending) return refused(REFUSAL);
-		const answer = await withinMs(deps.ambient, pending.answer, waitFor(parsed.data.waitMs));
-		if (answer?.kind !== "approved" || pending.request.kind !== "entry")
+		const answer = await waitAnswer(pending.answer, waitFor(parsed.data.waitMs), req.signal);
+		if (answer === null || answer === "gone" || answer.kind !== "approved" || pending.request.kind !== "entry")
 			return settle(answer, pending.request, () => null);
 		const client = await ready();
 		if (client instanceof Response) return client;
@@ -243,11 +272,11 @@ export function createVaultRoutes(deps: VaultRoutesDeps): Map<string, Handler> {
 		const match = matches.length === 1 ? matches[0] : undefined;
 		if (match) {
 			const scope = { entryId: match.entry.id, shape, sessionTarget };
-			return decide(scope, parsed.data.cmdline, () => client.openValue(match.stored), waitMs);
+			return decide(req, scope, parsed.data.cmdline, () => client.openValue(match.stored), waitMs);
 		}
 		const opened = deps.requests.open({ kind: "typed", operation: parsed.data.cmdline, sessionTarget });
 		if (opened.kind !== "opened") return unopened(opened.reason);
-		return settle(await withinMs(deps.ambient, opened.answer, waitMs), opened.request, () => null);
+		return settle(await waitAnswer(opened.answer, waitMs, req.signal), opened.request, () => null);
 	};
 
 	/** Host token gates helper minting; an unenrolled gateway has no vault to mint for. */

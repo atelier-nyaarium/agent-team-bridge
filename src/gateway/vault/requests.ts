@@ -25,7 +25,10 @@ export type VaultRequestAnswer =
 
 export type VaultRequestOpened =
 	| { kind: "opened"; request: VaultRequest; answer: Promise<VaultRequestAnswer> }
-	| { kind: "undeliverable"; reason: "migrating" | "unreachable" };
+	| { kind: "undeliverable"; reason: "migrating" | "unreachable" | "flooded" };
+
+/** One caller's share of the owner's attention; a loop cannot bury the phone. */
+export const MAX_OPEN_PER_TARGET = 8;
 
 export interface VaultRequestsDeps {
 	ambient: Pick<Ambient, "now" | "newId" | "setTimer" | "clearTimer">;
@@ -60,10 +63,18 @@ export function createVaultRequests(deps: VaultRequestsDeps) {
 		return true;
 	};
 
+	const openFor = (sessionTarget: string): number => {
+		let count = 0;
+		for (const entry of pending.values())
+			if (!entry.settled && entry.request.sessionTarget === sessionTarget) count += 1;
+		return count;
+	};
+
 	const open = (input: VaultRequestInput): VaultRequestOpened => {
 		const requestId = deps.ambient.newId();
 		const shape = operationShape(input.operation);
 		if (!shape) return { kind: "undeliverable", reason: "unreachable" };
+		if (openFor(input.sessionTarget) >= MAX_OPEN_PER_TARGET) return { kind: "undeliverable", reason: "flooded" };
 		const common = {
 			v: 1 as const,
 			requestId,
@@ -104,6 +115,18 @@ export function createVaultRequests(deps: VaultRequestsDeps) {
 		};
 		pending.set(requestId, entry);
 		return { kind: "opened", request, answer };
+	};
+
+	/** The request still open for the same asker, entry, and operation, so a retry joins it. */
+	const find = (input: VaultRequestInput): Pick<Pending, "request" | "answer"> | undefined => {
+		for (const entry of pending.values()) {
+			const { request } = entry;
+			if (entry.settled || request.kind !== input.kind || request.sessionTarget !== input.sessionTarget) continue;
+			if (request.operation !== input.operation) continue;
+			if (input.kind === "entry" && (request.kind !== "entry" || request.entryId !== input.entryId)) continue;
+			return entry;
+		}
+		return undefined;
 	};
 
 	/** Answers are single-use. */
@@ -166,7 +189,7 @@ export function createVaultRequests(deps: VaultRequestsDeps) {
 		}
 	};
 
-	return { open, answer, collect, forget, withdraw, sessionEnded };
+	return { open, find, answer, collect, forget, withdraw, sessionEnded };
 }
 
 export type VaultRequests = ReturnType<typeof createVaultRequests>;

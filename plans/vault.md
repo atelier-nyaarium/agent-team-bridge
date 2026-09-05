@@ -524,6 +524,17 @@ cover an askpass child.
 - A tool that gives up on a pending request withdraws it through `/vault/withdraw`, as the helper
   does, so the phone's row is retracted with it.
 
+### Bug Classes
+
+- **The child's output pipeline, `vaultRun.ts`:** a piece of a value passing for the whole of it.
+  Round one capped the streams before the scrub, so a value straddling the cut kept its tail, and
+  a capture stored the scrubbed text rather than what the command wrote. Round two found the same
+  class again: a capture whose output was cut stored the prefix as if it were the secret. The
+  patches are a raw ceiling with a dropped window, a scrub before the cap, a raw stdout kept only
+  for a capture, and a capture refused when the output was cut. The mechanism now has four rules
+  where one would do; a single "collect, scrub, then bound" pass with the capture reading the same
+  buffer is the shape to reach for.
+
 ## Phase 6 - Docs, residue, audit
 
 - `docs/vault.md` (written with Phase 2; each phase extends it); AGENTS.md map entries;

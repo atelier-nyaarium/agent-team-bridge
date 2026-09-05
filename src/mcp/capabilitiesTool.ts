@@ -1,7 +1,10 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { type Capability, unionCapabilities } from "../shared/capabilities.js";
+import { type Capability, unionCapabilities, VAULT_INSTRUCTIONS } from "../shared/capabilities.js";
 import { readCapabilities } from "./capabilities.js";
+
+/** Tool guidance, appended after the capability's own text. */
+const TOOL_GUIDANCE: Record<string, string> = { vault: VAULT_INSTRUCTIONS };
 
 ////////////////////////////////
 //  Schemas
@@ -51,10 +54,12 @@ export function renderCapabilities(startup: Capability[], current: Capability[] 
 	if (note) lines.push("", note);
 	lines.push("");
 	for (const capability of startup) {
+		const own = TOOL_GUIDANCE[capability.id];
 		lines.push(
 			`## ${capability.id}`,
 			"",
-			capability.instructions ?? `This capability carries no guidance of its own.`,
+			capability.instructions ?? (own ? "" : `This capability carries no guidance of its own.`),
+			...(own ? ["", own] : []),
 			"",
 		);
 	}

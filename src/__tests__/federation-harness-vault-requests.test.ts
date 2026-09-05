@@ -1,4 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { runWithValue } from "../mcp/vault/vaultRun.js";
+import { createVaultTools, type VaultPost } from "../mcp/vault/vaultTools.js";
 import {
 	VAULT_GATEWAYS_KIND,
 	VAULT_PUBLIC_TITLE_KIND,
@@ -315,6 +317,48 @@ describe("federation harness: vault requests", () => {
 		expect(planted.status).toBe(200);
 		expect(await askpassFresh("ssh deploy@prod uptime", 200)).toMatchObject({ outcome: "pending" });
 		expect((await nextRequest(seen + 2)).kind).toBe("typed");
+	});
+
+	it("the session's tools run a command with the value injected after the phone approves, and capture an entry", async () => {
+		// A session on the gateway now serving.
+		const session = attachFakeSession(h.gateway, {
+			team: alice.team,
+			conversationId: alice.conversationId,
+			sessionToken: alice.sessionToken,
+		});
+		sessions.push(session);
+		await session.ready();
+		// routerPost's contract: the JSON body, or a throw carrying the body text.
+		const post: VaultPost = async (path, body) => {
+			const response = await session.post(path, body);
+			const text = await response.text();
+			if (!response.ok) throw new Error(text);
+			return JSON.parse(text);
+		};
+		const tools = createVaultTools({ post, run: runWithValue, now: Date.now });
+		const seen = (await requestRows()).length;
+		const pending = await tools.run({ command: 'printf "<%s>" "$VAULT_VALUE"', entryId, waitMs: 200 });
+		expect(pending).toMatchObject({ outcome: "pending", jobId: expect.any(String) });
+		const request = await nextRequest(seen);
+		// A repeated run joins the request still open instead of asking the owner twice.
+		expect(await tools.run({ command: 'printf "<%s>" "$VAULT_VALUE"', entryId, waitMs: 200 })).toMatchObject({
+			outcome: "pending",
+			jobId: pending.jobId,
+		});
+		expect((await requestRows()).length).toBe(seen + 1);
+		expect(request).toMatchObject({ kind: "entry", entryId, operation: 'printf "<%s>" "$VAULT_VALUE"' });
+		await h.phone.value({ kind: "vault_answer", requestId: request.requestId, decision: "once" });
+		const ran = await tools.collect({ jobId: String(pending.jobId), waitMs: 5_000 });
+		expect(ran).toMatchObject({ outcome: "ran", exitCode: 0, stdout: "<[vault]>" });
+		expect(JSON.stringify(ran)).not.toContain("hunter2");
+
+		const captured = await tools.run({
+			command: "printf 'minted-by-agent\\n'",
+			capture: { publicTitle: "Agent minted" },
+		});
+		expect(captured).toMatchObject({ outcome: "ran", captured: expect.any(String) });
+		const listed = await post("/vault/search", { query: "agent minted" });
+		expect(listed).toEqual({ entries: [{ id: captured.captured, publicTitle: "Agent minted", hasValue: true }] });
 	});
 
 	it("the helper binary's port holds for the phone without a tty, and withdraws when the tty wins", async () => {

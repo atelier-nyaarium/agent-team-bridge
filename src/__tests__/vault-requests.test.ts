@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createVaultRequests } from "../gateway/vault/requests.js";
+import { createVaultRequests, MAX_OPEN_PER_TARGET } from "../gateway/vault/requests.js";
 import type { ContentEnvelope } from "../shared/schemasContentKey.js";
 import { VAULT_REQUEST_DEADLINE_MS, type VaultRequest } from "../shared/schemasVault.js";
 import { fakeAmbient } from "../testing/fakeAmbient.js";
@@ -161,6 +161,32 @@ describe("vault requests", () => {
 		expect(requests.collect(answered.request.requestId, "helper.h1")?.request.requestId).toBe(
 			answered.request.requestId,
 		);
+	});
+
+	it("a retry finds the request still open for the same asker, entry, and operation, and nothing else", async () => {
+		const { requests } = bench();
+		const input = { kind: "entry" as const, entryId: "deploy", operation: "ssh prod", sessionTarget: "host.alice" };
+		expect(requests.find(input)).toBeUndefined();
+		const opened = requests.open(input);
+		if (opened.kind !== "opened") throw new Error("the request did not open");
+		expect(requests.find(input)?.request.requestId).toBe(opened.request.requestId);
+		expect(requests.find({ ...input, operation: "ssh prod ls" })).toBeUndefined();
+		expect(requests.find({ ...input, sessionTarget: "host.bob" })).toBeUndefined();
+		expect(requests.find({ ...input, entryId: "other" })).toBeUndefined();
+		requests.answer(opened.request.requestId, "once");
+		expect(requests.find(input)).toBeUndefined();
+	});
+
+	it("one caller cannot bury the phone: past the cap the request does not open", () => {
+		const { requests, delivered } = bench();
+		const open = (operation: string, sessionTarget = "host.alice") =>
+			requests.open({ kind: "entry", entryId: "deploy", operation, sessionTarget });
+		for (let i = 0; i < MAX_OPEN_PER_TARGET; i += 1) expect(open(`ssh prod ${i}`).kind).toBe("opened");
+		expect(open("ssh prod over")).toEqual({ kind: "undeliverable", reason: "flooded" });
+		// The cap is per caller, and answering one makes room again.
+		expect(open("ssh prod other", "host.bob").kind).toBe("opened");
+		requests.answer(delivered[0].requestId, "once");
+		expect(open("ssh prod again").kind).toBe("opened");
 	});
 
 	it("a helper's session tap records a window, since every process on the host shares its token", async () => {

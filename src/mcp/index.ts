@@ -35,6 +35,7 @@ import { createLocalAgentBackend } from "./local/localAgentHost.js";
 import { closeReferenceSession, setReferencesEnabled } from "./references/attachRefs.js";
 import { adoptHostRoots, expectHostRoots } from "./references/refWorkspace.js";
 import { resolveSessionNaming } from "./team-name.js";
+import { registerVaultTools } from "./vault/vaultTools.js";
 
 ////////////////////////////////
 //  Functions & Helpers
@@ -78,6 +79,9 @@ function registerAgentBackend(mcpServer: McpServer, backend: AgentBackendDescrip
 }
 
 const localBackends: LocalAgentBackend[] = [];
+/** Held so shutdown withdraws every pending request and stops every child. */
+let vaultTools: ReturnType<typeof registerVaultTools> | undefined;
+const VAULT_SHUTDOWN_MS = 3_000;
 
 const CHANNEL_INSTRUCTIONS = `
 Cross-team messages arrive as <channel source="..." ...> tags. Metadata arrives as tag attributes: session_id, from, and reply_schema when specified. The tag body is the message. Read the request and do the work.
@@ -132,6 +136,10 @@ export async function startMcp(): Promise<void> {
 	for (const backend of AGENT_BACKENDS) registerAgentBackend(mcpServer, backend, capabilities);
 	// Without the board plugin the owner cannot see or answer anything a session writes.
 	if (hasCapability(capabilities, "taskboard")) registerBoardTools(mcpServer);
+	// The vault routes require the session's binding token.
+	if (process.env.SWITCHBOARD_SESSION_TOKEN && hasCapability(capabilities, "vault")) {
+		vaultTools = registerVaultTools(mcpServer);
+	}
 	// Not a tool of its own: it rides the reply path, so it is switched on rather than registered.
 	setReferencesEnabled(hasCapability(capabilities, "references"));
 
@@ -196,6 +204,10 @@ Requirements:
 		void closeReferenceSession();
 		// The only thing that ever reaps a local child: no daemon supervises it.
 		for (const local of localBackends) local.shutdown();
-		process.exit(0);
+		// Bounded: a child that ignores its signals must not hold the exit.
+		const shutdown = vaultTools?.shutdown() ?? Promise.resolve();
+		void Promise.race([shutdown, new Promise((r) => setTimeout(r, VAULT_SHUTDOWN_MS))]).finally(() =>
+			process.exit(0),
+		);
 	});
 }

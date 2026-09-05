@@ -27,7 +27,7 @@ export type AgentFrameKind = "command" | "receipt" | "event" | "ack" | "hello";
 ////////////////////////////////
 //  Functions & Helpers
 
-const AGENT_WAIT_BUDGET_MS = 240_000;
+export const AGENT_WAIT_BUDGET_MS = 240_000;
 
 export const CODEX_BACKEND: AgentBackendDescriptor = {
 	id: "codex",

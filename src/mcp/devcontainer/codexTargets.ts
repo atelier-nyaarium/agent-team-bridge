@@ -75,17 +75,17 @@ const SCRUBBED_PATTERN = /token|secret|password|credential|api[_-]?key/i;
  * A deny list, so a variable a backend needs is never stripped by surprise.
  *
  * Only the LAUNCHING backend's prefix is exempt: exempting every prefix handed one backend's
- * credentials to the other's child.
+ * credentials to the other's child. An absent prefix exempts nothing.
  */
 export function scrubChildEnv(
 	source: Record<string, string | undefined>,
-	exemptPrefix: string,
+	exemptPrefix?: string,
 ): Record<string, string> {
 	const out: Record<string, string> = {};
 	for (const [key, value] of Object.entries(source)) {
 		if (value === undefined) continue;
 		if (SCRUBBED_EXACT.has(key)) continue;
-		if (SCRUBBED_PATTERN.test(key) && !key.startsWith(exemptPrefix)) continue;
+		if (SCRUBBED_PATTERN.test(key) && !(exemptPrefix && key.startsWith(exemptPrefix))) continue;
 		out[key] = value;
 	}
 	return out;
