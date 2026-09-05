@@ -742,3 +742,25 @@ Collected after Phase 5.
 - The gateway's `settle` decides four things in eight lines: pending, refused, the once-only typed
   value, and the shared entry approval. It reads as a chain of guards rather than a stated policy,
   and the joined-waiter rule is only understandable next to `find`.
+
+Collected after Phase 6.
+
+- `dataDirInventory.ts` named `data-dir-inventory.test.ts` as the thing that pins it, and no such
+  test existed. A comment that names a test is a claim nothing checks; the fence now exists, and
+  its first run showed the inventory was already right by luck.
+- The source-scanning fences (`vault-door`, `data-dir-inventory`, `vault-tools`) fail loudly on a
+  Biome wrap that moves a name off the line the regex reads, and pass a same-kind mistake written
+  another way. The tools fence is a warning beside the behavior test in `vault-tools.test.ts`, not
+  a proof. A fence that walks the AST, or a behavior test per road, would end the brittleness.
+- The words given to an auditor shape its findings: "proper sentences" produced eighteen semicolon
+  reports, none of them a rule. Hand an auditor the rule text, not a paraphrase.
+- The plan's dialog section kept two sentences describing successive states of one control, and
+  the alignment audit read the pair as a contradiction. A record that supersedes should rewrite in
+  place rather than append.
+- `find`'s doc comment said "asker" for the caller before an `asker` field existed on the request;
+  the name collision cost a security reviewer a paragraph. New wire vocabulary should be grepped
+  against comments as well as code.
+- Lexicon's watcher spun on the gateway's `volumes/` writes for fifty minutes at a third of a core
+  each for three processes; `.gitignore` is not honored by the watch. Owned by Lexicon.
+- The permission hook refuses `sed` and `awk` even for reads, so a range of a file costs a Read
+  call and a pipeline that needs a slice falls back to `cut` and `grep`.
