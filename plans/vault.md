@@ -1,8 +1,9 @@
 # Questionaire
 
 Vault: secrets and notes vault, phone-approved, for agents and for the owner's own terminal.
-Board entry: Vault Plugin (`bd_1b5ca0e9`) with three children. Points refreshed 2026-09-04 on
-the Router-hub substrate (main at `eb193ead`); R5 to R8 below carry the re-checked facts.
+Board entry: Vault Plugin (`bd_1b5ca0e9`) with three children. Points refreshed 2026-09-05 against
+main at `7a865872`, after harness-and-seams: every reference below re-checked, and R9 carries what
+that plan changed for this one.
 
 ## Rulings settled in chat before the questionaire
 
@@ -128,6 +129,22 @@ delivers the same keys. See R8.
   vault client is the same shape with a kind per field.
 - Residual: the key is Domain-wide, so every gateway can open every secret. Narrowing to one
   gateway is Question 1.
+
+### R9 - Seams inherited from harness-and-seams
+
+- Owner-op kinds live in `ownerOpRegistry.ts`: kind, value schema, mutation class, answer schema.
+  The Kotlin codegen reads it as the sole kind list, so `Protocol.Wire` gains a kind from the
+  registration alone. The migration fence holds every class but `read`.
+- Gateway frames live in the frame catalog (`bridge/frameDispatch.ts`), one descriptor per frame
+  with its mutation class and incarnation policy; `gated: true` for anything but a read.
+- Clocks, entropy, ids, and timers come from the injected `Ambient`. `ambient-residue.test.ts`
+  fences `src/gateway`, `src/federation-server`, and `src/mcp`: no `Date.now`, no bare timer.
+- The gateway is composed in named stages under `src/gateway/compose/`. A subsystem lands as a
+  stage with typed deps on `GatewayDeps`, never as code in `composeGateway`.
+- Behavior tests run in the federation harness (`src/testing/`, `fixtureWorld.ts`): the real
+  Router and gateway graph in process, fake host and session sockets, the TS phone driver, both
+  timer drives. Wire fixtures are minted by both runtimes under `tests/fixtures/identity/set.json`
+  into `tests/fixtures/wire/`; `check:fixtures` and the Kotlin gate diff them.
 
 ### Assumption A1 - Vault is a capability id, not a marketplace plugin
 
@@ -313,8 +330,9 @@ template lands the value in `ps` and shell history; the PTY supervisor does not 
 
 # Plan
 
-Rough, from the questionaire. Deploy order per AGENTS.md: Router first (it answers new frames),
-then gateway, then phone, then plugin. Every wire addition optional and tolerated by both peers.
+From the questionaire, refreshed against `7a865872`. Deploy order per AGENTS.md: Router first (it
+answers new frames), then gateway, then phone, then plugin. Every wire addition optional and
+tolerated by both peers. Each phase ends with its harness scenarios green under both timer drives.
 
 ## Phase 1 - Wire truth and the Router vault service
 
@@ -327,24 +345,36 @@ then gateway, then phone, then plugin. Every wire addition optional and tolerate
 - `src/federation-server/vault/`: owner-state service through `ownerServiceHooks.ts`. CAS on
   revision. Authority on the clear envelope: a signed console OwnerOp may create, update, and
   delete; a gateway frame may create only (Q3). Router blind to every field.
-- OwnerOps `vault_list`, `vault_put`, `vault_delete`. Gateway frames `vault_read` and
-  `vault_create`.
+- OwnerOps `vault_list` (`read`), `vault_put` and `vault_delete` (`value`), registered in
+  `ownerOpRegistry.ts` with answer schemas. Gateway frames `vault_read` (`read`, open) and
+  `vault_create` (`value`, gated), registered in the frame catalog (R9).
 - `vault_answer` and `vault_grants` and `vault_revoke` added to `VALUE_OP_KINDS`. Additive, no
   `CONSOLE_PROTOCOL_VERSION` bump.
 - Fixtures under `tests/fixtures/protocol/` for the request row, the answer, and a bare invalid
-  row, opened by `protocol-fixtures.test.ts` and `ProtocolFixturesTest.kt`.
+  row, opened by `protocol-fixtures.test.ts` and `ProtocolFixturesTest.kt`. Sealed field
+  envelopes minted into `tests/fixtures/wire/` by `gen-wire-fixtures.ts` and
+  `WireFixtureGenerator.kt` under the identity set.
+- Harness scenarios: a phone-driven `vault_put`, a gateway `vault_read`, the CAS conflict, and the
+  fence refusing `vault_create` inside a migration window.
 
 ## Phase 2 - Gateway: vault client, decisions, request road
 
+- `src/gateway/compose/composeVault.ts`: the stage that builds the client, the decisions, and the
+  request road, after the stores and the Router client. Deps typed on `GatewayDeps`; every clock
+  and timer through `ambient` (R9).
 - `src/gateway/router/vaultClient.ts`: sole sealer and opener of vault fields, sole local-key
   mapper. Opens with `ContentKeyStore`. A `vault-door-residue` test pins it as the only door.
 - `src/gateway/vault/decisions.ts`: grants under `DATA_DIR/vault-decisions.json`, named in
-  `DATA_DIR_ENTRIES`. Once is consumed on use. 30 minutes keys on program plus target, secret,
-  session. Whole session keys on secret and session, ends with the session or the settings cap.
+  `DATA_DIR_ENTRIES` (`dataDirInventory.ts`). Once is consumed on use. 30 minutes keys on program
+  plus target, secret, session, its deadline on `ambient.now`. Whole session keys on secret and
+  session, ends with the session or the settings cap.
 - `src/gateway/vault/requests.ts`: a request (id, operation text, shape, entry id or typed,
-  session, 9-minute deadline) delivered as a `plugin_action` row `vault:request` through
-  `deliverToOwner`. The `vault_answer` value op lands in `consoleHandler.ts` and resolves the
-  request. Deny and timeout answer the same refusal.
+  session, 9-minute deadline on `ambient.setTimer`) delivered as a `plugin_action` row
+  `vault:request` through `deliverToOwner`, durable in `OwnerRowOutbox`. The `vault_answer` value
+  op reaches `consoleHandler.ts` through the console dispatcher in `composeRouterFrames.ts` and
+  resolves the request. Deny and timeout answer the same refusal.
+- Harness scenarios: request then answer once; answer 30 minutes then a second run inside the
+  window; deny; timeout; a gateway restart with a window held.
 - Loopback routes for the MCP server and the helper: search (public fields only), run-begin,
   collect, capture, askpass. Helper token minted at install, verified per call (A6).
 - The value leaves the gateway only in a loopback answer to an approved request.
@@ -353,7 +383,8 @@ then gateway, then phone, then plugin. Every wire addition optional and tolerate
 
 - `plugins/vault/`: `VaultPlugin.kt` claims `vault:request`, wipe, and forget (A7).
 - `VaultSealing.kt` twin of the AAD kinds. `VaultManager` holds Router-held entries through the
-  OwnerOps, sealed with `ContentKeyring`.
+  OwnerOps, sealed with `ContentKeyring`. `Protocol.kt` regenerates with
+  `bun scripts/codegen-kotlin.ts`; the Kotlin gate diffs it.
 - Vault tab in `MainTabsScreen.kt`, conditional on the capability like Backlog, badged by pending
   requests. List, search, add, edit, delete, reveal. A captured entry opens editable (Q3).
 - Request sheet: the brief names the operation and the shape; buttons Once, 30 minutes, Whole
@@ -365,7 +396,8 @@ then gateway, then phone, then plugin. Every wire addition optional and tolerate
 
 ## Phase 4 - Askpass helper
 
-- `src/main-vault-askpass.ts`, compiled by the build into `dist/`. Reads `/proc/<ppid>/cmdline`,
+- `src/main-vault-askpass.ts`, a second entry in `scripts/build.ts` beside `main-mcp.js`, bundled
+  into `dist/`. Reads `/proc/<ppid>/cmdline`,
   opens `/dev/tty` when it can, races the tty against the phone, holds only with no tty (R3, R5).
   Prints the value to stdout and nothing else.
 - Installer script: mints the token through the gateway, writes the binary and the 0600 token
@@ -383,5 +415,6 @@ then gateway, then phone, then plugin. Every wire addition optional and tolerate
 ## Phase 6 - Docs, residue, audit
 
 - `docs/vault.md`; AGENTS.md map entries; `docs/console.md` OwnerOps; `docs/environment.md`.
-- Residue tests: vault door, `DATA_DIR_ENTRIES`, AAD vectors, no tool answers a value.
+- Residue tests: vault door, `DATA_DIR_ENTRIES`, AAD vectors, no tool answers a value. The
+  ambient fence covers the new directories by construction.
 - Luna audit of each phase before its push.
