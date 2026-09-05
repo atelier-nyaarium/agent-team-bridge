@@ -144,6 +144,10 @@ export function createVaultRoutes(deps: VaultRoutesDeps): Map<string, Handler> {
 		return json({ outcome: "approved", decision, value } satisfies VaultValueAnswer);
 	}
 
+	/**
+	 * An entry approval is shared: it named this caller's own operation, so every waiter joined to
+	 * the request takes the value. A typed value is delivered once, to whoever collects first.
+	 */
 	function settle(
 		answer: VaultRequestAnswer | null | "gone",
 		request: VaultRequest,
@@ -157,8 +161,6 @@ export function createVaultRoutes(deps: VaultRoutesDeps): Map<string, Handler> {
 			} satisfies VaultValueAnswer);
 		const taken = deps.requests.forget(request.requestId);
 		if (answer.kind === "refused") return refused(REFUSAL);
-		// A typed value is handed over once. An entry's value follows the approval, which named this
-		// caller's own operation, so a second waiter on the same request takes it too.
 		if (!taken && answer.typedValue !== undefined) return refused(REFUSAL);
 		return approved(answer.decision, answer.typedValue ?? value());
 	}

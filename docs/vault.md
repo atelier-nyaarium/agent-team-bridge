@@ -147,8 +147,10 @@ session holds a binding token. `vaultRun.ts` is the child run.
   newline, or in a 0600 file named by `$VAULT_FILE`, on `/dev/shm` when it takes one and the temp
   directory otherwise, unlinked on exit. Switchboard's own secrets are scrubbed from the child's
   environment. Output is held raw up to 1 MiB, scrubbed of the value's bytes into `[vault]`, then
-  capped at 65536 characters per stream, so a value never straddles a cut. A capture whose output
-  was cut stores nothing, since a piece of a secret is not the secret.
+  capped at 65536 characters per stream, so a value never straddles a cut. A value short enough to
+  sit inside `[vault]` would survive the scrub, so that stream is withheld whole. The cut and the
+  cap are separate facts: a capture whose stdout was cut stores nothing, since a piece of a secret
+  is not the secret, while a noisy stderr costs it nothing.
 - **The wait is capped at `VAULT_ROUTE_WAIT_CAP_MS` per call:** an unanswered request answers
   `pending` and a command still running answers `running`, both with a `jobId`. `vault_collect`
   continues either; `vault_withdraw` withdraws the request or stops the command, and says so when

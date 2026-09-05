@@ -7,9 +7,9 @@ import path from "node:path";
 import { scrubChildEnv } from "../devcontainer/codexTargets.js";
 
 export const OUTPUT_CAP_CHARS = 64 * 1024;
-/** Bytes held raw until the scrub, so a value never straddles the cap. */
 const RAW_CEILING_BYTES = 1024 * 1024;
 export const SCRUB_MARK = "[vault]";
+export const WITHHELD = "[vault: output withheld]";
 export const DEFAULT_ENV_NAME = "VAULT_VALUE";
 export const FILE_ENV_NAME = "VAULT_FILE";
 const TMPFS = "/dev/shm";
@@ -24,17 +24,22 @@ export interface VaultRunInput {
 	envName?: string;
 	/** Absent for a capture-only run. */
 	value?: string;
-	/** Keeps the unscrubbed stdout for a capture; it never reaches an answer. */
-	keepRawStdout?: boolean;
 }
 
 export interface VaultRunResult {
 	exitCode: number | null;
 	signal: string | null;
+	/** Scrubbed and capped. The value's bytes are gone. */
 	stdout: string;
 	stderr: string;
-	truncated: boolean;
-	rawStdout?: string;
+	/** The ceiling dropped bytes, so what is here may be a piece of something. */
+	stdoutCut: boolean;
+	stderrCut: boolean;
+	/** The display cap trimmed the scrubbed text. */
+	stdoutCapped: boolean;
+	stderrCapped: boolean;
+	/** Unscrubbed stdout, for a capture. Never an answer. */
+	rawStdout: () => string;
 }
 
 export interface VaultRunHandle {
@@ -42,7 +47,7 @@ export interface VaultRunHandle {
 	kill: () => void;
 }
 
-/** The value's raw bytes never reach a result. */
+/** The value's raw bytes never reach a tool answer. */
 export function scrubOutput(text: string, value: string | undefined): string {
 	if (!value) return text;
 	return text.split(value).join(SCRUB_MARK);
@@ -61,32 +66,41 @@ function writeValueFile(value: string): string {
 	throw new Error("no directory takes the value file");
 }
 
-/** Bounded raw capture; a cut at the ceiling drops a window a value could straddle. */
-function collector(valueLength: number) {
+/**
+ * One stream: collect raw bytes to a ceiling, scrub, then cap.
+ *
+ * A cut drops the value's byte length from the tail, so a value straddling it cannot survive as a
+ * piece. Scrubbing before the cap leaves the cap able to cut only the mark.
+ */
+function capture(value: string | undefined) {
+	const valueBytes = value === undefined ? 0 : Buffer.byteLength(value, "utf8");
 	const chunks: Buffer[] = [];
 	let size = 0;
 	let cut = false;
+
+	const raw = (): string => {
+		const bytes = Buffer.concat(chunks);
+		const kept = cut ? bytes.subarray(0, Math.max(0, bytes.length - valueBytes)) : bytes;
+		return kept.toString("utf8");
+	};
+
 	return {
 		push(chunk: Buffer) {
 			if (cut) return;
 			const room = RAW_CEILING_BYTES - size;
-			if (chunk.length >= room) cut = true;
+			if (chunk.length > room) cut = true;
 			chunks.push(chunk.subarray(0, room));
 			size += Math.min(chunk.length, room);
 		},
-		raw(): string {
-			const text = Buffer.concat(chunks).toString("utf8");
-			return cut ? text.slice(0, Math.max(0, text.length - valueLength)) : text;
+		raw,
+		collect() {
+			const scrubbed = scrubOutput(raw(), value);
+			// A value short enough to sit inside the mark would survive the scrub; withhold instead.
+			const safe = value && scrubbed.includes(value) ? WITHHELD : scrubbed;
+			const capped = safe.length > OUTPUT_CAP_CHARS;
+			return { text: capped ? safe.slice(0, OUTPUT_CAP_CHARS) : safe, cut, capped };
 		},
-		cut: () => cut,
 	};
-}
-
-/** Scrubbed first, then capped, so the cap can only cut the mark. */
-function bounded(text: string): { text: string; truncated: boolean } {
-	return text.length > OUTPUT_CAP_CHARS
-		? { text: text.slice(0, OUTPUT_CAP_CHARS), truncated: true }
-		: { text, truncated: false };
 }
 
 /** Runs `sh -c command` with the value in the chosen shape and its own process group. */
@@ -116,8 +130,8 @@ export function runWithValue(input: VaultRunInput, baseEnv: NodeJS.ProcessEnv = 
 		unlink();
 		throw error;
 	}
-	const stdout = collector(input.value?.length ?? 0);
-	const stderr = collector(input.value?.length ?? 0);
+	const stdout = capture(input.value);
+	const stderr = capture(input.value);
 	child.stdout?.on("data", (chunk: Buffer) => stdout.push(chunk));
 	child.stderr?.on("data", (chunk: Buffer) => stderr.push(chunk));
 	child.stdin?.on("error", () => undefined);
@@ -127,15 +141,18 @@ export function runWithValue(input: VaultRunInput, baseEnv: NodeJS.ProcessEnv = 
 	const done = new Promise<VaultRunResult>((resolve) => {
 		const finish = (exitCode: number | null, signal: NodeJS.Signals | null) => {
 			unlink();
-			const out = bounded(scrubOutput(stdout.raw(), input.value));
-			const err = bounded(scrubOutput(stderr.raw(), input.value));
+			const out = stdout.collect();
+			const err = stderr.collect();
 			resolve({
 				exitCode,
 				signal,
 				stdout: out.text,
 				stderr: err.text,
-				truncated: out.truncated || err.truncated || stdout.cut() || stderr.cut(),
-				...(input.keepRawStdout ? { rawStdout: stdout.raw() } : {}),
+				stdoutCut: out.cut,
+				stderrCut: err.cut,
+				stdoutCapped: out.capped,
+				stderrCapped: err.capped,
+				rawStdout: stdout.raw,
 			});
 		};
 		child.on("close", finish);

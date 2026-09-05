@@ -518,7 +518,8 @@ cover an askpass child.
 
 - Capability id `vault` in `GATED_CAPABILITY_IDS`; guidance in `src/shared/capabilities.ts`.
 - `src/mcp/vault/`: `vault_search`, `vault_run` with env, stdin, and file shapes, a collect call,
-  and a capture mode that creates an entry (Q3, Q7). Bounded by `AGENT_WAIT_BUDGET_MS`.
+  and a capture mode that creates an entry (Q3, Q7). Bounded by `VAULT_ROUTE_WAIT_CAP_MS`, which
+  is what a gateway loopback hold takes; `AGENT_WAIT_BUDGET_MS` bounds a Router-held agent turn.
 - The MCP server spawns the child, scrubs stdout and stderr for the raw bytes, holds output for
   collect, deletes a file shape on exit.
 - A tool that gives up on a pending request withdraws it through `/vault/withdraw`, as the helper

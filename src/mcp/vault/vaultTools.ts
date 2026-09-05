@@ -166,17 +166,18 @@ function refusalOf(error: unknown, action: string): VaultToolAnswer {
 }
 
 async function finish(spec: RunSpec, result: VaultRunResult, deps: VaultToolDeps): Promise<VaultToolAnswer> {
+	const truncated = result.stdoutCut || result.stderrCut || result.stdoutCapped || result.stderrCapped;
 	const base = {
 		outcome: "ran",
 		exitCode: result.exitCode,
 		...(result.signal ? { signal: result.signal } : {}),
 		stderr: result.stderr,
-		...(result.truncated ? { truncated: true } : {}),
+		...(truncated ? { truncated: true } : {}),
 	};
 	if (!spec.capture) return { ...base, stdout: result.stdout };
-	// A cut output would store a piece of the secret as the whole of it.
-	if (result.truncated) return { ...base, captured: null, reason: "stdout was cut, so nothing was stored" };
-	const raw = result.rawStdout ?? "";
+	// A cut stdout would store a piece of the secret as the whole of it; a noisy stderr would not.
+	if (result.stdoutCut) return { ...base, captured: null, reason: "stdout was cut, so nothing was stored" };
+	const raw = result.rawStdout();
 	// The gateway trims one trailing newline; the value is judged as it will be stored.
 	const stored = raw.endsWith("\n") ? raw.slice(0, -1) : raw;
 	if (!stored) return { ...base, captured: null, reason: "the command wrote nothing to stdout" };
@@ -236,7 +237,7 @@ export function createVaultTools(deps: VaultToolDeps) {
 			return { outcome: "pending", jobId: requestId, deadlineAt: parsed.data.deadlineAt };
 		}
 		jobs.delete(jobId);
-		const handle = deps.run({ ...spec, value: parsed.data.value, keepRawStdout: !!spec.capture });
+		const handle = deps.run({ ...spec, value: parsed.data.value });
 		// The job keeps the id the caller already holds; only a fresh run mints one.
 		return settle(jobId || crypto.randomUUID(), spec, handle, deadlineAt);
 	}
@@ -273,7 +274,7 @@ export function createVaultTools(deps: VaultToolDeps) {
 			const deadlineAt = deps.now() + waitMs;
 			if (!args.entryId) {
 				if (!spec.capture) return { outcome: "refused", reason: "name an entryId, or capture" };
-				return settle(crypto.randomUUID(), spec, deps.run({ ...spec, keepRawStdout: true }), deadlineAt);
+				return settle(crypto.randomUUID(), spec, deps.run(spec), deadlineAt);
 			}
 			let answer: unknown;
 			try {

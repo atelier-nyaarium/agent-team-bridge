@@ -8,6 +8,7 @@ import {
 	scrubOutput,
 	type VaultRunHandle,
 	type VaultRunResult,
+	WITHHELD,
 } from "../mcp/vault/vaultRun.js";
 import { createVaultTools, type VaultPost } from "../mcp/vault/vaultTools.js";
 
@@ -43,7 +44,7 @@ function fakeRun() {
 			done,
 			kill: () => {
 				slot.killed = true;
-				slot.resolve({ exitCode: null, signal: "SIGTERM", stdout: "", stderr: "", truncated: false });
+				slot.resolve(exited("", { signal: "SIGTERM" }));
 			},
 		};
 		return handle;
@@ -58,12 +59,17 @@ const tools = (answers: Record<string, unknown[]>, run: typeof runWithValue = ru
 const approved = { outcome: "approved", decision: "once", value: SECRET };
 const pending = (requestId: string) => ({ outcome: "pending", requestId, deadlineAt: 9_000 });
 const httpError = (status: number, body: unknown) => new Error(`HTTP ${status}: ${JSON.stringify(body)}`);
-const exited = (stdout: string): VaultRunResult => ({
+const exited = (stdout: string, over: Partial<VaultRunResult> = {}): VaultRunResult => ({
 	exitCode: 0,
 	signal: null,
 	stdout,
 	stderr: "",
-	truncated: false,
+	stdoutCut: false,
+	stderrCut: false,
+	stdoutCapped: false,
+	stderrCapped: false,
+	rawStdout: () => stdout,
+	...over,
 });
 
 describe("the child run", () => {
@@ -108,7 +114,7 @@ describe("the child run", () => {
 
 	it("caps the output after the scrub, so a value near a cut never leaks a piece", async () => {
 		const capped = await runWithValue({ command: "head -c 100000 /dev/zero | tr '\\0' x", shape: "env" }).done;
-		expect(capped.truncated).toBe(true);
+		expect(capped).toMatchObject({ stdoutCapped: true, stdoutCut: false });
 		expect(capped.stdout.length).toBe(64 * 1024);
 
 		const straddling = await runWithValue({
@@ -116,26 +122,46 @@ describe("the child run", () => {
 			shape: "env",
 			value: SECRET,
 		}).done;
-		expect(straddling.truncated).toBe(true);
+		expect(straddling.stdoutCut).toBe(true);
 		expect(straddling.stdout).not.toContain(SECRET.slice(0, 4));
+		expect(straddling.rawStdout()).not.toContain(SECRET.slice(0, 4));
 	});
 
-	it("keeps the raw stdout only when asked, for a capture", async () => {
-		const kept = await runWithValue({
-			command: 'printf %s "$VAULT_VALUE-x"',
+	it("drops a multibyte value's whole byte length at a cut, and a noisy stderr is its own fact", async () => {
+		const wide = "パスワード";
+		const straddling = await runWithValue({
+			command: `head -c 1048570 /dev/zero | tr '\\0' x; printf %s "$VAULT_VALUE"`,
 			shape: "env",
-			value: SECRET,
-			keepRawStdout: true,
+			value: wide,
 		}).done;
-		expect(kept).toMatchObject({ stdout: "[vault]-x", rawStdout: `${SECRET}-x` });
-		const plain = await runWithValue({ command: "printf y", shape: "env", value: SECRET }).done;
-		expect(plain).not.toHaveProperty("rawStdout");
+		expect(straddling.stdoutCut).toBe(true);
+		expect(straddling.stdout).not.toContain(wide.slice(0, 1));
+
+		const noisy = await runWithValue({ command: "head -c 100000 /dev/zero | tr '\\0' x >&2", shape: "env" }).done;
+		expect(noisy).toMatchObject({ stderrCapped: true, stdoutCut: false, stdoutCapped: false });
+	});
+
+	it("hands the raw stdout back for a capture, without a flag to forget", async () => {
+		const run = await runWithValue({ command: 'printf %s "$VAULT_VALUE-x"', shape: "env", value: SECRET }).done;
+		expect(run.stdout).toBe("[vault]-x");
+		expect(run.rawStdout()).toBe(`${SECRET}-x`);
 	});
 
 	it("scrubs every occurrence, with newlines and metacharacters, and leaves other text alone", () => {
 		const odd = "a.b*c\nd$";
 		expect(scrubOutput(`x${odd}y${odd}`, odd)).toBe("x[vault]y[vault]");
 		expect(scrubOutput("plain", undefined)).toBe("plain");
+	});
+
+	it("withholds a stream whose value would survive inside the mark", async () => {
+		// "au" sits inside "[vault]", so scrubbing alone would leave it readable.
+		const inside = await runWithValue({ command: 'printf "x%sy" "$VAULT_VALUE"', shape: "env", value: "au" }).done;
+		expect(inside.stdout).toBe(WITHHELD);
+		expect(inside.rawStdout()).toBe("xauy");
+
+		const ordinary = await runWithValue({ command: 'printf "x%sy" "$VAULT_VALUE"', shape: "env", value: SECRET })
+			.done;
+		expect(ordinary.stdout).toBe("x[vault]y");
 	});
 });
 
@@ -261,7 +287,11 @@ describe("the vault tools", () => {
 
 	it("capture stores the raw stdout as a new entry and answers its id in place of the output", async () => {
 		const t = tools({
-			"/vault/capture": [{ id: "minted" }, httpError(409, { error: "an entry with that title exists" })],
+			"/vault/capture": [
+				{ id: "minted" },
+				httpError(409, { error: "an entry with that title exists" }),
+				{ id: "from-noise" },
+			],
 			"/vault/use": [approved],
 		});
 		const captured = await t.tools.run({
@@ -291,18 +321,24 @@ describe("the vault tools", () => {
 		expect(await t.tools.run({ command: "printf '\\n'", capture: { publicTitle: "empty" } })).toMatchObject({
 			captured: null,
 		});
-		// A cut output would store a piece of a secret as the whole of it.
+		// A cut stdout would store a piece of a secret as the whole of it.
 		const cut = await t.tools.run({
 			command: "head -c 1100000 /dev/zero | tr '\\0' x",
 			capture: { publicTitle: "cut" },
 		});
 		expect(cut).toMatchObject({ truncated: true, captured: null });
+		// A noisy stderr is not a reason to drop a complete stdout.
+		const noisy = await t.tools.run({
+			command: "printf 'kept\\n'; head -c 100000 /dev/zero | tr '\\0' x >&2",
+			capture: { publicTitle: "noisy" },
+		});
+		expect(noisy).toMatchObject({ truncated: true, captured: expect.any(String) });
 		expect(
 			await t.tools.run({ command: "head -c 9000 /dev/zero | tr '\\0' x", capture: { publicTitle: "big" } }),
 		).toMatchObject({
 			captured: null,
 		});
-		expect(t.posted.filter((p) => p.path === "/vault/capture")).toHaveLength(2);
+		expect(t.posted.filter((p) => p.path === "/vault/capture")).toHaveLength(3);
 		expect(await t.tools.run({ command: "true" })).toMatchObject({ outcome: "refused" });
 	});
 
