@@ -514,7 +514,7 @@ process with the token can withdraw a helper request, which denies one prompt an
 a helper hold under sudo runs to the request's deadline, since sudo's password timeout does not
 cover an askpass child.
 
-## Phase 5 - MCP tools
+## Phase 5 - MCP tools ✅
 
 - Capability id `vault` in `GATED_CAPABILITY_IDS`; guidance in `src/shared/capabilities.ts`.
 - `src/mcp/vault/`: `vault_search`, `vault_run` with env, stdin, and file shapes, a collect call,
@@ -524,6 +524,34 @@ cover an askpass child.
   collect, deletes a file shape on exit.
 - A tool that gives up on a pending request withdraws it through `/vault/withdraw`, as the helper
   does, so the phone's row is retracted with it.
+
+Shipped beyond the bullets: four tools, not three. `vault_collect` continues a job and
+`vault_withdraw` gives one up, since a run has two ways to outlive its wait: the owner has not
+answered (`pending`) or the command has not exited (`running`). A job keeps one id across both.
+Two collects on one job share an answer rather than starting the command twice. The tools register
+only when the console reports the capability and the session holds a binding token, since the
+routes demand one. `VAULT_INSTRUCTIONS` is served through `switchboard_capabilities` beside
+whatever the phone's manifest says, so the always-on instruction block stays short.
+
+The child runs in its own process group, so a stop reaches what the shell started, and Switchboard's
+own secrets are scrubbed from its environment. Loopback posts never retry: a retried long poll
+would open a second request on the phone. A repeated run instead joins the request still open for
+the same asker, entry, and operation, which is `requests.find`; both waiters take the value that
+one approval covers, while a typed value still goes to one collector. A caller that walks away
+releases its wait without consuming the answer, and `MAX_OPEN_PER_TARGET` caps what one asker can
+put on the phone at once. Revoking a helper token ends its grants and open requests.
+
+The output pipeline is one pass per stream: collect raw bytes to a ceiling, drop the value's byte
+length at a cut, scrub, then cap. A value short enough to sit inside `[vault]` would survive the
+scrub, so that stream is withheld whole. The cut and the cap are separate facts, so a noisy stderr
+no longer costs a good capture, and a capture whose stdout was cut stores nothing. The capture road
+reads the raw stdout through the same buffer, so no flag decides whether the field exists.
+
+Known and left: a same-uid process can read any shape, through `/proc/<pid>/environ` or the file,
+which is the plan's boundary and not this code's. Jobs live in the MCP process, so a lost tool
+result is not recoverable. A peer that withdraws a joined request leaves the other waiter reading
+"the owner did not authorize", which is untrue but harmless, and distinguishing it would cut
+against the rule that a denial and a timeout read alike.
 
 ### Bug Classes
 
@@ -628,3 +656,25 @@ Collected after Phase 4.
 - `PlaybackOpsTest.enqueueOrderSurvivesPause` flaked once more in the Kotlin gate, clean on rerun.
 - `bun build` under `--target node` bundles `zod` into the helper for one schema parse; the helper
   is 0.29 MB where a hand parse would be a few lines.
+
+Collected after Phase 5.
+
+- Four audit agents in a row read `runWithValue` and disagreed about whether a value could survive
+  a cut. The mechanism was right twice and wrong twice, and no reader could tell which without
+  running it. What made it unreadable was one flag (`truncated`) standing for two facts and one
+  option (`keepRawStdout`) deciding whether a field existed. Both are gone, but the lesson is that
+  a security invariant spread over a flag, an option, and three call sites cannot be reviewed.
+- `routerPost` retries four times on a network error, which is right for a short call and wrong for
+  a long poll. The vault tools opt out with `retries: 0` per call. A `routerPoll` that never
+  retries would say it once instead of at every call site.
+- The `VaultRunResult` type carries `rawStdout` for one caller. Nothing stops a future answer from
+  spreading the whole result into a tool reply, which would publish it. A type that cannot be
+  spread, or a capture road that never sees the result object, would close that.
+- Testing a child process means real `sleep` and real byte counts. The unit file spawns about a
+  dozen shells and writes a megabyte twice; it runs in under a second today, and it is the first
+  thing that will get slow.
+- `scrubChildEnv` lives in `mcp/devcontainer/codexTargets.ts` and is now used by the vault runner,
+  which has nothing to do with devcontainers or Codex. It wants to be in `shared/`.
+- The gateway's `settle` decides four things in eight lines: pending, refused, the once-only typed
+  value, and the shared entry approval. It reads as a chain of guards rather than a stated policy,
+  and the joined-waiter rule is only understandable next to `find`.

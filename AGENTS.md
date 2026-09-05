@@ -38,7 +38,7 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
 - `src/gateway/presence.ts` / `readAnchors.ts` / `hostOpCoordinator.ts` - presence, read anchors, host RPC correlation
 - `src/gateway/router/boardClient.ts` - Router-held task board client
 - `src/gateway/router/vaultClient.ts` - vault sealing/opening, delta-held Router list, approval-gated values, and the gateway write
-- `src/gateway/vault/decisions.ts` / `requests.ts` / `helperTokens.ts` / `vaultRoutes.ts` - grants, operation shapes, one-shot request rows, helper tokens, and loopback routes
+- `src/gateway/vault/decisions.ts` / `requests.ts` / `helperTokens.ts` / `vaultRoutes.ts` - grants and operation shapes; request rows that settle once, admit a joining caller, and cap per asker; helper tokens; loopback routes
 - `src/gateway/compose/composeVault.ts` - vault client, decisions, requests, routes, and console operations
 - `src/gateway/boardAwareness.ts` - board awareness recipients and net-change classification
 - `src/gateway/awarenessBank.ts` - subscriber state, deadlines, and liveness reads
