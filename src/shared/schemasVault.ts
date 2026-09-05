@@ -179,6 +179,7 @@ export const VaultCaptureRequestSchema = z.object({
 	publicDescription: z.string().max(2048).optional(),
 	value: z.string().min(1).max(MAX_VAULT_CAPTURE_CHARS),
 });
+// Optional until 2026-09-19 for helpers installed before 8.7.3; then require `asker` here. The request arms keep it optional: a session's own run has none.
 export const VaultAskpassRequestSchema = z.object({ cmdline: operation, waitMs, asker });
 export const VaultApprovedDecisionSchema = z.enum(["once", "window", "session"]);
 /** What use, collect, and askpass answer: pending hands back the request; deny and timeout both refuse. */

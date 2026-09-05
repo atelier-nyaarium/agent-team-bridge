@@ -394,6 +394,8 @@ Clock drift breaks signed proofs and invite expiry.
 
 New wire fields OPTIONAL at the gateway and tolerated by both peers. Deploy gateway first, then push the version bump. The plugin can update before the other components.
 
+A field that is optional only to cross that gap, and should be required once every part has updated, carries a comment above it naming the date it becomes required, about two weeks out. A field that is optional by meaning carries no date.
+
 That order covers fields the gateway EMITS. A change to what the Router ANSWERS deploys the Router first, since a gateway reads the answer it is given.
 
 ### Plugin
