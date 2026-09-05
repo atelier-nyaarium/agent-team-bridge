@@ -713,7 +713,7 @@ mailbox with no console socket open.
 
 ## Phase 2 - Kill and rewrite ✅
 
-### Slices, as shipped ✅
+### Slices, as shipped (`af705600`) ✅
 
 **Kill:** About 23,000 lines of tests removed. The twelve fake helpers and their suites
 (websocket, console seam and delivery, routes, codex-agent, codex-persistence, codex-relay,
