@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
@@ -19,6 +20,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -27,6 +29,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
@@ -50,10 +53,10 @@ fun VaultEntryDialog(
 ) {
 	val revision by repo.vault.revision
 	val existing = remember(revision, entryId) { entryId?.let { repo.vaultOps.view(it) } }
-	if (entryId != null && existing == null) {
-		onClose()
-		return
-	}
+	val gone = entryId != null && existing == null
+	// An entry deleted elsewhere closes the editor after this frame.
+	LaunchedEffect(gone) { if (gone) onClose() }
+	if (gone) return
 	val activity = LocalContext.current as? FragmentActivity
 	val scope = rememberCoroutineScope()
 	var publicTitle by remember(entryId) { mutableStateOf(existing?.publicTitle.orEmpty()) }
@@ -137,6 +140,7 @@ fun VaultEntryDialog(
 							value = held,
 							onValueChange = { value = it },
 							label = { Text("Value") },
+							keyboardOptions = SECRET_KEYBOARD,
 							visualTransformation = if (shown) VisualTransformation.None else PasswordVisualTransformation(),
 							textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
 							trailingIcon = {
@@ -147,7 +151,7 @@ fun VaultEntryDialog(
 					}
 					if (existing?.gatewaysUnreadable == true && gateways == null) {
 						Text(
-							"The gateway scope was sealed by a key this phone lacks. Saving keeps it.",
+							"Fields this phone cannot open stay as they are when saved.",
 							style = MaterialTheme.typography.labelSmall,
 							color = MaterialTheme.colorScheme.error,
 						)
@@ -158,12 +162,13 @@ fun VaultEntryDialog(
 						verticalArrangement = Arrangement.spacedBy(7.dp),
 						modifier = Modifier.fillMaxWidth(),
 					) {
-						ScopeChip("Every gateway", gateways == null) { gateways = null }
+						// Every gateway is the one chip that clears the scope; an empty scope admits none.
+						ScopeChip("Every gateway", gateways == null && existing?.gatewaysUnreadable != true) { gateways = null }
 						for (id in (state.admittedGateways + gateways.orEmpty()).distinct().sorted()) {
 							val on = gateways?.contains(id) == true
 							ScopeChip(id, on) {
 								val current = gateways.orEmpty()
-								gateways = if (on) (current - id).ifEmpty { null } else current + id
+								gateways = if (on) current - id else current + id
 							}
 						}
 					}
@@ -180,7 +185,6 @@ fun VaultEntryDialog(
 							enabled = titled && !busy,
 							onClick = hapticClick {
 								busy = true
-								val keepSealed = existing?.gatewaysUnreadable == true && gateways == null
 								// Changing or clearing a stored value passes the gate, as a reveal does.
 								val touchesValue = existing?.hasValue == true && value != null
 								scope.launch {
@@ -197,7 +201,7 @@ fun VaultEntryDialog(
 												privateTitle = privateTitle,
 												privateDescription = privateDescription,
 												value = value,
-												gateways = if (keepSealed) existing?.gateways else gateways,
+												gateways = gateways,
 											),
 										),
 									)
@@ -228,6 +232,9 @@ fun VaultEntryDialog(
 		)
 	}
 }
+
+/** No suggestions and no autocorrect over a secret. */
+internal val SECRET_KEYBOARD = KeyboardOptions(keyboardType = KeyboardType.Password, autoCorrectEnabled = false)
 
 @Composable
 private fun ScopeChip(label: String, on: Boolean, onClick: () -> Unit) {

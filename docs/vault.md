@@ -50,8 +50,8 @@ and the delta list are in `docs/federation.md` under Owner state.
   conversation for the helper. The row is volatile: a restart drops it, because the waiting answer
   lived in the process that died.
 - The `vault_answer` value op carries the decision and, for a typed request, the value sealed to the
-  request id. Deny and the deadline refuse alike. An unknown or settled request answers
-  `request expired`.
+  request id. A typed answer settles as `once` whatever tier was named. Deny and the deadline refuse
+  alike. An unknown or settled request answers `request expired`.
 - An approval on an entry request also records the grant. The answer waits for its collector until
   the deadline, and the first collector takes it.
 - A session's end refuses its open requests and drops its grants.
@@ -86,8 +86,12 @@ and the delta list are in `docs/federation.md` under Owner state.
 - **`VaultSealing` is the phone's only door:** it seals and opens under `vaultAadKind`, the twin of
   the gateway client. A typed value seals under the request id.
 - `VaultManager` holds the Router's entries under one store key. A full list replaces, a delta
-  merges, tombstones stay hidden, and a Router revision below the held one asks for a full list
-  next. A write's own entry lands at once; the held revision advances only when nothing was skipped.
+  merges, tombstones stay hidden, and a delta from a Router below the held revision asks for a full
+  list next; a full list below it is a late answer and is dropped. A write's own entry lands at
+  once unless a newer one is held; the held revision advances only when nothing was skipped. A wipe
+  bumps a generation, so work begun before it lands nothing after.
+- **A save keeps every field this phone cannot open.** The gateway chips never widen a scope by
+  emptying it; only Every gateway clears it.
 - `VaultRouterWriter` posts `vault_list`, `vault_put`, and `vault_delete` as signed owner ops.
 - **The `vault` plane carries the revision:** the Router pushes it on every applied write and
   reports it in `planes_read`. The phone answers a bump with a list after its held revision, and

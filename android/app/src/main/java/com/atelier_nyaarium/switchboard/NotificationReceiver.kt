@@ -29,6 +29,8 @@ class NotificationReceiver : BroadcastReceiver() {
 			SttsTransport.ACTION_SKIP -> return repo.command { playback.skipPlayback() }
 		}
 		intent.getStringExtra(SwitchboardService.EXTRA_VAULT_REQUEST)?.let { requestId ->
+			// A notification outliving the plugin answers nothing.
+			if (!com.atelier_nyaarium.switchboard.plugins.Plugins.get(context).isActive("vault")) return
 			val decision = when (intent.action) {
 				ACTION_VAULT_ONCE -> com.atelier_nyaarium.switchboard.vault.VAULT_DECISION_ONCE
 				ACTION_VAULT_WINDOW -> com.atelier_nyaarium.switchboard.vault.VAULT_DECISION_WINDOW

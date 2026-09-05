@@ -119,7 +119,8 @@ describe("vault requests", () => {
 		expect(requests.answer(requestId, "once", envelope("typed:other"))).toMatchObject({ ok: false });
 		expect(requests.collect(requestId, "host.alice")).toBeUndefined();
 		expect(requests.collect(requestId, "helper.h1")?.request.requestId).toBe(requestId);
-		expect(requests.answer(requestId, "once", envelope(`typed:${requestId}`))).toEqual({ ok: true });
+		// A typed value is once, whatever tier the phone named.
+		expect(requests.answer(requestId, "session", envelope(`typed:${requestId}`))).toEqual({ ok: true });
 		await expect(typed.answer).resolves.toEqual({ kind: "approved", decision: "once", typedValue: "hunter2" });
 		// Typed values never grant.
 		expect(approved).toEqual([]);

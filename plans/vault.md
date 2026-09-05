@@ -462,7 +462,15 @@ prompts (Q5). A notification button taken after the gate was set opens the sheet
 answering. The phone's manager and ops read the system clock and mint UUIDs like the board's; R9
 binds the gateway and Router. The vault's store key writes with `apply`, since the Router holds the
 truth and a request lost to a crash expires on the gateway. A request that arrives while the plugin
-is off is dropped like any unclaimed action, and pending ones keep their notifications.
+is off is dropped like any unclaimed action; switching the plugin off clears the pending ones and
+their notifications, and a notification that outlives the plugin answers nothing. A late write
+answer never replaces a newer held entry, a full list below the held revision is dropped, and lists
+run one at a time. Work begun before a wipe lands nothing after it. A save keeps every field this
+phone cannot open, and the gateway chips never widen a scope by emptying it: only Every gateway
+clears it. A typed value saved as an entry is scoped to the gateway that asked, and the gateway
+settles a typed answer as once whatever tier the phone named. The secret fields use the password
+keyboard. Known and left: a second admitted phone keeps a request the first one answered until its
+deadline, and a phone clock ahead of the gateway drops a request early.
 
 ## Phase 4 - Askpass helper
 

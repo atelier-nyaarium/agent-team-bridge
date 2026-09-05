@@ -9,6 +9,7 @@ import com.atelier_nyaarium.switchboard.crypto.VAULT_PUBLIC_TITLE_KIND
 import com.atelier_nyaarium.switchboard.crypto.VAULT_TYPED_KIND
 import com.atelier_nyaarium.switchboard.crypto.VAULT_VALUE_KIND
 import com.atelier_nyaarium.switchboard.proto.ConsoleOp
+import com.atelier_nyaarium.switchboard.proto.ContentEnvelope
 import com.atelier_nyaarium.switchboard.proto.ConsoleVaultAnswerResult
 import com.atelier_nyaarium.switchboard.proto.ConsoleVaultGrantsResult
 import com.atelier_nyaarium.switchboard.proto.ConsoleVaultRevokeResult
@@ -34,6 +35,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.add
 
@@ -79,6 +82,9 @@ internal class VaultOps(
 
 	@Volatile private var unlockedAt = 0L
 
+	// One list in flight, so answers land in order.
+	private val refreshMutex = Mutex()
+
 	/** A plane bump is acknowledged before the list lands, so a failed list retries here. */
 	fun refresh() {
 		repoScope.launch {
@@ -91,14 +97,15 @@ internal class VaultOps(
 	}
 
 	/** Lists after the held revision, and again from zero when the Router fell behind. */
-	suspend fun refreshNow(): Boolean {
+	suspend fun refreshNow(): Boolean = refreshMutex.withLock {
 		manager.sweepRequests()
-		val first = list(manager.routerRevision.takeIf { it > 0 }) ?: return false
-		if (!manager.applyList(first)) {
-			val full = list(null) ?: return false
-			manager.applyList(full)
-		}
-		return true
+		val generation = manager.generation
+		val since = manager.routerRevision.takeIf { it > 0 }
+		val first = list(since) ?: return false
+		if (manager.applyList(first, generation = generation)) return true
+		if (since == null) return false
+		val full = list(null) ?: return false
+		manager.applyList(full, generation = generation)
 	}
 
 	private suspend fun list(since: Long?) =
@@ -120,25 +127,45 @@ internal class VaultOps(
 		return manager.stored(id)?.let { manager.openValue(it, sealing) }
 	}
 
+	/** A field this phone cannot open stays sealed as it was when the draft leaves it blank. */
 	suspend fun save(draft: VaultDraft): VaultSaveOutcome {
 		val sealing = collaborators.sealing() ?: return VaultSaveOutcome.Unreachable
 		val existing = draft.id?.let { manager.stored(it) }
+		val opened = existing?.let { manager.view(it, sealing) }
 		val id = draft.id ?: newEntryId()
-		val seal = { text: String, kind: String -> text.trim().takeIf { it.isNotEmpty() }?.let { sealing.seal(it, kind, id) } }
+		val generation = manager.generation
+		val seal = { text: String, kind: String, held: ContentEnvelope?, readable: Boolean ->
+			val trimmed = text.trim()
+			if (trimmed.isEmpty() && held != null && !readable) held else trimmed.takeIf { it.isNotEmpty() }?.let { sealing.seal(it, kind, id) }
+		}
 		val value = when {
 			draft.value == null -> existing?.sealed?.value
 			draft.value.isEmpty() -> null
 			else -> sealing.seal(draft.value, VAULT_VALUE_KIND, id) ?: return VaultSaveOutcome.Unreachable
 		}
-		val gateways = draft.gateways?.let { ids ->
-			val text = buildJsonArray { ids.forEach { add(it) } }.toString()
-			sealing.seal(text, VAULT_GATEWAYS_KIND, id) ?: return VaultSaveOutcome.Unreachable
+		val gateways = when {
+			draft.gateways != null -> {
+				val text = buildJsonArray { draft.gateways.forEach { add(it) } }.toString()
+				sealing.seal(text, VAULT_GATEWAYS_KIND, id) ?: return VaultSaveOutcome.Unreachable
+			}
+			opened?.gatewaysUnreadable == true -> existing?.sealed?.gateways
+			else -> null
 		}
 		val sealed = VaultEntrySealed(
-			publicTitle = seal(draft.publicTitle, VAULT_PUBLIC_TITLE_KIND),
-			publicDescription = seal(draft.publicDescription, VAULT_PUBLIC_DESCRIPTION_KIND),
-			privateTitle = seal(draft.privateTitle, VAULT_PRIVATE_TITLE_KIND),
-			privateDescription = seal(draft.privateDescription, VAULT_PRIVATE_DESCRIPTION_KIND),
+			publicTitle = seal(draft.publicTitle, VAULT_PUBLIC_TITLE_KIND, existing?.sealed?.publicTitle, opened?.publicTitle != null),
+			publicDescription = seal(
+				draft.publicDescription,
+				VAULT_PUBLIC_DESCRIPTION_KIND,
+				existing?.sealed?.publicDescription,
+				opened?.publicDescription != null,
+			),
+			privateTitle = seal(draft.privateTitle, VAULT_PRIVATE_TITLE_KIND, existing?.sealed?.privateTitle, opened?.privateTitle != null),
+			privateDescription = seal(
+				draft.privateDescription,
+				VAULT_PRIVATE_DESCRIPTION_KIND,
+				existing?.sealed?.privateDescription,
+				opened?.privateDescription != null,
+			),
 			value = value,
 			gateways = gateways,
 		)
@@ -147,7 +174,7 @@ internal class VaultOps(
 		val result = runCatchingCancellable { collaborators.writer.put(put, newOpId()) }
 			.onFailure { DebugLog.log("Vault", "put failed: ${it.message?.take(80)}") }
 			.getOrNull() ?: return VaultSaveOutcome.Unreachable
-		result.entry?.let { manager.applyWrite(it, result.revision) }
+		result.entry?.let { manager.applyWrite(it, result.revision, generation = generation) }
 		return when (result.outcome) {
 			"applied" -> VaultSaveOutcome.Applied(id)
 			"conflict" -> VaultSaveOutcome.Conflict
@@ -157,10 +184,11 @@ internal class VaultOps(
 
 	suspend fun delete(id: String): VaultSaveOutcome {
 		val existing = manager.stored(id) ?: return VaultSaveOutcome.Refused("entry_missing")
+		val generation = manager.generation
 		val result = runCatchingCancellable { collaborators.writer.delete(id, existing.clear.revision, newOpId()) }
 			.onFailure { DebugLog.log("Vault", "delete failed: ${it.message?.take(80)}") }
 			.getOrNull() ?: return VaultSaveOutcome.Unreachable
-		result.entry?.let { manager.applyWrite(it, result.revision) }
+		result.entry?.let { manager.applyWrite(it, result.revision, generation = generation) }
 		return when (result.outcome) {
 			"applied" -> VaultSaveOutcome.Applied(id)
 			"conflict" -> VaultSaveOutcome.Conflict
@@ -235,6 +263,7 @@ internal class VaultOps(
 
 	suspend fun revoke(gatewayId: String, grantId: String): Boolean {
 		val client = collaborators.client ?: return false
+		if (gatewayId !in collaborators.admittedGateways()) return false
 		val result = runCatchingCancellable {
 			client.valueResult<ConsoleVaultRevokeResult>(client.sendValueOp(gatewayId, ConsoleOp.VaultRevoke(grantId)), "vault_revoke")
 		}.getOrNull() ?: return false

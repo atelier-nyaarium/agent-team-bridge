@@ -315,10 +315,12 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 		scope.launch {
 			val posted = mutableSetOf<String>()
 			repo.vault.pending.collect { pending ->
-				val ids = pending.mapTo(HashSet()) { it.requestId }
+				val ids = if (plugins.isActive("vault")) pending.mapTo(HashSet()) { it.requestId } else emptySet()
 				for (gone in posted - ids) notifications.cancelVaultRequest(gone)
 				posted.retainAll(ids)
-				for (request in pending) if (posted.add(request.requestId)) notifications.notifyVaultRequest(repo, request)
+				for (request in pending) {
+					if (request.requestId in ids && posted.add(request.requestId)) notifications.notifyVaultRequest(repo, request)
+				}
 			}
 		}
 	}

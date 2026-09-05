@@ -37,6 +37,7 @@ import androidx.fragment.app.FragmentActivity
 import com.atelier_nyaarium.switchboard.ChatRepository
 import com.atelier_nyaarium.switchboard.ChatState
 import com.atelier_nyaarium.switchboard.VaultDraft
+import com.atelier_nyaarium.switchboard.gatewayOf
 import com.atelier_nyaarium.switchboard.hapticClick
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -51,10 +52,9 @@ fun VaultRequestSheet(
 ) {
 	val pending by repo.vault.pending.collectAsState()
 	val request = pending.firstOrNull { it.requestId == requestId }
-	if (request == null) {
-		onClose()
-		return
-	}
+	// A request settled elsewhere closes the sheet after this frame.
+	LaunchedEffect(request == null) { if (request == null) onClose() }
+	if (request == null) return
 	val activity = LocalContext.current as? FragmentActivity
 	val scope = rememberCoroutineScope()
 	val revision by repo.vault.revision
@@ -65,13 +65,16 @@ fun VaultRequestSheet(
 	var saveTitle by remember(requestId) { mutableStateOf(request.shape) }
 	var busy by remember { mutableStateOf(false) }
 	var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+	// The ticker also retires the request once its deadline passes.
 	LaunchedEffect(requestId) {
 		while (true) {
 			delay(15_000)
 			now = System.currentTimeMillis()
+			repo.vault.sweepRequests(now)
 		}
 	}
 	val typedRequest = request.entryId == null
+	val expired = request.deadlineAt <= now
 
 	fun answer(decision: String) {
 		busy = true
@@ -85,7 +88,9 @@ fun VaultRequestSheet(
 			val value = if (approving && typedRequest) typed else null
 			val ok = repo.vaultOps.answer(request, decision, value)
 			if (ok && approving && typedRequest && saveAsEntry && saveTitle.isNotBlank()) {
-				repo.vaultOps.save(VaultDraft(publicTitle = saveTitle, value = typed))
+				// The saved entry is scoped to the gateway that asked.
+				val gateway = runCatching { gatewayOf(request.team) }.getOrNull()
+				repo.vaultOps.save(VaultDraft(publicTitle = saveTitle, value = typed, gateways = listOfNotNull(gateway)))
 			}
 			busy = false
 			if (ok) onClose()
@@ -126,6 +131,7 @@ fun VaultRequestSheet(
 						onValueChange = { typed = it },
 						singleLine = true,
 						label = { Text("Value") },
+						keyboardOptions = SECRET_KEYBOARD,
 						visualTransformation = if (shown) VisualTransformation.None else PasswordVisualTransformation(),
 						trailingIcon = { TextButton(onClick = { shown = !shown }) { Text(if (shown) "Hide" else "Show") } },
 						modifier = Modifier.fillMaxWidth(),
@@ -159,15 +165,16 @@ fun VaultRequestSheet(
 					verticalArrangement = Arrangement.spacedBy(8.dp),
 					modifier = Modifier.fillMaxWidth(),
 				) {
+					val open = !busy && !expired
 					OutlinedButton(onClick = hapticClick { answer(VAULT_DECISION_DENY) }, enabled = !busy) { Text("Deny") }
 					if (typedRequest) {
-						Button(onClick = hapticClick { answer(VAULT_DECISION_ONCE) }, enabled = !busy && typed.isNotEmpty()) {
+						Button(onClick = hapticClick { answer(VAULT_DECISION_ONCE) }, enabled = open && typed.isNotEmpty()) {
 							Text("Send once")
 						}
 					} else {
-						Button(onClick = hapticClick { answer(VAULT_DECISION_ONCE) }, enabled = !busy) { Text("Once") }
-						Button(onClick = hapticClick { answer(VAULT_DECISION_WINDOW) }, enabled = !busy) { Text("30 minutes") }
-						Button(onClick = hapticClick { answer(VAULT_DECISION_SESSION) }, enabled = !busy) { Text("Whole session") }
+						Button(onClick = hapticClick { answer(VAULT_DECISION_ONCE) }, enabled = open) { Text("Once") }
+						Button(onClick = hapticClick { answer(VAULT_DECISION_WINDOW) }, enabled = open) { Text("30 minutes") }
+						Button(onClick = hapticClick { answer(VAULT_DECISION_SESSION) }, enabled = open) { Text("Whole session") }
 					}
 				}
 			}

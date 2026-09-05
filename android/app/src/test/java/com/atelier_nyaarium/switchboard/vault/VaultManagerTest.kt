@@ -93,6 +93,35 @@ class VaultManagerTest {
 	}
 
 	@Test
+	fun aLateAnswerNeverRollsBackWhatADeltaAlreadyLanded() {
+		val vault = VaultManager(FakeStore())
+		vault.applyList(list(1L, 0L, entry("a")))
+		vault.applyList(list(3L, 1L, entry("a", revision = 3L, changedAt = 3L)))
+		// The phone's own write at revision 2 answers after the delta that superseded it.
+		vault.applyWrite(entry("a", revision = 2L, changedAt = 2L), 2L)
+		assertEquals(3L, vault.stored("a")!!.clear.revision)
+		// A full list older than the held revision is a late answer too.
+		assertFalse(vault.applyList(list(2L, 0L, entry("a", revision = 2L, changedAt = 2L))))
+		assertEquals(3L, vault.routerRevision)
+	}
+
+	@Test
+	fun workBegunBeforeAWipeLandsNothingAfterIt() {
+		val vault = VaultManager(FakeStore())
+		val generation = vault.generation
+		vault.addRequest("dom.gw.host.alice", entryRequest("r1", 10_000L), now = 1_000L)
+		vault.wipe()
+		assertFalse(vault.applyList(list(1L, 0L, entry("a")), generation = generation))
+		vault.applyWrite(entry("b"), 1L, generation = generation)
+		assertTrue(vault.live().isEmpty())
+		assertTrue(vault.pending.value.isEmpty())
+		assertTrue(vault.applyList(list(1L, 0L, entry("a"))))
+		vault.addRequest("dom.gw.host.alice", entryRequest("r2", 10_000L), now = 1_000L)
+		vault.clearRequests()
+		assertTrue(vault.pending.value.isEmpty())
+	}
+
+	@Test
 	fun viewsOpenEveryFieldButTheValueAndFlagAScopeThisPhoneCannotRead() {
 		val vault = VaultManager(FakeStore())
 		val open = sealing()

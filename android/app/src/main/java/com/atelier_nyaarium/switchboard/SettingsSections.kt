@@ -74,6 +74,7 @@ internal fun PluginsSettings(plugins: PluginManager, repo: ChatRepository) {
 				onCheckedChange = { on ->
 					status = plugins.setEnabled(p.id, on) ?: ""
 					refresh++
+					if (!on && p.id == "vault") repo.vault.clearRequests()
 					// Report changes for the next session.
 					repo.command { reportEnabledPlugins() }
 				},

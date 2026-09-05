@@ -50,6 +50,10 @@ class VaultManager(private val store: VaultStore) : ClearsOnReprovision {
 	/** Active grants per gateway, as last read through `vault_grants`. */
 	val grants = mutableStateOf<Map<String, List<VaultGrant>>>(emptyMap())
 
+	/** Bumps on wipe, so work begun before it lands nothing after. */
+	@Volatile var generation: Long = 0L
+		private set
+
 	// Requests past their deadline do not come back.
 	private fun load(now: Long = System.currentTimeMillis()): VaultBlob {
 		val raw = store.loadVault() ?: return VaultBlob()
@@ -74,12 +78,16 @@ class VaultManager(private val store: VaultStore) : ClearsOnReprovision {
 
 	val routerRevision: Long get() = snapshot().revision
 
-	/** A full list replaces; a Router that fell behind gets asked for one next. */
-	fun applyList(result: VaultListResult, at: Long = System.currentTimeMillis()): Boolean {
+	/**
+	 * A full list replaces and a delta merges. A delta from a Router below the held revision asks for a
+	 * full list next; a full list below it is a late answer and is dropped.
+	 */
+	fun applyList(result: VaultListResult, at: Long = System.currentTimeMillis(), generation: Long = this.generation): Boolean {
 		synchronized(stateLock) {
+			if (generation != this.generation) return false
 			val current = blob
-			if (result.since != 0L && result.revision < current.revision) {
-				persist(current.copy(revision = 0L))
+			if (result.revision < current.revision) {
+				if (result.since != 0L) persist(current.copy(revision = 0L))
 				return false
 			}
 			val base = if (result.since == 0L) emptyMap() else current.stored.associateBy { it.clear.id }
@@ -95,12 +103,16 @@ class VaultManager(private val store: VaultStore) : ClearsOnReprovision {
 		}
 	}
 
-	/** Lands a write's own entry; the revision advances only when nothing was skipped. */
-	fun applyWrite(entry: VaultStoredEntry, revision: Long, at: Long = System.currentTimeMillis()) {
-		mutate { current ->
+	/** Lands a write's own entry unless a newer one is held; the revision advances only when nothing was skipped. */
+	fun applyWrite(entry: VaultStoredEntry, revision: Long, at: Long = System.currentTimeMillis(), generation: Long = this.generation) {
+		synchronized(stateLock) {
+			if (generation != this.generation) return
+			val current = blob
+			val held = current.stored.firstOrNull { it.clear.id == entry.clear.id }
+			if (held != null && held.clear.revision >= entry.clear.revision) return
 			val stored = (current.stored.associateBy { it.clear.id } + (entry.clear.id to entry)).values.sortedBy { it.clear.id }
 			val next = if (revision == current.revision + 1) revision else current.revision
-			current.copy(revision = next, stored = stored, lastRouterSyncAt = at)
+			persist(current.copy(revision = next, stored = stored, lastRouterSyncAt = at))
 		}
 	}
 
@@ -171,6 +183,11 @@ class VaultManager(private val store: VaultStore) : ClearsOnReprovision {
 		mutate { it.copy(requests = it.requests.filterNot { pending -> pending.team == team }) }
 	}
 
+	/** The plugin going off leaves nothing to answer. */
+	fun clearRequests() {
+		mutate { it.copy(requests = emptyList()) }
+	}
+
 	fun setGrants(gatewayId: String, list: List<VaultGrant>) {
 		grants.value = grants.value + (gatewayId to list)
 		revision.longValue++
@@ -179,6 +196,7 @@ class VaultManager(private val store: VaultStore) : ClearsOnReprovision {
 	/** Everything held, for a wipe or a re-provision. */
 	fun wipe() {
 		synchronized(stateLock) {
+			generation++
 			blob = VaultBlob()
 			memo = null
 			grants.value = emptyMap()

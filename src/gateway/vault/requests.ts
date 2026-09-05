@@ -116,7 +116,8 @@ export function createVaultRequests(deps: VaultRequestsDeps) {
 		if (entry.request.kind === "typed") {
 			const typedValue = value ? deps.openTyped(value, requestId) : null;
 			if (typedValue === null) return { ok: false, reason: "typed value unreadable" };
-			entry.settle({ kind: "approved", decision, typedValue });
+			// A typed value is handed over once; no grant outlives it.
+			entry.settle({ kind: "approved", decision: "once", typedValue });
 			return { ok: true };
 		}
 		deps.onApproved?.(entry.request, decision);
