@@ -44,7 +44,7 @@ function localIntake(options: { maxCachedAnswers?: number } = {}) {
 		getDomain: (domainId) =>
 			domainId === "domain" ? { ownerSignPub: owner.sign.pub, admissions: [admission], revocations: [] } : null,
 		push: () => true,
-		now: () => 1_000_000,
+		ambient: { now: () => 1_000_000 },
 		...options,
 	});
 	return { owner, consoleIdentity, intake };
@@ -190,7 +190,7 @@ describe("OwnerOp intake", () => {
 			ownerOf: () => set.domain.owner.sign.pub,
 			quotaFor: () =>
 				new DomainQuota({ dir: root, limitBytes: 10_000_000, statfs: () => ({ available: 10_000_000 }) }),
-			now: () => 1_000_000,
+			ambient: { now: () => 1_000_000 },
 		});
 		const store = registry.for(set.domain.id);
 		store.append("rows", { value: 1 });
@@ -206,7 +206,7 @@ describe("OwnerOp intake", () => {
 			ownerOf: () => set.domain.owner.sign.pub,
 			quotaFor: () =>
 				new DomainQuota({ dir: root, limitBytes: 10_000_000, statfs: () => ({ available: 10_000_000 }) }),
-			now: () => 1_000_000,
+			ambient: { now: () => 1_000_000 },
 		});
 		const inbox = new InboxService(reopened, {
 			signPub: set.router.identity.sign.pub,
@@ -220,7 +220,7 @@ describe("OwnerOp intake", () => {
 				revocations: [],
 			}),
 			push: () => true,
-			now: () => 1_000_000,
+			ambient: { now: () => 1_000_000 },
 		});
 		expect(
 			await intake.handle(

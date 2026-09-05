@@ -1,4 +1,4 @@
-import crypto from "node:crypto";
+import type { Ambient } from "../shared/ambient.js";
 import {
 	type CodexDaemonCommand,
 	CodexDaemonCommandSchema,
@@ -30,7 +30,7 @@ export interface CodexRelayDeps {
 	/** False when no authenticated host socket is attached. A command that cannot be sent is not
 	 * queued here: the caller reports it, and reconnect reconciliation recovers the record. */
 	sendToHost(message: Record<string, unknown>): boolean;
-	now?(): number;
+	ambient: Pick<Ambient, "now" | "newId" | "setTimer" | "clearTimer">;
 }
 
 /** One generation's reliable stream. `highestDecided` is separate from `committedThrough` because
@@ -109,7 +109,7 @@ export class CodexRelay {
 
 	/** Send one command to the daemon. Returns false when no host is attached. */
 	dispatch(command: CodexCommandRequest): boolean {
-		const message = { type: "codex_command", requestId: crypto.randomUUID(), ...command };
+		const message = { type: "codex_command", requestId: this.deps.ambient.newId(), ...command };
 		if (!CodexDaemonCommandSchema.safeParse(message).success) return false;
 		return this.deps.sendToHost(message);
 	}
@@ -170,11 +170,11 @@ export class CodexRelay {
 		if (settled()) return Promise.resolve(true);
 		return new Promise((resolve) => {
 			const finish = (value: boolean) => {
-				clearTimeout(timer);
+				this.deps.ambient.clearTimer(timer);
 				unsubscribe();
 				resolve(value);
 			};
-			const timer = setTimeout(() => finish(false), Math.max(0, deadlineMs - this.now()));
+			const timer = this.deps.ambient.setTimer(() => finish(false), Math.max(0, deadlineMs - this.now()));
 			const unsubscribe = this.onAgentChange(ownerKey, agentId, () => {
 				if (settled()) finish(true);
 			});
@@ -395,6 +395,6 @@ export class CodexRelay {
 	}
 
 	private now(): number {
-		return this.deps.now?.() ?? Date.now();
+		return this.deps.ambient.now();
 	}
 }

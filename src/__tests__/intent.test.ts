@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { INTENT_TTL_MS, IntentTracker } from "../gateway/intent.js";
+import { processAmbient } from "../shared/ambient.js";
 import { MAX_POLL_HOLD_MS } from "../shared/schemas.js";
 
 describe("IntentTracker", () => {
 	it("with no intent declared, every live team still gets the background floor cadence", () => {
-		const tracker = new IntentTracker();
+		const tracker = new IntentTracker({ ambient: processAmbient() });
 		expect(tracker.watchList(["proj.a", "proj.b"])).toEqual([
 			{ team: "proj.a", cadenceMs: 60_000 },
 			{ team: "proj.b", cadenceMs: 60_000 },
@@ -12,7 +13,7 @@ describe("IntentTracker", () => {
 	});
 
 	it("a board intent ramps every live team to the board cadence", () => {
-		const tracker = new IntentTracker();
+		const tracker = new IntentTracker({ ambient: processAmbient() });
 		tracker.declare("device-1", { screen: "board" });
 		expect(tracker.watchList(["proj.a", "proj.b"])).toEqual([
 			{ team: "proj.a", cadenceMs: 2_000 },
@@ -21,7 +22,7 @@ describe("IntentTracker", () => {
 	});
 
 	it("a terminal intent ramps only its own team, at the device's configured rate", () => {
-		const tracker = new IntentTracker();
+		const tracker = new IntentTracker({ ambient: processAmbient() });
 		tracker.declare("device-1", { screen: "terminal", terminalTeam: "proj.a", terminalRateMs: 500 });
 		expect(tracker.watchList(["proj.a", "proj.b"])).toEqual([
 			{ team: "proj.a", cadenceMs: 500 },
@@ -30,13 +31,13 @@ describe("IntentTracker", () => {
 	});
 
 	it("a terminal intent with no configured rate falls back to the default", () => {
-		const tracker = new IntentTracker();
+		const tracker = new IntentTracker({ ambient: processAmbient() });
 		tracker.declare("device-1", { screen: "terminal", terminalTeam: "proj.a" });
 		expect(tracker.cadenceFor("proj.a")).toBe(500);
 	});
 
 	it("multiple devices' intents union - the fastest wins per team", () => {
-		const tracker = new IntentTracker();
+		const tracker = new IntentTracker({ ambient: processAmbient() });
 		tracker.declare("device-1", { screen: "board" }); // 2000ms for everything
 		tracker.declare("device-2", { screen: "terminal", terminalTeam: "proj.a", terminalRateMs: 250 });
 		expect(tracker.cadenceFor("proj.a")).toBe(250); // faster than board's 2000
@@ -44,13 +45,13 @@ describe("IntentTracker", () => {
 	});
 
 	it("declaring background intent alone still leaves the background floor (no regression below it)", () => {
-		const tracker = new IntentTracker();
+		const tracker = new IntentTracker({ ambient: processAmbient() });
 		tracker.declare("device-1", { screen: "background" });
 		expect(tracker.cadenceFor("proj.a")).toBe(60_000);
 	});
 
 	it("re-declaring the same device replaces its prior intent rather than accumulating", () => {
-		const tracker = new IntentTracker();
+		const tracker = new IntentTracker({ ambient: processAmbient() });
 		tracker.declare("device-1", { screen: "board" });
 		tracker.declare("device-1", { screen: "background" }); // the SAME device changes its mind
 		expect(tracker.cadenceFor("proj.a")).toBe(60_000); // board no longer in effect
@@ -58,7 +59,7 @@ describe("IntentTracker", () => {
 
 	it("an intent expires to the background floor after its TTL lapses (a killed app needs no goodbye)", () => {
 		let t = 0;
-		const tracker = new IntentTracker({ now: () => t, ttlMs: 15_000 });
+		const tracker = new IntentTracker({ ambient: { now: () => t }, ttlMs: 15_000 });
 		tracker.declare("device-1", { screen: "board" });
 		expect(tracker.cadenceFor("proj.a")).toBe(2_000);
 
@@ -72,7 +73,7 @@ describe("IntentTracker", () => {
 		// connected must not leak one entry per distinct device forever. declare() runs on every poll
 		// regardless of host-daemon state, so it must bound the map on its own.
 		let t = 0;
-		const tracker = new IntentTracker({ now: () => t, ttlMs: 1_000 });
+		const tracker = new IntentTracker({ ambient: { now: () => t }, ttlMs: 1_000 });
 		tracker.declare("device-1", { screen: "board" });
 		expect(tracker.size).toBe(1);
 
@@ -83,7 +84,7 @@ describe("IntentTracker", () => {
 
 	it("re-declaring before expiry refreshes the TTL (a live console's polling keeps it alive)", () => {
 		let t = 0;
-		const tracker = new IntentTracker({ now: () => t, ttlMs: 15_000 });
+		const tracker = new IntentTracker({ ambient: { now: () => t }, ttlMs: 15_000 });
 		tracker.declare("device-1", { screen: "board" });
 
 		t = 10_000;
@@ -93,14 +94,14 @@ describe("IntentTracker", () => {
 	});
 
 	it("clear() drops a device's intent immediately, ahead of its TTL", () => {
-		const tracker = new IntentTracker();
+		const tracker = new IntentTracker({ ambient: processAmbient() });
 		tracker.declare("device-1", { screen: "board" });
 		tracker.clear("device-1");
 		expect(tracker.cadenceFor("proj.a")).toBe(60_000);
 	});
 
 	it("one device's terminal intent does not leak into another device's board-only view", () => {
-		const tracker = new IntentTracker();
+		const tracker = new IntentTracker({ ambient: processAmbient() });
 		tracker.declare("device-1", { screen: "terminal", terminalTeam: "proj.a", terminalRateMs: 100 });
 		expect(tracker.watchList(["proj.a", "proj.b", "proj.c"])).toEqual([
 			{ team: "proj.a", cadenceMs: 100 },
@@ -118,7 +119,7 @@ describe("IntentTracker", () => {
 
 		it("survives a single full MAX_POLL_HOLD_MS gap between declarations with room to spare", () => {
 			let t = 0;
-			const tracker = new IntentTracker({ now: () => t }); // the real production default TTL
+			const tracker = new IntentTracker({ ambient: { now: () => t } }); // the real production default TTL
 			tracker.declare("device-1", { screen: "board" });
 
 			t = MAX_POLL_HOLD_MS; // one entire held poll cycle elapses with no missed poll at all
@@ -127,7 +128,7 @@ describe("IntentTracker", () => {
 
 		it("genuinely expires only after roughly 3 full held-poll cycles with zero refresh", () => {
 			let t = 0;
-			const tracker = new IntentTracker({ now: () => t });
+			const tracker = new IntentTracker({ ambient: { now: () => t } });
 			tracker.declare("device-1", { screen: "board" });
 
 			t = INTENT_TTL_MS - 1;

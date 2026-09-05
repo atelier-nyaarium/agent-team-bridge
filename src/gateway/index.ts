@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { Server } from "bun";
+import { processAmbient } from "../shared/ambient.js";
 import { resolveLocalGatewayId } from "../shared/gateway-id.js";
 import { MAX_BLOB_BYTES } from "../shared/router-protocol.js";
 import { composeGateway, type GatewayConfig, type GatewayGraph } from "./composeGateway.js";
@@ -87,8 +88,10 @@ function installSignalHandlers(graph: GatewayGraph): void {
 /** The process adapter: environment in, the composed graph behind Bun's listener, signals out. */
 export async function startGateway(): Promise<void> {
 	const port = parseInt(process.env.PORT || "20000", 10);
+	const ambient = processAmbient();
 	const graph = composeGateway({
 		config: configFromEnv(),
+		ambient,
 		allowFixtureIdentity: process.env.ALLOW_FIXTURE_IDENTITY === "1",
 		openEnrollTls: ({ port: tlsPort, certPem, keyPem, fetch }) =>
 			Bun.serve({ port: tlsPort, tls: { cert: certPem, key: keyPem }, fetch }),
@@ -102,7 +105,7 @@ export async function startGateway(): Promise<void> {
 		websocket: {
 			open(ws) {
 				if (ws.data.proxyProject) {
-					setupProxy(ws, ws.data.proxyProject, ws.data.proxyAuth || "");
+					setupProxy(ws, ws.data.proxyProject, ws.data.proxyAuth || "", ambient);
 					return;
 				}
 				graph.wsHandlers.open(ws);

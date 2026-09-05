@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createBlobFetcher } from "../gateway/blobFetch.js";
 import { CrossDomainPeers } from "../gateway/federation/crossDomainPeers.js";
+import { processAmbient } from "../shared/ambient.js";
 import { BlobStore, blobIdFor } from "../shared/blob-store.js";
 import { linkedPeer } from "./helpers/cross-domain-link.js";
 
@@ -24,6 +25,7 @@ function setup(relayToGateway: Relay = async () => ({ ok: false, error: "unreach
 	if (colliding) crossDomainPeers.add(linkedPeer(colliding, "local"));
 	const fetcher = createBlobFetcher({
 		blobStore,
+		ambient: processAmbient(),
 		crossDomainPeers,
 		localGatewayId: "local",
 		relayToGateway,

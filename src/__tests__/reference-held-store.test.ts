@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CorruptHeldIndexError, ReferenceHeldStore } from "../federation-server/blobs/referenceHeldStore.js";
+import { processAmbient } from "../shared/ambient.js";
 import type { BlobReference } from "../shared/blob-reference.js";
 import { blobIdFor } from "../shared/blob-store.js";
 import { sealBlobChunk } from "../shared/sealed-blob.js";
@@ -17,7 +18,7 @@ describe("ReferenceHeldStore", () => {
 	it("keeps verified ciphertext until the last reference is released", () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "held-blobs-"));
 		roots.push(root);
-		const store = new ReferenceHeldStore({ dataDir: root });
+		const store = new ReferenceHeldStore({ dataDir: root, ambient: processAmbient() });
 		const plain = Buffer.from("held bytes");
 		const blobId = blobIdFor(plain);
 		const bytes = sealBlobChunk(
@@ -50,7 +51,7 @@ describe("ReferenceHeldStore", () => {
 	it("reconcile removes unfinished uploads with dead references", () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "held-blobs-"));
 		roots.push(root);
-		const store = new ReferenceHeldStore({ dataDir: root });
+		const store = new ReferenceHeldStore({ dataDir: root, ambient: processAmbient() });
 		const plain = Buffer.from("unfinished");
 		const blobId = blobIdFor(plain);
 		const bytes = sealBlobChunk(
@@ -73,7 +74,7 @@ describe("ReferenceHeldStore", () => {
 	it("does not answer held for a reference whose bytes never finished arriving", () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "held-blobs-"));
 		roots.push(root);
-		const store = new ReferenceHeldStore({ dataDir: root });
+		const store = new ReferenceHeldStore({ dataDir: root, ambient: processAmbient() });
 		const plain = Buffer.from("half a file arrives");
 		const blobId = blobIdFor(plain);
 		const bytes = sealBlobChunk(
@@ -97,7 +98,7 @@ describe("ReferenceHeldStore", () => {
 	it("reconcile removes dead references and orphaned blobs", () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "held-blobs-"));
 		roots.push(root);
-		const store = new ReferenceHeldStore({ dataDir: root });
+		const store = new ReferenceHeldStore({ dataDir: root, ambient: processAmbient() });
 		const plain = Buffer.from("reconcile");
 		const blobId = blobIdFor(plain);
 		const bytes = sealBlobChunk(
@@ -133,7 +134,7 @@ describe("ReferenceHeldStore", () => {
 	it("replacing one reference with a larger set keeps existing bytes", () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "held-blobs-"));
 		roots.push(root);
-		const store = new ReferenceHeldStore({ dataDir: root });
+		const store = new ReferenceHeldStore({ dataDir: root, ambient: processAmbient() });
 		const plain = Buffer.from("replace");
 		const blobId = blobIdFor(plain);
 		const bytes = sealBlobChunk(
@@ -156,7 +157,7 @@ describe("ReferenceHeldStore", () => {
 	it("moves one blob between references in one batch without deleting it", () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "held-blobs-"));
 		roots.push(root);
-		const store = new ReferenceHeldStore({ dataDir: root });
+		const store = new ReferenceHeldStore({ dataDir: root, ambient: processAmbient() });
 		const plain = Buffer.from("move");
 		const blobId = blobIdFor(plain);
 		const bytes = sealBlobChunk(
@@ -191,7 +192,7 @@ describe("ReferenceHeldStore", () => {
 			JSON.stringify({ entries: { blob: { refs: ["not-a-reference"] } } }),
 		);
 		const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-		const store = new ReferenceHeldStore({ dataDir: root });
+		const store = new ReferenceHeldStore({ dataDir: root, ambient: processAmbient() });
 		store.reconcile("domain", () => false);
 		expect(warning).toHaveBeenCalledWith("[router] unknown blob reference not-a-reference");
 		expect(JSON.parse(fs.readFileSync(path.join(indexDir, "index.json"), "utf8")).entries.blob.refs).toEqual([
@@ -206,7 +207,7 @@ describe("ReferenceHeldStore", () => {
 		const file = path.join(root, "blobs", "domain", "held", "index.json");
 		fs.mkdirSync(path.dirname(file), { recursive: true });
 		fs.writeFileSync(file, "corrupt");
-		const store = new ReferenceHeldStore({ dataDir: root });
+		const store = new ReferenceHeldStore({ dataDir: root, ambient: processAmbient() });
 		let first: unknown;
 		try {
 			store.refs("domain", `sha256-${"0".repeat(64)}`);

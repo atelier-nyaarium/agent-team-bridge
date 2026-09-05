@@ -1,3 +1,4 @@
+import type { Clock } from "../../shared/ambient.js";
 import { capFifo } from "../../shared/cap-fifo.js";
 import { type ConsoleOpResult, MAX_OPS_PER_CONVERSATION } from "../../shared/console-protocol.js";
 import type { DurableStore } from "../../shared/durable-store.js";
@@ -26,17 +27,25 @@ export class DurableOpStore<Result = ConsoleOpResult> {
 
 	public constructor(
 		private readonly durable: DurableStore,
+		private readonly ambient: Clock,
 		private readonly ttlMs: number = DEFAULT_TTL_MS,
 		private readonly maxOpsPerConversation: number = DEFAULT_MAX_OPS_PER_CONVERSATION,
 		private readonly maxConversations: number = DEFAULT_MAX_CONVERSATIONS,
-		private readonly now: () => number = Date.now,
 		private readonly validResult: ResultValidator<Result> = isConsoleOpResult as ResultValidator<Result>,
 	) {
 		this.restore();
 	}
 
-	public static withValidator<R>(durable: DurableStore, validResult: ResultValidator<R>): DurableOpStore<R> {
-		return new DurableOpStore<R>(durable, undefined, undefined, undefined, undefined, validResult);
+	public static withValidator<R>(
+		durable: DurableStore,
+		ambient: Clock,
+		validResult: ResultValidator<R>,
+	): DurableOpStore<R> {
+		return new DurableOpStore<R>(durable, ambient, undefined, undefined, undefined, validResult);
+	}
+
+	private now(): number {
+		return this.ambient.now();
 	}
 
 	public get(conversationId: string, opId: string): OpRecord<Result> | undefined {

@@ -9,6 +9,7 @@ import { createPresenceReporter } from "../src/gateway/router/presenceReporter.j
 import { buildRegisterAuth, registerFrame } from "../src/gateway/router/registerAuth.js";
 import { createSessionRegistryReporter } from "../src/gateway/router/sessionRegistryReporter.js";
 import { composeValueResult } from "../src/gateway/router/valueResult.js";
+import type { Ambient, IntervalHandle, TimerHandle } from "../src/shared/ambient.js";
 import { rankBetween } from "../src/shared/board-rank.js";
 import type { ConsolePushEntry } from "../src/shared/federation-protocol.js";
 import type { PresenceRow } from "../src/shared/presence-identity.js";
@@ -31,6 +32,36 @@ ContentKeyStore.writeFile(
 
 const cases: WireFixture[] = [];
 let activeDraws: FixtureDraws | null = null;
+
+/** The fixture clock and a case's draws. `immediate` runs a scheduled step in place. */
+const fixtureAmbient = (draws?: FixtureDraws, immediate = false): Ambient => ({
+	now: () => set.issuedAt,
+	randomBytes: (size) => {
+		const context = draws ?? activeDraws;
+		if (!context) throw new Error("fixture draw context is unavailable");
+		return context.next(size);
+	},
+	newId: () => "fixture",
+	setTimer: (run, ms) => {
+		if (immediate) {
+			run();
+			return 0 as unknown as TimerHandle;
+		}
+		const handle = setTimeout(run, ms);
+		handle.unref?.();
+		return handle as unknown as TimerHandle;
+	},
+	clearTimer: (handle) => {
+		if (!immediate) clearTimeout(handle as unknown as ReturnType<typeof setTimeout>);
+	},
+	setInterval: (run, ms) => {
+		const handle = setInterval(run, ms);
+		handle.unref?.();
+		return handle as unknown as IntervalHandle;
+	},
+	clearInterval: (handle) => clearInterval(handle as unknown as ReturnType<typeof setInterval>),
+});
+
 const write = (
 	composer: string,
 	name: string,
@@ -62,13 +93,7 @@ const requester = createKeyRequester({
 	gatewayId: set.gateway.id,
 	gatewaySignPub: set.gateway.identity.sign.pub,
 	gatewaySignPriv: set.gateway.identity.sign.priv,
-	now: () => set.issuedAt,
-	randomBytes: keyRequestContext.next.bind(keyRequestContext),
-	setTimeout: (handler) => {
-		handler();
-		return 0;
-	},
-	clearTimeout: () => undefined,
+	ambient: fixtureAmbient(keyRequestContext, true),
 	onError: () => undefined,
 	send: async (action, params) => {
 		keyFrames.push({ name: action, params });
@@ -92,8 +117,7 @@ const receiptRequester = createKeyRequester({
 	gatewayId: set.gateway.id,
 	gatewaySignPub: set.gateway.identity.sign.pub,
 	gatewaySignPriv: set.gateway.identity.sign.priv,
-	now: () => set.issuedAt,
-	randomBytes: keyReceiptContext.next.bind(keyReceiptContext),
+	ambient: fixtureAmbient(keyReceiptContext),
 	onError: () => undefined,
 	send: async (action, params) => {
 		keyFrames.push({ name: action, params });
@@ -117,8 +141,7 @@ const auth = buildRegisterAuth({
 	gatewayId: set.gateway.id,
 	identity: set.gateway.identity,
 	selfAdmission: () => set.gateway.admission,
-	now: () => set.issuedAt,
-	randomBytes: authContext.next.bind(authContext),
+	ambient: fixtureAmbient(authContext),
 });
 write(
 	"gateway/router/registerAuth",
@@ -129,10 +152,7 @@ write(
 );
 
 const valueContext = FixtureDraws.forCase("ts", "gateway/router/valueResult", "list-dirs");
-const keys = world.contentKeys(keyStoreDir, (size) => {
-	if (!activeDraws) throw new Error("fixture draw context is unavailable");
-	return activeDraws.next(size);
-});
+const keys = world.contentKeys(keyStoreDir, fixtureAmbient());
 activeDraws = valueContext;
 const valueResult = composeValueResult({
 	opId: "list-dirs-op",
@@ -208,8 +228,7 @@ const ownerPush = createConsolePushOps({
 		return Address.local(set.domain.id, set.gateway.id, project, session);
 	},
 	refuseImpersonation: () => null,
-	now: () => set.issuedAt,
-	newId: () => ownerContext.newId(),
+	ambient: { ...fixtureAmbient(ownerContext), newId: () => ownerContext.newId() },
 });
 const ownerEntries: ConsolePushEntry[] = [
 	{ kind: "message", session_id: "fixture-session", from: "agent", body: "Wire message" },
@@ -281,7 +300,7 @@ const presence = createPresenceReporter({
 	spawnPoints: () => ({ gatewayId: set.gateway.id, domainId: set.domain.id, hostSpawns: [] }),
 	incarnation: () => 1,
 	debounceMs: 0,
-	now: () => set.issuedAt,
+	ambient: fixtureAmbient(),
 	send: async (name: string, params: Record<string, unknown>) => {
 		presenceFrames.push({ name, params });
 		return { result: { ok: true } };
@@ -299,7 +318,7 @@ for (const frame of presenceFrames)
 presence.stop();
 
 const sessionFrames: Record<string, unknown>[] = [];
-const sessionStore = new SessionStore({ now: () => set.issuedAt, idGen: () => "fixture" });
+const sessionStore = new SessionStore({ ambient: fixtureAmbient(), idGen: () => "fixture" });
 const sessionReporter = createSessionRegistryReporter({
 	sessionStore,
 	localGatewayId: set.gateway.id,

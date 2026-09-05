@@ -6,6 +6,7 @@ import { Allowlist, AllowlistCorruptError } from "../gateway/federation/allowlis
 import { activateStaged, recoverStaging, stageBootstrap } from "../gateway/federation/bootstrapInstall.js";
 import { ContentKeyStore } from "../gateway/federation/contentKeyStore.js";
 import { signAdmission, signRevocation } from "../shared/admission.js";
+import { processAmbient } from "../shared/ambient.js";
 import { wrapContentKey } from "../shared/content-envelope.js";
 import { generateIdentity } from "../shared/crypto.js";
 import type { GatewayBootstrapBundle } from "../shared/schemas.js";
@@ -46,7 +47,7 @@ function rootLive(
 	owner: ReturnType<typeof generateIdentity>,
 	gateway: ReturnType<typeof generateIdentity>,
 ): void {
-	new Allowlist(dir).applySnapshot({
+	new Allowlist(dir, processAmbient()).applySnapshot({
 		ownerSignPub: owner.sign.pub,
 		admissions: [
 			signAdmission(
@@ -97,8 +98,14 @@ function enrollLive(
 ): void {
 	rootLive(dir, owner, gateway);
 	const delivered = { ...signedGatewayBundle(base, owner, gateway, issuedAt), contentKeys };
-	stageBootstrap(dir, delivered, gateway, new ContentKeyStore(dir, gateway.box.priv));
-	recoverStaging(dir);
+	stageBootstrap(
+		dir,
+		delivered,
+		gateway,
+		new ContentKeyStore(dir, gateway.box.priv, processAmbient()),
+		processAmbient(),
+	);
+	recoverStaging(dir, processAmbient());
 }
 
 function liveBytes(dir: string): Buffer[] {
@@ -116,7 +123,7 @@ describe("staged bootstrap install", () => {
 			for (const present of ["federation-allowlist.json", "transport.json", "content-keys.json"])
 				if (present !== artifact) fs.writeFileSync(path.join(staging, present), "partial");
 			fs.writeFileSync(path.join(staging, "INSTALLED"), "");
-			recoverStaging(dir);
+			recoverStaging(dir, processAmbient());
 			for (const present of ["federation-allowlist.json", "transport.json", "content-keys.json"])
 				expect(fs.existsSync(path.join(dir, present))).toBe(false);
 			expect(fs.existsSync(staging)).toBe(false);
@@ -130,7 +137,7 @@ describe("staged bootstrap install", () => {
 			const staging = path.join(dir, "staging");
 			fs.mkdirSync(staging);
 			for (const artifact of artifacts.slice(0, count)) fs.writeFileSync(path.join(staging, artifact), "partial");
-			recoverStaging(dir);
+			recoverStaging(dir, processAmbient());
 			for (const artifact of artifacts) expect(fs.existsSync(path.join(dir, artifact))).toBe(false);
 			expect(fs.existsSync(staging)).toBe(false);
 		}
@@ -139,13 +146,19 @@ describe("staged bootstrap install", () => {
 	it("activates every artifact once the marker exists and recovers twice", () => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bootstrap-stage-"));
 		const initial = bundle();
-		stageBootstrap(dir, initial.bundle, initial.gateway, new ContentKeyStore(dir, initial.gateway.box.priv));
+		stageBootstrap(
+			dir,
+			initial.bundle,
+			initial.gateway,
+			new ContentKeyStore(dir, initial.gateway.box.priv, processAmbient()),
+			processAmbient(),
+		);
 		expect(fs.existsSync(path.join(dir, "staging", "INSTALLED"))).toBe(true);
-		recoverStaging(dir);
+		recoverStaging(dir, processAmbient());
 		for (const artifact of ["federation-allowlist.json", "transport.json", "content-keys.json"])
 			expect(fs.existsSync(path.join(dir, artifact))).toBe(true);
-		recoverStaging(dir);
-		activateStaged(dir);
+		recoverStaging(dir, processAmbient());
+		activateStaged(dir, processAmbient());
 		expect(fs.existsSync(path.join(dir, "staging"))).toBe(false);
 	});
 
@@ -166,19 +179,34 @@ describe("staged bootstrap install", () => {
 		);
 		const preChange = { ...base, admission, domain: { ...base.domain, admissions: [admission] } };
 
-		stageBootstrap(dir, preChange, gateway, new ContentKeyStore(dir, gateway.box.priv), "unlisted-old-console");
-		recoverStaging(dir);
+		stageBootstrap(
+			dir,
+			preChange,
+			gateway,
+			new ContentKeyStore(dir, gateway.box.priv, processAmbient()),
+			processAmbient(),
+			"unlisted-old-console",
+		);
+		recoverStaging(dir, processAmbient());
 
-		expect(new Allowlist(dir).selfAdmission(gateway.sign.pub)?.admission.gatewayId).toBe("g");
+		expect(new Allowlist(dir, processAmbient()).selfAdmission(gateway.sign.pub)?.admission.gatewayId).toBe("g");
 	});
 
 	it("refuses a bundle rooted at another owner before staging", () => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bootstrap-stage-"));
 		const liveOwner = generateIdentity();
-		new Allowlist(dir).setOwner(liveOwner.sign.pub);
+		new Allowlist(dir, processAmbient()).setOwner(liveOwner.sign.pub);
 		const before = fs.readdirSync(dir);
 
-		expect(() => stageBootstrap(dir, bundle().bundle, generateIdentity(), new ContentKeyStore(dir))).toThrow();
+		expect(() =>
+			stageBootstrap(
+				dir,
+				bundle().bundle,
+				generateIdentity(),
+				new ContentKeyStore(dir, "", processAmbient()),
+				processAmbient(),
+			),
+		).toThrow();
 		expect(fs.readdirSync(dir)).toEqual(before);
 		expect(fs.existsSync(path.join(dir, "staging"))).toBe(false);
 	});
@@ -206,7 +234,15 @@ describe("staged bootstrap install", () => {
 			contentKeys: [wrapContentKey(Buffer.alloc(32, 3), 1, gateway.box.pub, gateway.sign.pub, gateway.sign.priv)],
 		};
 
-		expect(() => stageBootstrap(dir, invalid, gateway, new ContentKeyStore(dir, gateway.box.priv))).toThrow();
+		expect(() =>
+			stageBootstrap(
+				dir,
+				invalid,
+				gateway,
+				new ContentKeyStore(dir, gateway.box.priv, processAmbient()),
+				processAmbient(),
+			),
+		).toThrow();
 		expect(fs.existsSync(path.join(dir, "staging"))).toBe(false);
 	});
 
@@ -228,14 +264,20 @@ describe("staged bootstrap install", () => {
 			],
 		};
 
-		const store = new ContentKeyStore(dir, gateway.box.priv);
+		const store = new ContentKeyStore(dir, gateway.box.priv, processAmbient());
 		expect(store.epochs()).toEqual([]);
-		stageBootstrap(dir, delivered, gateway, new ContentKeyStore(dir, gateway.box.priv));
-		recoverStaging(dir);
+		stageBootstrap(
+			dir,
+			delivered,
+			gateway,
+			new ContentKeyStore(dir, gateway.box.priv, processAmbient()),
+			processAmbient(),
+		);
+		recoverStaging(dir, processAmbient());
 
-		expect(new Allowlist(dir).ownerSignPub).toBe(owner.sign.pub);
+		expect(new Allowlist(dir, processAmbient()).ownerSignPub).toBe(owner.sign.pub);
 		expect(JSON.parse(fs.readFileSync(path.join(dir, "transport.json"), "utf8"))).toEqual(base.transport);
-		expect(new Allowlist(dir).domainId).toBe("domain");
+		expect(new Allowlist(dir, processAmbient()).domainId).toBe("domain");
 		store.reload();
 		expect(store.epochs()).toEqual([1]);
 	});
@@ -265,13 +307,19 @@ describe("staged bootstrap install", () => {
 					wrapContentKey(Buffer.alloc(32, 8), 1, gateway.box.pub, console_.sign.pub, console_.sign.priv),
 				],
 			};
-			stageBootstrap(dir, delivered, gateway, new ContentKeyStore(dir, gateway.box.priv));
+			stageBootstrap(
+				dir,
+				delivered,
+				gateway,
+				new ContentKeyStore(dir, gateway.box.priv, processAmbient()),
+				processAmbient(),
+			);
 			for (const artifact of artifacts.slice(0, count))
 				fs.copyFileSync(path.join(dir, "staging", artifact), path.join(dir, artifact));
-			recoverStaging(dir);
+			recoverStaging(dir, processAmbient());
 			expect(artifacts.every((artifact) => fs.existsSync(path.join(dir, artifact)))).toBe(true);
 			expect(fs.existsSync(path.join(dir, "staging"))).toBe(false);
-			expect(new ContentKeyStore(dir, gateway.box.priv).epochs()).toEqual([1]);
+			expect(new ContentKeyStore(dir, gateway.box.priv, processAmbient()).epochs()).toEqual([1]);
 		}
 	});
 
@@ -290,7 +338,7 @@ describe("staged bootstrap install", () => {
 			owner.sign.priv,
 			owner.sign.pub,
 		);
-		new Allowlist(dir).applySnapshot({
+		new Allowlist(dir, processAmbient()).applySnapshot({
 			ownerSignPub: owner.sign.pub,
 			admissions: [
 				signAdmission(
@@ -319,7 +367,14 @@ describe("staged bootstrap install", () => {
 		};
 
 		expect(() =>
-			stageBootstrap(dir, delivered, gateway, new ContentKeyStore(dir, gateway.box.priv), console_.sign.pub),
+			stageBootstrap(
+				dir,
+				delivered,
+				gateway,
+				new ContentKeyStore(dir, gateway.box.priv, processAmbient()),
+				processAmbient(),
+				console_.sign.pub,
+			),
 		).toThrow();
 		expect(fs.existsSync(path.join(dir, "staging"))).toBe(false);
 		expect(liveBytes(dir)).toEqual(before);
@@ -336,7 +391,7 @@ describe("staged bootstrap install", () => {
 			owner.sign.priv,
 			owner.sign.pub,
 		);
-		new Allowlist(dir).applySnapshot({
+		new Allowlist(dir, processAmbient()).applySnapshot({
 			ownerSignPub: owner.sign.pub,
 			admissions: [consoleAdmission, laterGatewayAdmission],
 			revocations: [],
@@ -347,7 +402,8 @@ describe("staged bootstrap install", () => {
 				dir,
 				afterReAdmission,
 				gateway,
-				new ContentKeyStore(dir, gateway.box.priv),
+				new ContentKeyStore(dir, gateway.box.priv, processAmbient()),
+				processAmbient(),
 				console_.sign.pub,
 			),
 		).toThrow();
@@ -364,7 +420,8 @@ describe("staged bootstrap install", () => {
 				dir,
 				signedGatewayBundle(base, owner, gateway, 1),
 				gateway,
-				new ContentKeyStore(dir, gateway.box.priv),
+				new ContentKeyStore(dir, gateway.box.priv, processAmbient()),
+				processAmbient(),
 			),
 		).toThrow();
 		expect(liveBytes(dir)).toEqual(before);
@@ -372,7 +429,8 @@ describe("staged bootstrap install", () => {
 			dir,
 			signedGatewayBundle(base, owner, gateway, 2),
 			gateway,
-			new ContentKeyStore(dir, gateway.box.priv),
+			new ContentKeyStore(dir, gateway.box.priv, processAmbient()),
+			processAmbient(),
 		);
 		expect(fs.existsSync(path.join(dir, "staging", "INSTALLED"))).toBe(true);
 	});
@@ -405,9 +463,10 @@ describe("staged bootstrap install", () => {
 			dir,
 			{ ...initial, contentKeys: envelopes(1, 5) },
 			gateway,
-			new ContentKeyStore(dir, gateway.box.priv),
+			new ContentKeyStore(dir, gateway.box.priv, processAmbient()),
+			processAmbient(),
 		);
-		recoverStaging(dir);
+		recoverStaging(dir, processAmbient());
 		stageBootstrap(
 			dir,
 			{
@@ -416,9 +475,10 @@ describe("staged bootstrap install", () => {
 				contentKeys: envelopes(3, 5),
 			},
 			gateway,
-			new ContentKeyStore(dir, gateway.box.priv),
+			new ContentKeyStore(dir, gateway.box.priv, processAmbient()),
+			processAmbient(),
 		);
-		recoverStaging(dir);
+		recoverStaging(dir, processAmbient());
 		stageBootstrap(
 			dir,
 			{
@@ -426,10 +486,11 @@ describe("staged bootstrap install", () => {
 				domain: { ...base.domain, admissions: [consoleAdmission] },
 			},
 			gateway,
-			new ContentKeyStore(dir, gateway.box.priv),
+			new ContentKeyStore(dir, gateway.box.priv, processAmbient()),
+			processAmbient(),
 		);
-		recoverStaging(dir);
-		expect(new ContentKeyStore(dir, gateway.box.priv).epochs()).toEqual([1, 2, 3, 4, 5]);
+		recoverStaging(dir, processAmbient());
+		expect(new ContentKeyStore(dir, gateway.box.priv, processAmbient()).epochs()).toEqual([1, 2, 3, 4, 5]);
 	});
 
 	it("refuses a different key for a held epoch", () => {
@@ -452,10 +513,15 @@ describe("staged bootstrap install", () => {
 				],
 			},
 			gateway,
-			new ContentKeyStore(dir, gateway.box.priv),
+			new ContentKeyStore(dir, gateway.box.priv, processAmbient()),
+			processAmbient(),
 		);
-		recoverStaging(dir);
-		new Allowlist(dir).applySnapshot({ ownerSignPub: owner.sign.pub, admissions: [admission], revocations: [] });
+		recoverStaging(dir, processAmbient());
+		new Allowlist(dir, processAmbient()).applySnapshot({
+			ownerSignPub: owner.sign.pub,
+			admissions: [admission],
+			revocations: [],
+		});
 		const before = liveBytes(dir);
 		const delivered = {
 			...signedGatewayBundle(base, owner, gateway, 2),
@@ -464,7 +530,15 @@ describe("staged bootstrap install", () => {
 				wrapContentKey(Buffer.alloc(32, 2), 1, gateway.box.pub, console_.sign.pub, console_.sign.priv),
 			],
 		};
-		expect(() => stageBootstrap(dir, delivered, gateway, new ContentKeyStore(dir, gateway.box.priv))).toThrow();
+		expect(() =>
+			stageBootstrap(
+				dir,
+				delivered,
+				gateway,
+				new ContentKeyStore(dir, gateway.box.priv, processAmbient()),
+				processAmbient(),
+			),
+		).toThrow();
 		expect(fs.existsSync(path.join(dir, "staging"))).toBe(false);
 		expect(liveBytes(dir)).toEqual(before);
 	});
@@ -485,13 +559,19 @@ describe("staged bootstrap install", () => {
 				wrapContentKey(Buffer.alloc(32, 9), 1, gateway.box.pub, console_.sign.pub, console_.sign.priv),
 			],
 		};
-		stageBootstrap(dir, delivered, gateway, new ContentKeyStore(dir, gateway.box.priv));
+		stageBootstrap(
+			dir,
+			delivered,
+			gateway,
+			new ContentKeyStore(dir, gateway.box.priv, processAmbient()),
+			processAmbient(),
+		);
 		fs.mkdirSync(path.join(dir, "content-keys.json"));
-		expect(() => activateStaged(dir)).toThrow();
+		expect(() => activateStaged(dir, processAmbient())).toThrow();
 		expect(fs.existsSync(path.join(dir, "staging", "INSTALLED"))).toBe(true);
 		fs.rmdirSync(path.join(dir, "content-keys.json"));
-		recoverStaging(dir);
-		expect(new ContentKeyStore(dir, gateway.box.priv).epochs()).toEqual([1]);
+		recoverStaging(dir, processAmbient());
+		expect(new ContentKeyStore(dir, gateway.box.priv, processAmbient()).epochs()).toEqual([1]);
 		expect(fs.existsSync(path.join(dir, "staging"))).toBe(false);
 	});
 
@@ -506,13 +586,14 @@ describe("staged bootstrap install", () => {
 			foreignDir,
 			foreign.bundle,
 			foreign.gateway,
-			new ContentKeyStore(foreignDir, foreign.gateway.box.priv),
+			new ContentKeyStore(foreignDir, foreign.gateway.box.priv, processAmbient()),
+			processAmbient(),
 		);
 		fs.mkdirSync(path.join(dir, "staging"));
 		for (const artifact of ["federation-allowlist.json", "content-keys.json", "transport.json"])
 			fs.copyFileSync(path.join(foreignDir, "staging", artifact), path.join(dir, "staging", artifact));
 		fs.writeFileSync(path.join(dir, "staging", "INSTALLED"), "");
-		recoverStaging(dir);
+		recoverStaging(dir, processAmbient());
 		expect(fs.existsSync(path.join(dir, "staging"))).toBe(false);
 		expect(liveBytes(dir)).toEqual(before);
 
@@ -520,10 +601,11 @@ describe("staged bootstrap install", () => {
 			dir,
 			signedGatewayBundle(base, owner, gateway, 2),
 			gateway,
-			new ContentKeyStore(dir, gateway.box.priv),
+			new ContentKeyStore(dir, gateway.box.priv, processAmbient()),
+			processAmbient(),
 		);
 		fs.writeFileSync(path.join(dir, "staging", "federation-allowlist.json"), "garbage");
-		recoverStaging(dir);
+		recoverStaging(dir, processAmbient());
 		expect(fs.existsSync(path.join(dir, "staging"))).toBe(false);
 		expect(liveBytes(dir)).toEqual(before);
 	});
@@ -531,11 +613,17 @@ describe("staged bootstrap install", () => {
 	it("rolls back a corrupt staged allowlist", () => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bootstrap-stage-"));
 		const { bundle: base, gateway } = bundle();
-		stageBootstrap(dir, base, gateway, new ContentKeyStore(dir, gateway.box.priv));
+		stageBootstrap(
+			dir,
+			base,
+			gateway,
+			new ContentKeyStore(dir, gateway.box.priv, processAmbient()),
+			processAmbient(),
+		);
 		const stagedFile = path.join(dir, "staging", "federation-allowlist.json");
 		fs.writeFileSync(stagedFile, "corrupt");
 
-		recoverStaging(dir);
+		recoverStaging(dir, processAmbient());
 
 		expect(fs.existsSync(path.join(dir, "staging"))).toBe(false);
 		expect(fs.existsSync(path.join(dir, "federation-allowlist.json"))).toBe(false);
@@ -544,11 +632,17 @@ describe("staged bootstrap install", () => {
 	it("propagates a corrupt live allowlist during recovery", () => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bootstrap-stage-"));
 		const initial = bundle();
-		stageBootstrap(dir, initial.bundle, initial.gateway, new ContentKeyStore(dir, initial.gateway.box.priv));
+		stageBootstrap(
+			dir,
+			initial.bundle,
+			initial.gateway,
+			new ContentKeyStore(dir, initial.gateway.box.priv, processAmbient()),
+			processAmbient(),
+		);
 		const liveFile = path.join(dir, "federation-allowlist.json");
 		fs.writeFileSync(liveFile, "corrupt live");
 
-		expect(() => recoverStaging(dir)).toThrow(AllowlistCorruptError);
+		expect(() => recoverStaging(dir, processAmbient())).toThrow(AllowlistCorruptError);
 		expect(fs.existsSync(path.join(dir, "federation-allowlist.json"))).toBe(false);
 	});
 });

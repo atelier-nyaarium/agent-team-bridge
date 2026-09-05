@@ -6,6 +6,7 @@ import { ContentKeyStore } from "../gateway/federation/contentKeyStore.js";
 import { createInboxClaims } from "../gateway/router/inboxClaims.js";
 import { createInboxDeliveryPump } from "../gateway/router/inboxDeliveryPump.js";
 import { signAdmission } from "../shared/admission.js";
+import { processAmbient } from "../shared/ambient.js";
 import { opPayloadAadKind, sealContent, wrapContentKey } from "../shared/content-envelope.js";
 import { generateIdentity } from "../shared/crypto.js";
 
@@ -66,7 +67,7 @@ describe("content key boundaries", () => {
 			owner.sign.pub,
 		);
 		const trust = { ownerSignPub: owner.sign.pub, admissions: [signerAdmission], revocations: [] };
-		const store = new ContentKeyStore(residueRoot, gateway.box.priv);
+		const store = new ContentKeyStore(residueRoot, gateway.box.priv, processAmbient());
 		const installedEnvelope = wrapContentKey(key, 1, gateway.box.pub, owner.sign.pub, owner.sign.priv);
 		store.install(installedEnvelope, trust);
 		const sealed = store.seal(Buffer.from("payload"), {
@@ -96,7 +97,7 @@ describe("content key boundaries", () => {
 		);
 		const grantEnvelope = wrapContentKey(missingKey, 2, gateway.box.pub, owner.sign.pub, owner.sign.priv);
 		const calls: unknown[] = [];
-		const claims = createInboxClaims(residueRoot);
+		const claims = createInboxClaims(residueRoot, processAmbient());
 		const pump = createInboxDeliveryPump({
 			claims,
 			routerClient: { callInboxTool: async (_action, params) => calls.push(params) },

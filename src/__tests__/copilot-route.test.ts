@@ -4,6 +4,7 @@ import { CopilotRelay } from "../gateway/copilotRelay.js";
 import { CopilotRoute } from "../gateway/copilotRoute.js";
 import { createSessionAuthority } from "../gateway/sessionAuthority.js";
 import { resolveLiveIncarnation, type TeamRegistry } from "../gateway/websocket.js";
+import { processAmbient } from "../shared/ambient.js";
 import { CopilotAgentResultSchema, copilotAgentIdForOperation } from "../shared/copilot-agent.js";
 import { type CopilotCatalogWriter, SessionStore } from "../shared/session-store.js";
 
@@ -14,6 +15,7 @@ const STOP_OPERATION_ID = "123e4567-e89b-42d3-a456-426614174002";
 function setup(options: { dispatch?: boolean; waitBudgetMs?: number } = {}) {
 	let catalogWriter: CopilotCatalogWriter | undefined;
 	const sessionStore = new SessionStore({
+		ambient: processAmbient(),
 		copilotCatalogPersistence: {
 			persistChecked: () => {},
 			receiveWriter: (writer) => {
@@ -40,6 +42,7 @@ function setup(options: { dispatch?: boolean; waitBudgetMs?: number } = {}) {
 	const relay = new CopilotRelay({
 		service,
 		sessionStore,
+		ambient: processAmbient(),
 		sendToHost: (message) => {
 			if (options.dispatch === false) return false;
 			sent.push(message);
@@ -50,7 +53,12 @@ function setup(options: { dispatch?: boolean; waitBudgetMs?: number } = {}) {
 	const token = sessionStore.ensureBindToken(owner);
 	sessionStore.activateBinding(owner);
 	sessionStore.confirm(sessionStore.teamOf(owner));
-	const route = new CopilotRoute({ service, relay, waitBudgetMs: options.waitBudgetMs ?? 1_000 });
+	const route = new CopilotRoute({
+		service,
+		relay,
+		ambient: processAmbient(),
+		waitBudgetMs: options.waitBudgetMs ?? 1_000,
+	});
 	return { route, relay, sent, owner, token, service, sessionStore };
 }
 

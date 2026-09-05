@@ -18,10 +18,18 @@ Entry points, addressing, sessions, and the state planes the console reads.
 
 **Bootstrap values:** `GatewayBootstrap.resolve(paths, env, io)` decides the gateway's boot
 (`active`, `arming`, or `standalone`) and carries the identity, Domain id, transport, allowlist,
-content keys, and cached reach the federation slice reads; `composeGateway` re-resolves after a
-bootstrap install. `RouterDomainBootstrap.assemble` names what the Router's constructor builds. The
-phone's `PhoneIdentity` publishes `PhoneBootstrap` (`docs/console.md`). `bootstrap-residue` pins
-that only the assemblers construct the values.
+content keys, and cached reach the federation slice reads. `RouterDomainBootstrap.assemble` names
+what the Router's constructor builds. The phone's `PhoneIdentity` publishes `PhoneBootstrap`
+(`docs/console.md`). `bootstrap-residue` pins that only the assemblers construct the values.
+
+**The gateway graph:** `composeGateway` calls thirteen stages under `src/gateway/compose/` in
+order (bootstrap, stores, sessions, persistence, host, agents, awareness, federation, enrollment,
+websockets, routes, router frames and presence, listener); a stage that needs a later one takes a
+thunk. `FederationContext` is the one reader of the boot: activation after a bootstrap install
+publishes the boot, the Domain id, and the slice together, so nothing holds a stale copy, and it
+posts the Router share record when the console writes the gateway's mirror. `GatewayGraph` is
+`router`, `wsHandlers`, `close`, and `faults`, the port the harness and the boot smoke drive
+instead of reaching into the graph.
 
 ## Channel conversations
 

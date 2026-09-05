@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { Clock } from "../../shared/ambient.js";
 import { DurableStore } from "../../shared/durable-store.js";
 
 export interface InboxClaim {
@@ -20,7 +21,7 @@ export class InboxClaims {
 
 	constructor(
 		private readonly dataDir: string,
-		private readonly now: () => number = Date.now,
+		private readonly ambient: Clock,
 	) {}
 
 	claim(address: string, seq: number, deliveryEpoch: number): InboxClaim | null {
@@ -34,7 +35,13 @@ export class InboxClaims {
 		const deliveryId = `${address}:${seq}:${deliveryEpoch}`;
 		const existing = current.claims[deliveryId];
 		if (existing) return existing;
-		const claim = { deliveryId, seq, deliveryEpoch, offeredAt: this.now(), outcome: "waking" as const };
+		const claim = {
+			deliveryId,
+			seq,
+			deliveryEpoch,
+			offeredAt: this.ambient.now(),
+			outcome: "waking" as const,
+		};
 		current.claims[deliveryId] = claim;
 		file.saveChecked(current);
 		return null;
@@ -82,6 +89,6 @@ export class InboxClaims {
 	}
 }
 
-export function createInboxClaims(dataDir: string, now?: () => number): InboxClaims {
-	return new InboxClaims(dataDir, now);
+export function createInboxClaims(dataDir: string, ambient: Clock): InboxClaims {
+	return new InboxClaims(dataDir, ambient);
 }

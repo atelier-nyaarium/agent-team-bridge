@@ -16,7 +16,7 @@ const trustArm = (id: string, initiator: string, target: string, commitment: str
 describe("Router coordinators", () => {
 	it("re-arms idempotently, limits commitments, expires, and clears pending queries", () => {
 		let now = 1_000;
-		const c = new TrustRendezvousCoordinator(100, 2, 4, 1, () => now);
+		const c = new TrustRendezvousCoordinator({ now: () => now }, 100, 2, 4, 1);
 		const initiator = "initiator";
 		const target = "target";
 
@@ -26,7 +26,7 @@ describe("Router coordinators", () => {
 		expect(c.handle(trustArm("r1", initiator, target, "three"))).toMatchObject({ ok: false });
 		expect(c.pending(target)).toEqual([]);
 
-		const targetCapped = new TrustRendezvousCoordinator(100, 2, 4, 1, () => now);
+		const targetCapped = new TrustRendezvousCoordinator({ now: () => now }, 100, 2, 4, 1);
 		expect(targetCapped.handle(trustArm("r1", initiator, target, "one"))).toEqual({ ok: true });
 		expect(targetCapped.handle(trustArm("r2", initiator, target, "two"))).toMatchObject({ ok: false });
 
@@ -37,7 +37,7 @@ describe("Router coordinators", () => {
 
 	it("caps failed nonce attempts, preserves honest keys, caps windows, and expires by TTL", () => {
 		let now = 1_000;
-		const c = new DeviceApprovalCoordinator(100, 2, 2, () => now);
+		const c = new DeviceApprovalCoordinator({ now: () => now }, 100, 2, 2);
 		expect(c.handle({ step: "arm", approvalId: "a", nonce: "good" })).toEqual({ ok: true });
 		expect(c.handle({ step: "arm", approvalId: "a", nonce: "good" })).toEqual({ ok: true });
 		expect(c.handle({ step: "arm", approvalId: "a", nonce: "other" })).toMatchObject({ ok: false });

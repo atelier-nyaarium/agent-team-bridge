@@ -7,6 +7,7 @@ import { CodexRelay } from "../gateway/codexRelay.js";
 import { CodexRoute } from "../gateway/codexRoute.js";
 import { createSessionAuthority } from "../gateway/sessionAuthority.js";
 import { resolveLiveIncarnation, type TeamRegistry } from "../gateway/websocket.js";
+import { processAmbient } from "../shared/ambient.js";
 import type {
 	CodexDaemonCommand,
 	CodexDaemonEvent,
@@ -40,6 +41,7 @@ function setup(options: { attached?: boolean; project?: string; waitBudgetMs?: n
 	let catalogWriter: CodexCatalogWriter | undefined;
 	let store!: SessionStore;
 	store = new SessionStore({
+		ambient: processAmbient(),
 		codexCatalogPersistence: {
 			persistChecked: () =>
 				fs.writeFileSync(path.join(dir, "session-resume.json"), JSON.stringify(store.snapshot())),
@@ -68,6 +70,7 @@ function setup(options: { attached?: boolean; project?: string; waitBudgetMs?: n
 	const relay = new CodexRelay({
 		service,
 		sessionStore: store,
+		ambient: processAmbient(),
 		sendToHost: (message) => {
 			if (!attached) return false;
 			outbound.push(
@@ -82,7 +85,12 @@ function setup(options: { attached?: boolean; project?: string; waitBudgetMs?: n
 	const token = store.ensureBindToken(owner);
 	store.activateBinding(owner);
 	store.confirm(store.teamOf(owner));
-	const route = new CodexRoute({ service, relay, waitBudgetMs: options.waitBudgetMs ?? 100 });
+	const route = new CodexRoute({
+		service,
+		relay,
+		ambient: processAmbient(),
+		waitBudgetMs: options.waitBudgetMs ?? 100,
+	});
 	const request = (tokenValue = token) =>
 		new Request("http://gateway/codex", { method: "POST", headers: { "x-session-token": tokenValue } });
 	const feed = (value: CodexDaemonReceipt | CodexDaemonEvent | CodexDaemonHello) => relay.handleHostMessage(value);

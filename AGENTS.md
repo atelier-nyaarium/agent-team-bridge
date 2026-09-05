@@ -166,6 +166,7 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
 - `src/shared/notice.ts` - shared notice tiers
 - `src/shared/wire-vocabulary.ts` - sole TS declaration of Router paths, the console header, signing tags, nonce lengths; generated into `Protocol.Wire` beside the owner-op kinds the registry catalogues; residue-fenced on both runtimes
 - `src/shared/fixture-identity.ts` - the committed test signing keys; shipping entry points refuse them without `ALLOW_FIXTURE_IDENTITY=1`
+- `src/shared/ambient.ts` - the clock, entropy, ids, and timers as one injected record; `processAmbient` is the sole reader of the globals and unrefs every timer it hands back. `composeGateway` and `RouterServerParams` take one and thread it everywhere; `ambient-residue.test.ts` fences the three directories and names the reason for each allowed file. Vocabulary shared with the phone's `PhoneAmbient`, not a type
 - `src/shared/atomic-write.ts` - sole write-then-rename and temp-suffix owner; residue-tested
 - `src/shared/durable-store.ts` - atomic snapshots and per-file quarantine boundaries
 - `src/shared/session-store.ts` - authoritative gateway sessions keyed by `spawn.id`
@@ -190,6 +191,7 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
 - `tests/fixtures/identity/set.json` - the one fixed identity set every harness and fixture generator reads; `scripts/gen-identity-set.ts` mints it
 - `tests/fixtures/wire/ts/` / `wire/kotlin/` - minted wire fixtures, each runtime's real composers under the set; `scripts/gen-wire-fixtures.ts` and `WireFixtureGenerator.kt` write them, `check:fixtures` and `kotlin-gate.sh` diff them
 - `src/testing/` - the federation harness, `fixtureWorld.ts`, real Router and gateway graph in-process, friend Domains linked through the real handshake, fake host and session sockets with the fake Codex daemon, the TS phone driver, the console socket; `docs/testing.md`
+- `src/testing/fakeAmbient.ts` - the harness ambient: a clock offset on the harness `now`, entropy seeded per instance so two peers never collide, and timers on either drive. "real" (the default) rides the process timers so every scenario makes progress unchanged; "manual" holds them until `advance(ms)` reaches each deadline, yielding to the event loop between firings
 - `scripts/check-boot-runtime.ts` - the real entry points under Bun, one console op through a fake host
 - `skills/crosstalk/SKILL.md` - agent-facing tool reference
 

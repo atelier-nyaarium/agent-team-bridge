@@ -1,4 +1,4 @@
-import crypto from "node:crypto";
+import type { Ambient } from "../shared/ambient.js";
 import type { AwarenessObservation, AwarenessSubscriber, Change } from "../shared/awareness-types.js";
 import type { ActAxis, ChannelPushPayload, RidingAwareness } from "../shared/types.js";
 
@@ -18,7 +18,7 @@ export interface AwarenessBank {
 export interface AwarenessBankDeps {
 	liveness(sessionKey: string): SessionLiveness;
 	deliver(sessionKey: string, payload: ChannelPushPayload): boolean;
-	now?: () => number;
+	ambient: Pick<Ambient, "now" | "randomBytes">;
 }
 
 type Entry = {
@@ -45,13 +45,13 @@ export function isNoAckSessionId(sessionId: string): boolean {
 	return sessionId.startsWith(NO_ACK_SESSION_PREFIX);
 }
 
-export function mintNoAckSessionId(): string {
-	return `${NO_ACK_SESSION_PREFIX}${crypto.randomBytes(8).toString("hex")}`;
+export function mintNoAckSessionId(ambient: Pick<Ambient, "randomBytes">): string {
+	return `${NO_ACK_SESSION_PREFIX}${ambient.randomBytes(8).toString("hex")}`;
 }
 
 export function createAwarenessBank(deps: AwarenessBankDeps): AwarenessBank {
 	const sessions = new Map<string, SessionBank>();
-	const clock = deps.now ?? Date.now;
+	const clock = () => deps.ambient.now();
 
 	function changeCount(bank: SessionBank): number {
 		return [...bank.entries.values()].reduce((count, entry) => count + entry.changes.size, 0);
@@ -114,7 +114,7 @@ export function createAwarenessBank(deps: AwarenessBankDeps): AwarenessBank {
 			type: "channel_push",
 			from: awareness.from,
 			body: awareness.body,
-			session_id: mintNoAckSessionId(),
+			session_id: mintNoAckSessionId(deps.ambient),
 			no_ack: true,
 			act: awareness.act,
 		});

@@ -1,4 +1,4 @@
-import crypto from "node:crypto";
+import type { TimerHandle } from "../../shared/ambient.js";
 import type { ConsoleOp, ConsoleOpResult } from "../../shared/console-protocol.js";
 import { fenced, MIGRATING } from "../../shared/migration-fence.js";
 import { ownerKeyId } from "../../shared/owner-id.js";
@@ -25,6 +25,7 @@ export function createConsoleDispatcher({
 	routes,
 	localGatewayId,
 	localDomainId,
+	ambient,
 	sendBoundMs = SEND_BOUND_MS,
 	createSessionBoundMs = CREATE_SESSION_BOUND_MS,
 	isTrustedCatalogProject,
@@ -51,6 +52,7 @@ export function createConsoleDispatcher({
 	const sessionLifecycle = createSessionLifecycleHandlers({
 		targets,
 		createSessionBoundMs,
+		ambient,
 		relayToHost,
 		tryWakeTeam,
 		isWakeInFlight,
@@ -79,7 +81,7 @@ export function createConsoleDispatcher({
 		if (!ownerId) return;
 		const delivered = routes.deliverToOwner({
 			entry: entry as import("../../shared/federation-protocol.js").ConsolePushEntry,
-			dedupeKey: dedupeKey ?? crypto.randomUUID(),
+			dedupeKey: dedupeKey ?? ambient.newId(),
 			label: "console-device",
 		});
 		return delivered ? undefined : fenced() ? MIGRATING : undefined;
@@ -115,12 +117,12 @@ export function createConsoleDispatcher({
 					{ consoleSender: true },
 				);
 
-				let boundTimer: ReturnType<typeof setTimeout> | undefined;
+				let boundTimer: TimerHandle | undefined;
 				const bound = new Promise<null>((resolve) => {
-					boundTimer = setTimeout(() => resolve(null), sendBoundMs);
+					boundTimer = ambient.setTimer(() => resolve(null), sendBoundMs);
 				});
 				const winner = await Promise.race([sendPromise, bound]);
-				clearTimeout(boundTimer);
+				if (boundTimer) ambient.clearTimer(boundTimer);
 
 				if (winner === null) {
 					void sendPromise
@@ -214,7 +216,11 @@ export function createConsoleDispatcher({
 
 			case "report_read": {
 				if (!readAnchors) throw new Error("read-anchor sync is not available on this Gateway");
-				const advanced = readAnchors.report(ownerId, op.team, { epoch: op.epoch, seq: op.seq, at: Date.now() });
+				const advanced = readAnchors.report(ownerId, op.team, {
+					epoch: op.epoch,
+					seq: op.seq,
+					at: ambient.now(),
+				});
 				if (advanced) planeRegistry?.markDirty(readAnchorsPlaneName(ownerId));
 				return { advanced };
 			}

@@ -1,3 +1,4 @@
+import type { Clock } from "../shared/ambient.js";
 import type {
 	EnrollReveal,
 	TrustHandshakeOp,
@@ -39,12 +40,16 @@ export class TrustRendezvousCoordinator {
 	private readonly byTarget = new Map<string, Set<string>>();
 
 	public constructor(
+		private readonly ambient: Clock,
 		private readonly ttlMs: number = DEFAULT_TTL_MS,
 		private readonly maxAttempts: number = DEFAULT_MAX_ATTEMPTS,
 		private readonly maxRendezvous: number = DEFAULT_MAX_RENDEZVOUS,
 		private readonly maxPerTarget: number = DEFAULT_MAX_PER_TARGET,
-		private readonly now: () => number = Date.now,
 	) {}
+
+	private now(): number {
+		return this.ambient.now();
+	}
 
 	public handle(op: TrustHandshakeOp): TrustHandshakeResult {
 		this.sweep();

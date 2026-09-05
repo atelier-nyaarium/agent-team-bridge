@@ -1,3 +1,4 @@
+import type { Ambient, TimerHandle } from "../shared/ambient.js";
 import type { HostOpResult } from "../shared/host-op.js";
 
 ////////////////////////////////
@@ -5,7 +6,7 @@ import type { HostOpResult } from "../shared/host-op.js";
 
 interface HostOpWaiter {
 	resolve: (r: HostOpResult) => void;
-	timer: ReturnType<typeof setTimeout>;
+	timer: TimerHandle;
 }
 
 ////////////////////////////////
@@ -21,9 +22,11 @@ interface HostOpWaiter {
 export class HostOpCoordinator {
 	private pending = new Map<string, HostOpWaiter>();
 
+	constructor(private readonly ambient: Pick<Ambient, "setTimer" | "clearTimer">) {}
+
 	wait(reqId: string, timeoutMs: number): Promise<HostOpResult> {
 		return new Promise((resolve) => {
-			const timer = setTimeout(() => {
+			const timer = this.ambient.setTimer(() => {
 				this.pending.delete(reqId);
 				resolve({ ok: false, error: "host op timed out", errorKind: "timeout" });
 			}, timeoutMs);
@@ -34,7 +37,7 @@ export class HostOpCoordinator {
 	settle(reqId: string, result: HostOpResult): void {
 		const waiter = this.pending.get(reqId);
 		if (!waiter) return;
-		clearTimeout(waiter.timer);
+		this.ambient.clearTimer(waiter.timer);
 		this.pending.delete(reqId);
 		waiter.resolve(result);
 	}
@@ -46,7 +49,7 @@ export class HostOpCoordinator {
 	 * of the WS drop that triggered this. */
 	failAll(error: string): void {
 		for (const [, waiter] of this.pending) {
-			clearTimeout(waiter.timer);
+			this.ambient.clearTimer(waiter.timer);
 			waiter.resolve({ ok: false, error, errorKind: "disconnected" });
 		}
 		this.pending.clear();

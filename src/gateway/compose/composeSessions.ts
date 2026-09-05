@@ -1,6 +1,7 @@
 // Stage 3: the registries, the session records, and every plane read off them.
 
 import type { ServerWebSocket } from "bun";
+import type { Ambient, IntervalHandle } from "../../shared/ambient.js";
 import { restoreDurable } from "../../shared/durable-store.js";
 import { isReservedHostSession } from "../../shared/host-op.js";
 import type { HostSpawnState } from "../../shared/host-spawn.js";
@@ -19,6 +20,7 @@ import type { FederationContext } from "./federationContext.js";
 
 export interface SessionsStageDeps {
 	localGatewayId: string;
+	ambient: Ambient;
 	stores: StoresStage;
 	context: FederationContext;
 }
@@ -41,7 +43,7 @@ export interface SessionsStage {
 	intentTracker: IntentTracker;
 	readAnchors: ReadAnchors;
 	crossDomainPresenceConsumer: CrossDomainPresenceConsumer;
-	tripwireTimer: ReturnType<typeof setInterval>;
+	tripwireTimer: IntervalHandle;
 	sessionResumeSnapshot: (cleanShutdown: boolean) => Record<string, unknown>;
 }
 
@@ -56,7 +58,7 @@ export function createProjectPredicates(
 	};
 }
 
-export function composeSessions({ localGatewayId, stores, context }: SessionsStageDeps): SessionsStage {
+export function composeSessions({ localGatewayId, ambient, stores, context }: SessionsStageDeps): SessionsStage {
 	const registry: TeamRegistry = new Map<string, Map<string, ServerWebSocket<WsData>>>();
 	const conversationRegistry = new Map<string, ServerWebSocket<WsData>>();
 	const knownTeamPaths = new Map<string, string>();
@@ -72,6 +74,7 @@ export function composeSessions({ localGatewayId, stores, context }: SessionsSta
 		persistAgentCatalogChecked();
 	};
 	const sessionStore = new SessionStore({
+		ambient,
 		clash: (id) => isTrustedCatalogProject(id) || isReservedHostSession(id),
 		codexCatalogPersistence: {
 			persistChecked,
@@ -100,7 +103,7 @@ export function composeSessions({ localGatewayId, stores, context }: SessionsSta
 		`[durability] restored jobs=${stores.jobs.size} resume=${sessionStore.size} ops=${stores.durableOpStore.size}`,
 	);
 
-	const planeRegistry = new PlaneRegistry();
+	const planeRegistry = new PlaneRegistry(ambient);
 	const presence = new PresenceFacade({
 		sessionStore,
 		registry,
@@ -121,13 +124,12 @@ export function composeSessions({ localGatewayId, stores, context }: SessionsSta
 	presence.attach(planeRegistry);
 	presence.registerPlane(stores.restored.planes?.presence);
 	planeRegistry.reconcileOnBoot();
-	const tripwireTimer = setInterval(() => planeRegistry.tripwireTick(), 60_000);
-	tripwireTimer.unref?.();
+	const tripwireTimer = ambient.setInterval(() => planeRegistry.tripwireTick(), 60_000);
 
-	const intentTracker = new IntentTracker();
+	const intentTracker = new IntentTracker({ ambient });
 	const readAnchors = new ReadAnchors(planeRegistry, stores.restored.planes);
 	readAnchors.restore(stores.restored.readAnchors);
-	const crossDomainPresenceConsumer = new CrossDomainPresenceConsumer(planeRegistry, stores.restored.planes);
+	const crossDomainPresenceConsumer = new CrossDomainPresenceConsumer(planeRegistry, stores.restored.planes, ambient);
 	crossDomainPresenceConsumer.restore(stores.restored.crossDomainPresence);
 
 	const sessionResumeSnapshot = (cleanShutdown: boolean) => ({

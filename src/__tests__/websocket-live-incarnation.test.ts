@@ -1,6 +1,7 @@
 import type { ServerWebSocket } from "bun";
 import { describe, expect, it } from "vitest";
 import { resolveLiveIncarnation, type TeamRegistry, type WsData } from "../gateway/websocket.js";
+import { processAmbient } from "../shared/ambient.js";
 import { SessionStore } from "../shared/session-store.js";
 
 // The one record-to-socket resolver: the canonical pane, confirmed first, else the alias liveTeam.
@@ -11,7 +12,7 @@ describe("resolveLiveIncarnation", () => {
 		entries: Array<[team: string, sockets: Array<[string, ServerWebSocket<WsData>]>]>,
 	): TeamRegistry => new Map(entries.map(([team, sockets]) => [team, new Map(sockets)]));
 	const aliased = (canonical: string, spawn: string, id: string, alias: string): SessionStore => {
-		const store = new SessionStore();
+		const store = new SessionStore({ ambient: processAmbient() });
 		store.adoptById(id, { spawn });
 		store.confirm(canonical, { team: alias, subId: "s1" });
 		return store;
@@ -31,12 +32,16 @@ describe("resolveLiveIncarnation", () => {
 						],
 					],
 				]),
-				new SessionStore(),
+				new SessionStore({ ambient: processAmbient() }),
 				"host.abc",
 			),
 		).toBe(confirmed);
 		expect(
-			resolveLiveIncarnation(registry([["proj-a.dev", [["s1", verifying]]]]), new SessionStore(), "proj-a.dev"),
+			resolveLiveIncarnation(
+				registry([["proj-a.dev", [["s1", verifying]]]]),
+				new SessionStore({ ambient: processAmbient() }),
+				"proj-a.dev",
+			),
 		).toBe(verifying);
 	});
 

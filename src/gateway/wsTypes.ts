@@ -1,4 +1,5 @@
 import type { ServerWebSocket } from "bun";
+import type { Ambient } from "../shared/ambient.js";
 import type { Capability } from "../shared/capabilities.js";
 import type { HostSpawnState } from "../shared/host-spawn.js";
 import type { SessionStore } from "../shared/session-store.js";
@@ -13,7 +14,7 @@ export type TeamRegistry = Map<string, Map<string, ServerWebSocket<WsData>>>;
 export type ConversationRegistry = Map<string, ServerWebSocket<WsData>>;
 
 export interface WebSocketDeps {
-	now?: () => number;
+	ambient: Pick<Ambient, "now" | "newId" | "setInterval">;
 	registry: TeamRegistry;
 	conversationRegistry: ConversationRegistry;
 	knownTeamPaths: Map<string, string>;

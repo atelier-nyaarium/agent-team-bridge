@@ -1,5 +1,5 @@
-import { randomBytes } from "node:crypto";
 import { REGISTER_MAX_SKEW_MS } from "../shared/admission.js";
+import type { Ambient } from "../shared/ambient.js";
 import { fingerprint } from "../shared/crypto.js";
 import {
 	type EnrollResult,
@@ -39,9 +39,13 @@ export class TenantAdmin {
 	public constructor(
 		private readonly store: FileSecretStore,
 		private readonly adminSignPub: () => string | null,
-		private readonly now: () => number = Date.now,
+		private readonly ambient: Pick<Ambient, "now" | "randomBytes">,
 		private readonly inviteTtlMs: number = DEFAULT_INVITE_TTL_MS,
 	) {}
+
+	private now(): number {
+		return this.ambient.now();
+	}
 
 	public async provisionTenant(signed: SignedProvisionTenant): Promise<EnrollResult & { nonce?: string }> {
 		const adminKey = this.adminSignPub();
@@ -52,7 +56,7 @@ export class TenantAdmin {
 		if (domainId === this.store.adminDomainId()) {
 			return { ok: false, error: "cannot provision the admin's Domain" };
 		}
-		const inviteNonce = randomBytes(WIRE_NONCE_BYTES).toString("base64");
+		const inviteNonce = this.ambient.randomBytes(WIRE_NONCE_BYTES).toString("base64");
 		const pending: PendingTenantRecord = {
 			displayName,
 			nonce: inviteNonce,

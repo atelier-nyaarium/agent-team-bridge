@@ -2,6 +2,7 @@ import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 import { type WebSocket, WebSocketServer } from "ws";
 import { type RouterClient, startRouterClient } from "../gateway/router/routerClient.js";
+import { processAmbient } from "../shared/ambient.js";
 
 ////////////////////////////////
 //  Interfaces & Types
@@ -77,6 +78,7 @@ describe("routerClient pending-Domain re-register", () => {
 
 		let lastStatus: string | undefined;
 		client = startRouterClient({
+			ambient: processAmbient(),
 			url: `ws://localhost:${router.port}`,
 			headers: { Authorization: "Bearer test-token" },
 			gatewayId: "test-host",
@@ -116,6 +118,7 @@ describe("routerClient pending-Domain re-register", () => {
 		});
 
 		client = startRouterClient({
+			ambient: processAmbient(),
 			url: `ws://localhost:${router.port}`,
 			headers: { Authorization: "Bearer test-token" },
 			gatewayId: "test-host",
@@ -152,6 +155,7 @@ describe("routerClient pending-Domain re-register", () => {
 
 		// A long pending delay so the close, not the timer, is what ends the first attempt.
 		client = startRouterClient({
+			ambient: processAmbient(),
 			url: `ws://localhost:${router.port}`,
 			headers: { Authorization: "Bearer test-token" },
 			gatewayId: "test-host",

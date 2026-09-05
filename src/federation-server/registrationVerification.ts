@@ -20,7 +20,7 @@ export interface FederationTrust {
 export function verifyRegistrationClaim(
 	params: GatewayRegisterParams,
 	trust: FederationTrust,
-	nowMs: number = Date.now(),
+	nowMs: number,
 ): string | null {
 	const { gatewayId, signPub, boxPub, admission, proof, proofAt, proofNonce } = params;
 	if (!signPub || !boxPub || !admission || !proof || proofAt === undefined || !proofNonce) {

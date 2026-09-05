@@ -1,5 +1,6 @@
 // Cursor guarantees delivery. Push is optimization.
 
+import type { Ambient, TimerHandle } from "../../shared/ambient.js";
 import {
 	CONSOLE_HELLO_DEADLINE_MS,
 	CONSOLE_PLANES_ONLY,
@@ -39,7 +40,9 @@ export interface ConsoleSocketsDeps {
 		ownerSignPub: string,
 		sinceMs: number,
 	) => InboxRow[] | { outcome: "durability_uncertain" };
-	now?: () => number;
+	ambient: Pick<Ambient, "setTimer" | "clearTimer">;
+	/** The registry's clock, stamped on key-row reads. */
+	seenAt: () => number;
 	advanceCursor: (
 		domainId: string,
 		signerSignPub: string,
@@ -70,9 +73,9 @@ export interface ConsoleHelloAnswer {
 }
 
 export function createConsoleSockets(deps: ConsoleSocketsDeps) {
-	const now = deps.now ?? (() => Date.now());
+	const now = () => deps.seenAt();
 	const bound = new Map<ConsoleSocket, Bound>();
-	const pending = new Map<ConsoleSocket, ReturnType<typeof setTimeout>>();
+	const pending = new Map<ConsoleSocket, TimerHandle>();
 	// Distinguishes reconnects from replaced sockets.
 	const incarnations = new Map<string, number>();
 
@@ -96,14 +99,13 @@ export function createConsoleSockets(deps: ConsoleSocketsDeps) {
 
 	function drop(socket: ConsoleSocket): void {
 		const timer = pending.get(socket);
-		if (timer) clearTimeout(timer);
+		if (timer) deps.ambient.clearTimer(timer);
 		pending.delete(socket);
 		bound.delete(socket);
 	}
 
 	function open(socket: ConsoleSocket): void {
-		const timer = setTimeout(() => refuse(socket, "no_hello"), CONSOLE_HELLO_DEADLINE_MS);
-		timer.unref?.();
+		const timer = deps.ambient.setTimer(() => refuse(socket, "no_hello"), CONSOLE_HELLO_DEADLINE_MS);
 		pending.set(socket, timer);
 	}
 
@@ -148,7 +150,7 @@ export function createConsoleSockets(deps: ConsoleSocketsDeps) {
 			? { cursor: 0, cursorEpoch: 0 }
 			: deps.registerConsumer(identity.domainId, identity.signerSignPub, incarnation);
 		const timer = pending.get(socket);
-		if (timer) clearTimeout(timer);
+		if (timer) deps.ambient.clearTimer(timer);
 		pending.delete(socket);
 		// One socket per consumer.
 		for (const [other, at] of bound) {

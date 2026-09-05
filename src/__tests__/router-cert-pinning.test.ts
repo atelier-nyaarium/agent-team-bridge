@@ -13,6 +13,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { WebSocketServer } from "ws";
 import { classifyLeaf, pinnedDial, pinRefusal } from "../gateway/router/pinnedSocket.js";
 import { startRouterClient } from "../gateway/router/routerClient.js";
+import { processAmbient } from "../shared/ambient.js";
 
 ////////////////////////////////
 //  Functions & Helpers
@@ -133,6 +134,7 @@ describe("router cert pinning", () => {
 		router = await startTlsRouter(served);
 
 		client = startRouterClient({
+			ambient: processAmbient(),
 			url: router.url,
 			headers: { authorization: "Bearer super-secret" },
 			tls: { certFp: expected.fp },
@@ -155,6 +157,7 @@ describe("router cert pinning", () => {
 		router = await startTlsRouter(served);
 
 		client = startRouterClient({
+			ambient: processAmbient(),
 			url: router.url,
 			headers: { authorization: "Bearer super-secret" },
 			tls: { certFp: served.fp },

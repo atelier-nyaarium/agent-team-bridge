@@ -1,4 +1,5 @@
 import type { DomainSnapshot } from "../../shared/admission.js";
+import type { Ambient } from "../../shared/ambient.js";
 import type { BlobStore } from "../../shared/blob-store.js";
 import type { BoardDisposition } from "../../shared/board-authority.js";
 import type {
@@ -75,6 +76,7 @@ export interface ConsoleHandlerDeps {
 	 * session-id form (matching routes.send). */
 	localGatewayId: string;
 	localDomainId: string;
+	ambient: Pick<Ambient, "now" | "newId" | "setTimer" | "clearTimer">;
 	sendBoundMs?: number;
 	createSessionBoundMs?: number;
 	/** True when the name belongs to a trusted devcontainer project. A device must not take such a

@@ -40,9 +40,33 @@ checks; each reader scans its frame for undeclared envelopes.
 graph through `composeGateway`, joined by the real pinned client over loopback. The host daemon
 and the sessions are fake sockets at the gateway's own WebSocket handlers (`fakeHost.ts`,
 `fakeSession.ts`); the phone is a TypeScript driver on `RouterServer.handle` (`phoneDriver.ts`)
-plus a console socket against the Router's TLS listener (`consoleSocket.ts`). Both clocks take
-the harness `now`. `restartGateway` recomposes over the retained directories. `restartHost`
+plus a console socket against the Router's TLS listener (`consoleSocket.ts`).
+`restartGateway` recomposes over the retained directories. `restartHost`
 reconnects the daemon, and with `newDaemon` as a fresh process.
+
+## The ambient
+
+The gateway and the Router read the clock, the entropy, the ids, and the timers only through an
+injected `Ambient` (`src/shared/ambient.ts`). `processAmbient()` is the one reader of `Date.now`,
+`crypto.randomBytes`, `crypto.randomUUID`, and the global timers; every timer it hands back is
+unref'd. `ambient-residue.test.ts` fences direct reads across `src/gateway`, `src/federation-server`,
+and `src/shared`, and names the reason for each of its nine allowed files.
+
+`fakeAmbient` (`src/testing/fakeAmbient.ts`) is the harness's. Its clock is an offset on the
+harness `now`, and its entropy is a per-instance stream seeded from a fresh draw, so two peers in
+one scenario never mint the same nonce. Its timers have two drives:
+
+- **"real"**, the harness default. Timers ride the process ones, so the persist tick, the presence
+  watch, the awareness tick, the inbox pump, and the reconciler fire on their own cadence and every
+  scenario makes progress with no sleeps. This is what the gateway did before the ambient existed.
+- **"manual"**, per scenario. Nothing fires until `advance(ms)`, which runs each timer at its own
+  deadline (intervals repeating) and yields to the event loop between firings, so the I/O and
+  promises a real elapsed second would have settled do settle. `startFederationHarness({ drive:
+  "manual" })` selects it; the fake is exposed as `h.ambient` for the home gateway,
+  `h.routerAmbient` for the Router, and `peer.ambient` for a Domain added with `addDomain`.
+
+Only a scenario that must move a deadline needs manual drive. The handshake re-send window and the
+handshake expiry sweep are the two that do.
 
 The fake host is also the Codex daemon. It answers `codex_command` frames through a responder:
 `stockCodexResponder` accepts and completes at once, and a scenario installs its own for a running
@@ -64,7 +88,7 @@ bookkeeping:
 | `federation-harness.test.ts` | One Domain: send and reply, host launch, presence, board, notices, a queued reply across a gateway restart, the empty keyring |
 | `federation-harness-boot.test.ts` | Reach before roster, the bounded bootstrap install, Router and gateway restarts, a notice held through a Router outage |
 | `federation-harness-sessions.test.ts` | Session bindings and impostors, worker answers, transcript handover, duplicated deliveries, reply authority, the wake boundary, the console's create, rename, close, forget, tmux, peek, and notify rules, daemon capabilities |
-| `federation-harness-handshake.test.ts` | A session verifying before its lead confirms, a reconnect within retention, a stale close under a newer registration |
+| `federation-harness-handshake.test.ts` | A session verifying before its lead confirms, a reconnect within retention, a stale close under a newer registration; under manual drive, the re-send throttle window and the expiry sweep |
 | `federation-harness-domains.test.ts` | Two and three Domains: the handshake, shares and the Router record, cross-Domain send and reply, opaque refusal, unshare, unlink, colliding gateway ids, forged replies, a repeated send opId |
 | `federation-harness-xdomain.test.ts` | The share gate, a cross-Domain wake, return-route authentication, a relay retried across a Router restart, unlink of in-flight work, share auto-forget |
 | `federation-harness-router.test.ts` | Router-only: tenant provision, first root, rename and its refusals, removal, deletion, replay across a restart, device approval, the trust rendezvous |
@@ -116,7 +140,8 @@ manifest entry on both sides. The n-th random draw of a case is the first N byte
 ## Wire vocabulary
 
 `src/shared/wire-vocabulary.ts` declares the Router paths, the console header and Bearer prefix,
-the owner-op kinds the Router dispatches, the signing tags, and the nonce lengths.
-`scripts/codegen-kotlin.ts` emits them as `Protocol.Wire`, with the console op kinds, socket
+the signing tags, the outcome and reason constants, and the nonce lengths. The owner-op kinds
+come from `src/federation-server/ownerOpRegistry.ts`, the catalog every kind registers through.
+`scripts/codegen-kotlin.ts` emits both as `Protocol.Wire`, with the console op kinds, socket
 frame types, and key op kinds from the Zod literals. `wire-vocabulary-residue.test.ts` rejects
 the literals anywhere else on either runtime.

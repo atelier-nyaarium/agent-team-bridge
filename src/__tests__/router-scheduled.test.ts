@@ -6,6 +6,7 @@ import { InboxService } from "../federation-server/inbox/inboxService.js";
 import { OwnerStoreRegistry } from "../federation-server/inbox/ownerStoreRegistry.js";
 import { DomainQuota } from "../federation-server/owner/domainQuota.js";
 import { createScheduledService, type ScheduledDeps } from "../federation-server/scheduled/scheduledService.js";
+import { processAmbient } from "../shared/ambient.js";
 import { type BlobReference, formatBlobReference } from "../shared/blob-reference.js";
 import { generateIdentity } from "../shared/crypto.js";
 import type { ContentEnvelope } from "../shared/schemasContentKey.js";
@@ -41,7 +42,7 @@ function make(
 		ownerOf: (domainId) => (domainId === "domain-a" ? owner.sign.pub : null),
 		quotaFor: () =>
 			new DomainQuota({ dir: dataDir, limitBytes: 100_000_000, statfs: () => ({ available: 100_000_000 }) }),
-		now: () => now,
+		ambient: { now: () => now },
 	});
 	const router = generateIdentity();
 	const realInbox = options.durableInbox
@@ -646,6 +647,7 @@ describe("scheduled service", () => {
 				domainId === "domain-a" ? ownerA.sign.pub : domainId === "domain-b" ? ownerB.sign.pub : null,
 			quotaFor: () =>
 				new DomainQuota({ dir: dataDir, limitBytes: 100_000_000, statfs: () => ({ available: 100_000_000 }) }),
+			ambient: processAmbient(),
 		});
 		const service = createScheduledService({
 			...make().deps,

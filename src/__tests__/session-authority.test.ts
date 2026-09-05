@@ -7,6 +7,7 @@ import {
 	presentedBySocket,
 } from "../gateway/sessionAuthority.js";
 import { resolveLiveIncarnation, type TeamRegistry, type WsData } from "../gateway/websocket.js";
+import { processAmbient } from "../shared/ambient.js";
 import { SessionStore } from "../shared/session-store.js";
 
 ////////////////////////////////
@@ -17,7 +18,7 @@ function socket(boundToken?: string): { data: WsData } {
 }
 
 function setup() {
-	const sessionStore = new SessionStore();
+	const sessionStore = new SessionStore({ ambient: processAmbient() });
 	const registry: TeamRegistry = new Map();
 	const auth = createSessionAuthority({
 		sessionStore,

@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { ContentKeyStore } from "../gateway/federation/contentKeyStore.js";
 import { signAdmission } from "../shared/admission.js";
+import { processAmbient } from "../shared/ambient.js";
 import { BOARD_BODY_KIND, boardTextAadKind, sealContent, wrapContentKey } from "../shared/content-envelope.js";
 import { generateIdentity } from "../shared/crypto.js";
 
@@ -30,7 +31,7 @@ describe("ContentKeyStore", () => {
 		);
 		const key = Buffer.alloc(32, 7);
 		const envelope = wrapContentKey(key, 1, gateway.box.pub, console_.sign.pub, console_.sign.priv);
-		const store = new ContentKeyStore(dir, gateway.box.priv);
+		const store = new ContentKeyStore(dir, gateway.box.priv, processAmbient());
 		const trust = { ownerSignPub: owner.sign.pub, admissions: [admission], revocations: [] };
 
 		expect(store.install(envelope, trust)).toBe("installed");
@@ -53,7 +54,7 @@ describe("ContentKeyStore", () => {
 
 	it("refuses a gateway signer", () => {
 		const gateway = generateIdentity();
-		const store = new ContentKeyStore(tempDir(), gateway.box.priv);
+		const store = new ContentKeyStore(tempDir(), gateway.box.priv, processAmbient());
 		const admission = signAdmission(
 			{
 				kind: "gateway",
@@ -87,7 +88,7 @@ describe("ContentKeyStore", () => {
 			owner.sign.priv,
 			owner.sign.pub,
 		);
-		const store = new ContentKeyStore(dir, gateway.box.priv);
+		const store = new ContentKeyStore(dir, gateway.box.priv, processAmbient());
 		expect(
 			store.install(wrapContentKey(Buffer.alloc(32), 1, other.box.pub, signer.sign.pub, signer.sign.priv), {
 				ownerSignPub: owner.sign.pub,
@@ -110,7 +111,7 @@ describe("ContentKeyStore", () => {
 		);
 		const trust = { ownerSignPub: owner.sign.pub, admissions: [admission], revocations: [] };
 		const envelope = wrapContentKey(Buffer.alloc(32, 1), 1, gateway.box.pub, signer.sign.pub, signer.sign.priv);
-		const store = new ContentKeyStore(dir, gateway.box.priv);
+		const store = new ContentKeyStore(dir, gateway.box.priv, processAmbient());
 		expect(store.install(envelope, trust)).toBe("installed");
 		expect(store.install(envelope, trust)).toBe("already_present");
 		expect(store.epochs()).toEqual([1]);
@@ -127,7 +128,7 @@ describe("ContentKeyStore", () => {
 			owner.sign.pub,
 		);
 		const trust = { ownerSignPub: owner.sign.pub, admissions: [admission], revocations: [] };
-		const store = new ContentKeyStore(dir, gateway.box.priv);
+		const store = new ContentKeyStore(dir, gateway.box.priv, processAmbient());
 		expect(
 			store.install(
 				wrapContentKey(Buffer.alloc(32, 1), 1, gateway.box.pub, signer.sign.pub, signer.sign.priv),
@@ -154,7 +155,7 @@ describe("ContentKeyStore", () => {
 			owner.sign.pub,
 		);
 		const trust = { ownerSignPub: owner.sign.pub, admissions: [admission], revocations: [] };
-		const store = new ContentKeyStore(dir, gateway.box.priv);
+		const store = new ContentKeyStore(dir, gateway.box.priv, processAmbient());
 		const valid = wrapContentKey(Buffer.alloc(32, 1), 1, gateway.box.pub, signer.sign.pub, signer.sign.priv);
 		const tampered = { ...valid, sealed: { ...valid.sealed, ciphertext: `${valid.sealed.ciphertext}A` } };
 		const relabeled = { ...valid, epoch: 2 };
@@ -167,7 +168,7 @@ describe("ContentKeyStore", () => {
 		const dir = tempDir();
 		const owner = generateIdentity();
 		const gateway = generateIdentity();
-		const store = new ContentKeyStore(dir, gateway.box.priv);
+		const store = new ContentKeyStore(dir, gateway.box.priv, processAmbient());
 		const aad = {
 			domainId: "domain",
 			ownerSignPub: owner.sign.pub,
@@ -207,7 +208,7 @@ describe("ContentKeyStore", () => {
 			owner.sign.pub,
 		);
 		const trust = { ownerSignPub: owner.sign.pub, admissions: [admission], revocations: [] };
-		const store = new ContentKeyStore(dir, gateway.box.priv);
+		const store = new ContentKeyStore(dir, gateway.box.priv, processAmbient());
 		const keyB64 = key.toString("base64");
 		const logs: string[] = [];
 		vi.spyOn(console, "log").mockImplementation((...args) => logs.push(args.join(" ")));
@@ -265,7 +266,7 @@ describe("ContentKeyStore", () => {
 		const dir = tempDir();
 		const file = path.join(dir, "content-keys.json");
 		fs.writeFileSync(file, contents);
-		const store = new ContentKeyStore(dir, "");
+		const store = new ContentKeyStore(dir, "", processAmbient());
 		const aside = fs.readdirSync(dir).find((name) => name.startsWith("content-keys.json.corrupt-"));
 		expect(store.epochs()).toEqual([]);
 		expect(aside).toBeDefined();
@@ -277,7 +278,7 @@ describe("ContentKeyStore", () => {
 		const contents = JSON.stringify({ v: 1, keys: { "1": Buffer.alloc(31).toString("base64") } });
 		fs.writeFileSync(path.join(dir, "content-keys.json"), contents);
 		const gateway = generateIdentity();
-		const store = new ContentKeyStore(dir, gateway.box.priv);
+		const store = new ContentKeyStore(dir, gateway.box.priv, processAmbient());
 		const aside = fs.readdirSync(dir).find((name) => name.startsWith("content-keys.json.corrupt-"))!;
 		const owner = generateIdentity();
 		const signer = generateIdentity();
@@ -309,7 +310,7 @@ describe("ContentKeyStore", () => {
 			owner.sign.pub,
 		);
 		const trust = { ownerSignPub: owner.sign.pub, admissions: [admission], revocations: [] };
-		const store = new ContentKeyStore(dir, gateway.box.priv);
+		const store = new ContentKeyStore(dir, gateway.box.priv, processAmbient());
 		const good = wrapContentKey(Buffer.alloc(32, 1), 1, gateway.box.pub, console_.sign.pub, console_.sign.priv);
 		const unsigned = wrapContentKey(Buffer.alloc(32, 2), 2, gateway.box.pub, gateway.sign.pub, gateway.sign.priv);
 
@@ -322,12 +323,12 @@ describe("ContentKeyStore", () => {
 		if (accepted.kind !== "accepted") return;
 		expect(accepted.newEpochs).toEqual([1, 2]);
 		store.commit(accepted.map);
-		expect(new ContentKeyStore(dir, gateway.box.priv).epochs()).toEqual([1, 2]);
+		expect(new ContentKeyStore(dir, gateway.box.priv, processAmbient()).epochs()).toEqual([1, 2]);
 	});
 
 	it("does not load identity during standalone-style store construction", () => {
 		const dir = tempDir();
 		fs.writeFileSync(path.join(dir, "federation-identity.json"), "garbage");
-		expect(() => new ContentKeyStore(dir, () => "unused")).not.toThrow();
+		expect(() => new ContentKeyStore(dir, () => "unused", processAmbient())).not.toThrow();
 	});
 });

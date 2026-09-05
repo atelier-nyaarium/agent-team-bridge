@@ -1,6 +1,7 @@
 // The gateway graph's public surface: what the adapter passes in, what it gets back, and the
 // fault port the harness and the boot smoke drive it through.
 
+import type { Ambient } from "../../shared/ambient.js";
 import type { SealedEnvelope } from "../../shared/crypto.js";
 import type { RowEnvelope } from "../../shared/schemasInbox.js";
 import type { SessionRecord } from "../../shared/session-store.js";
@@ -36,8 +37,8 @@ export type OpenEnrollTls = (opts: {
 
 export interface GatewayDeps {
 	config: GatewayConfig;
-	now?: () => number;
-	randomBytes?: (size: number) => Buffer;
+	/** The clock, the entropy, the ids, and the timers this graph runs on. */
+	ambient: Ambient;
 	/** Absent means no LAN delivery. */
 	openEnrollTls?: OpenEnrollTls;
 	/** Only test processes hold the committed fixture keys. */

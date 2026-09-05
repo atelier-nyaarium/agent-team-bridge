@@ -8,6 +8,7 @@ import { loadRouterTls } from "../../federation-server/routerTls.js";
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 
 import { signAdmission, signRegister } from "../../shared/admission.js";
+import { processAmbient } from "../../shared/ambient.js";
 import { generateIdentity, type Identity } from "../../shared/crypto.js";
 
 export const FEDERATION_TOKEN = "federation-test-token";
@@ -86,6 +87,7 @@ export async function startRouter(options: { pendingTenant?: boolean } = {}): Pr
 		federationToken: FEDERATION_TOKEN,
 		store,
 		tls: loadRouterTls(dir),
+		ambient: processAmbient(),
 	});
 	await server.start();
 	const listeningPort = server.listeningPort;

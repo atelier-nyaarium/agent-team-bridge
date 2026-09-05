@@ -1,16 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { HostOpCoordinator } from "../gateway/hostOpCoordinator.js";
+import { processAmbient } from "../shared/ambient.js";
 
 describe("HostOpCoordinator", () => {
 	it("resolves a waiter when its reqId is settled", async () => {
-		const coord = new HostOpCoordinator();
+		const coord = new HostOpCoordinator(processAmbient());
 		const p = coord.wait("req-1", 1000);
 		coord.settle("req-1", { ok: true, result: { ansi: "x", hash: "abc" } });
 		await expect(p).resolves.toEqual({ ok: true, result: { ansi: "x", hash: "abc" } });
 	});
 
 	it("routes each reply to its own reqId (concurrent ops do not cross)", async () => {
-		const coord = new HostOpCoordinator();
+		const coord = new HostOpCoordinator(processAmbient());
 		const a = coord.wait("a", 1000);
 		const b = coord.wait("b", 1000);
 		coord.settle("b", { ok: true, result: "B" });
@@ -20,7 +21,7 @@ describe("HostOpCoordinator", () => {
 	});
 
 	it("ignores a settle for an unknown or already-settled reqId", async () => {
-		const coord = new HostOpCoordinator();
+		const coord = new HostOpCoordinator(processAmbient());
 		const p = coord.wait("once", 1000);
 		coord.settle("once", { ok: true, result: 1 });
 		coord.settle("once", { ok: true, result: 2 }); // no throw, no effect
@@ -29,7 +30,7 @@ describe("HostOpCoordinator", () => {
 	});
 
 	it("resolves a clean timeout error rather than hanging, tagged as an ambiguous timeout", async () => {
-		const coord = new HostOpCoordinator();
+		const coord = new HostOpCoordinator(processAmbient());
 		await expect(coord.wait("slow", 10)).resolves.toEqual({
 			ok: false,
 			error: "host op timed out",
@@ -38,7 +39,7 @@ describe("HostOpCoordinator", () => {
 	});
 
 	it("failAll resolves every in-flight op with an error, tagged as ambiguous (host disconnect)", async () => {
-		const coord = new HostOpCoordinator();
+		const coord = new HostOpCoordinator(processAmbient());
 		const a = coord.wait("a", 10_000);
 		const b = coord.wait("b", 10_000);
 		coord.failAll("host daemon disconnected");

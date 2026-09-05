@@ -6,6 +6,7 @@ import { CapabilityStore } from "../gateway/console/capabilityStore.js";
 import { DaemonCapabilityStore } from "../gateway/daemonCapabilities.js";
 import { capabilityInstructions } from "../mcp/capabilities.js";
 import { describeDrift, renderCapabilities } from "../mcp/capabilitiesTool.js";
+import { processAmbient } from "../shared/ambient.js";
 import {
 	type Capability,
 	CODEX_AGENT_CAPABILITY_ID,
@@ -57,7 +58,7 @@ function serve(env: Record<string, string | undefined>, console_: Capability[]) 
 	});
 	const daemon = new DaemonCapabilityStore(fakeDurable());
 	daemon.declare(frame.daemonCapabilities ?? []);
-	const consoleStore = new CapabilityStore(fakeDurable());
+	const consoleStore = new CapabilityStore(fakeDurable(), processAmbient());
 	consoleStore.report("phone-1", console_);
 	// Through JSON and the wire schema, because the route serializes before the MCP parses it back.
 	const wire = JSON.parse(JSON.stringify({ console: consoleStore.snapshot(), daemon: daemon.snapshot() }));

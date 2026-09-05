@@ -1,6 +1,7 @@
 // Stage 8: everything the FederationActive phase owns, built from one bootstrap.
 
 import { DomainSnapshotSchema } from "../../shared/admission.js";
+import type { Ambient, IntervalHandle } from "../../shared/ambient.js";
 import { DurableStore, restoreDurable } from "../../shared/durable-store.js";
 import { stableHash } from "../../shared/plane-registry.js";
 import { MAX_BLOB_BYTES } from "../../shared/router-protocol.js";
@@ -54,8 +55,7 @@ export interface FederationStageDeps {
 	localGatewayId: string;
 	/** Null dials the transport's Router. */
 	routerBootstrapUrl: string | null;
-	now: () => number;
-	randomBytes: (size: number) => Buffer;
+	ambient: Ambient;
 	context: FederationContext;
 	stores: StoresStage;
 	sessions: SessionsStage;
@@ -80,12 +80,13 @@ export interface FederationStage {
 }
 
 export function composeFederation(deps: FederationStageDeps): FederationStage {
-	const { context, stores, sessions, localGatewayId, federationDir, dataDir, now, randomBytes } = deps;
+	const { context, stores, sessions, localGatewayId, federationDir, dataDir, ambient } = deps;
+	const now = () => ambient.now();
 	let presenceReporter: ReturnType<typeof createPresenceReporter> | null = null;
 	let shareAttestor: ReturnType<typeof createShareAttestor> | null = null;
 	let keyRequester: ReturnType<typeof createKeyRequester> | null = null;
 	let inboxPump: ReturnType<typeof createInboxDeliveryPump> | null = null;
-	let shareSweepTimer: ReturnType<typeof setInterval> | null = null;
+	let shareSweepTimer: IntervalHandle | null = null;
 
 	function buildSlice(gatewayBootstrap: GatewayBootstrap): FederationSlice {
 		let slice: FederationSlice;
@@ -118,11 +119,11 @@ export function composeFederation(deps: FederationStageDeps): FederationStage {
 				else slice.handlers?.presence.presenceSource.recomputeAll();
 				shareAttestor?.attest();
 			},
-			now,
+			ambient,
 		);
 		const federationIdentity = gatewayBootstrap.identity;
 		const replayDurable = new DurableStore(dataDir, "replay-guard");
-		const replayGuard = new ReplayGuard();
+		const replayGuard = new ReplayGuard(ambient);
 		restoreDurable("replay-guard", () => {
 			const persisted = replayDurable.load();
 			if (Array.isArray(persisted)) replayGuard.restore(persisted as Array<[string, number]>);
@@ -134,6 +135,7 @@ export function composeFederation(deps: FederationStageDeps): FederationStage {
 			crossDomainPeers,
 			domainId,
 			replayGuard,
+			ambient,
 		);
 		const routeHandshake = async (
 			action: string,
@@ -141,7 +143,7 @@ export function composeFederation(deps: FederationStageDeps): FederationStage {
 			payload: unknown,
 		): Promise<unknown> => {
 			const res = await slice.routerClient.callTool(action, {
-				handshakeId: randomBytes(WIRE_NONCE_BYTES).toString("base64url"),
+				handshakeId: ambient.randomBytes(WIRE_NONCE_BYTES).toString("base64url"),
 				srcDomain: domainId,
 				srcGateway: localGatewayId,
 				dstGateway: receiverGatewayId,
@@ -161,6 +163,7 @@ export function composeFederation(deps: FederationStageDeps): FederationStage {
 				gatewayId: localGatewayId,
 			},
 			peers: crossDomainPeers,
+			ambient,
 			route: {
 				sendCommit: async (receiverGatewayId, req) => {
 					const r = await routeHandshake("cross_domain_handshake", receiverGatewayId, req);
@@ -181,6 +184,7 @@ export function composeFederation(deps: FederationStageDeps): FederationStage {
 		console.log(`[router] direct transport -> ${bootstrap}`);
 
 		const routerClient = startRouterClient({
+			ambient,
 			url: bootstrap,
 			headers: connection.headers,
 			tls: connection.tls,
@@ -220,8 +224,7 @@ export function composeFederation(deps: FederationStageDeps): FederationStage {
 					gatewayId: localGatewayId,
 					identity: federationIdentity,
 					selfAdmission: () => allowlist.selfAdmission(federationIdentity.sign.pub),
-					now,
-					randomBytes,
+					ambient,
 				}),
 			onDisconnect: () => {
 				console.error(`[router] disconnected from the Router`);
@@ -281,16 +284,17 @@ export function composeFederation(deps: FederationStageDeps): FederationStage {
 			}),
 			send: (action, params) => routerClient.callInboxTool(action, params),
 			incarnation: () => routerClient.incarnation(),
-			now,
+			ambient,
 		});
 		shareAttestor = createShareAttestor({
-			now,
+			ambient,
 			shares: () => [...new Set(shareState.all().map((share) => share.sessionTarget))],
 			liveJobIds: (sessionTarget) =>
 				stores.jobs.liveCrossDomainJobIds(
 					sessionTarget,
 					(gatewayId) => crossDomainPeers.all().some((peer) => peer.friendGatewayId === gatewayId),
 					SHARE_TTL_MS,
+					now(),
 				),
 			send: (action, params) => routerClient.callInboxTool(action, params),
 			incarnation: () => routerClient.incarnation(),
@@ -302,6 +306,7 @@ export function composeFederation(deps: FederationStageDeps): FederationStage {
 			incarnation: () => routerClient.incarnation(),
 			domainId,
 			ownerSignPub: () => allowlist.ownerSignPub,
+			ambient,
 			keys: gatewayBootstrap.contentKeys,
 		});
 		const boardClient = createBoardClient({
@@ -316,8 +321,7 @@ export function composeFederation(deps: FederationStageDeps): FederationStage {
 			gatewayId: localGatewayId,
 			gatewaySignPub: federationIdentity.sign.pub,
 			gatewaySignPriv: federationIdentity.sign.priv,
-			now,
-			randomBytes,
+			ambient,
 			send: (action, params) => routerClient.callInboxTool(action, params),
 			onError: (message) => {
 				deps.routes().deliverToOwner({
@@ -394,12 +398,12 @@ export function composeFederation(deps: FederationStageDeps): FederationStage {
 				sessionTarget,
 				(gatewayId) => slice.crossDomainPeers.all().some((p) => p.friendGatewayId === gatewayId),
 				SHARE_TTL_MS,
+				now(),
 			);
-		shareSweepTimer = setInterval(() => {
+		shareSweepTimer = ambient.setInterval(() => {
 			const dropped = slice.shareState.sweep(now(), SHARE_TTL_MS, isLive);
 			if (dropped > 0) console.log(`[federation] auto-forgot ${dropped} stale cross-Domain share(s)`);
 		}, 3_600_000);
-		shareSweepTimer.unref?.();
 	}
 
 	return {
@@ -409,7 +413,7 @@ export function composeFederation(deps: FederationStageDeps): FederationStage {
 		markPresenceDirty: () => presenceReporter?.markDirty(),
 		channelDeliveryAck: (team, deliveryId) => void inboxPump?.onChannelDeliveryAck(team, deliveryId),
 		stop: () => {
-			if (shareSweepTimer) clearInterval(shareSweepTimer);
+			if (shareSweepTimer) ambient.clearInterval(shareSweepTimer);
 			shareAttestor?.stop();
 			presenceReporter?.stop();
 			keyRequester?.stop();

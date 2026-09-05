@@ -2,6 +2,7 @@ import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 import { type WebSocket, WebSocketServer } from "ws";
 import { type RouterClient, startRouterClient } from "../gateway/router/routerClient.js";
+import { processAmbient } from "../shared/ambient.js";
 import type { RouterReach } from "../shared/router-reach.js";
 
 ////////////////////////////////
@@ -69,8 +70,8 @@ function waitFor(predicate: () => boolean, timeoutMs = 4_000): Promise<void> {
 	});
 }
 
-function client(config: Parameters<typeof startRouterClient>[0]): RouterClient {
-	return startRouterClient(config);
+function client(config: Omit<Parameters<typeof startRouterClient>[0], "ambient">): RouterClient {
+	return startRouterClient({ ...config, ambient: processAmbient() });
 }
 
 ////////////////////////////////

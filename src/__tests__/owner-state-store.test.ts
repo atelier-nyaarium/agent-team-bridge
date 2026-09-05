@@ -10,6 +10,7 @@ import { OwnerLock, OwnerLockHeld } from "../federation-server/owner/ownerLock.j
 import { OwnerQuarantined, OwnerStateStore } from "../federation-server/owner/ownerStateStore.js";
 import { createConsolePushOps, ownerRowBody } from "../gateway/consolePushOps.js";
 import { REGISTER_MAX_SKEW_MS, signAdmission } from "../shared/admission.js";
+import { processAmbient } from "../shared/ambient.js";
 import * as atomicWrite from "../shared/atomic-write.js";
 import { fingerprint, generateIdentity } from "../shared/crypto.js";
 import { ownerKeyId } from "../shared/owner-id.js";
@@ -26,7 +27,7 @@ const root = () => {
 const open = (
 	dir: string,
 	quota = new DomainQuota({ dir, limitBytes: 10_000_000, statfs: () => ({ available: 100_000_000 }) }),
-) => OwnerStateStore.open({ dataDir: dir, key, quota, heartbeatMs: 10, staleMs: 100 });
+) => OwnerStateStore.open({ dataDir: dir, key, quota, ambient: processAmbient(), heartbeatMs: 10, staleMs: 100 });
 const ownerDir = (dir: string) => path.join(dir, "owner", key.domainId, fingerprint(key.ownerSignPub));
 afterEach(() => {
 	vi.restoreAllMocks();
@@ -419,14 +420,14 @@ function durableIntake() {
 		dataDir: dir,
 		ownerOf: (domainId) => (domainId === "domain" ? owner.sign.pub : null),
 		quotaFor: () => new DomainQuota({ dir, limitBytes: 10_000_000, statfs: () => ({ available: 100_000_000 }) }),
-		now: () => 1_000_000,
+		ambient: { now: () => 1_000_000 },
 	});
 	const inbox = new InboxService(registry, { signPub: router.sign.pub, signPriv: router.sign.priv });
 	const intake = new OwnerOpIntake({
 		inbox,
 		getDomain: () => ({ ownerSignPub: owner.sign.pub, admissions: [admission], revocations: [] }),
 		push: () => true,
-		now: () => 1_000_000,
+		ambient: { now: () => 1_000_000 },
 	});
 	return { dir, owner, consoleIdentity, admission, registry, inbox, intake };
 }
@@ -521,7 +522,7 @@ describe("OwnerOpIntake", () => {
 				revocations: [],
 			}),
 			push: () => true,
-			now: () => 1_000_000,
+			ambient: { now: () => 1_000_000 },
 		});
 		const replay = await second.handle(op);
 		expect(replay).toMatchObject({ outcome: "refused", reason: "replay" });
@@ -576,6 +577,7 @@ describe("OwnerRowOutbox", () => {
 		const producer = generateIdentity();
 		const push = createConsolePushOps({
 			dataDir: dir,
+			ambient: processAmbient(),
 			ownerId: () => "owner",
 			routerClient: {
 				isConnected: () => false,
@@ -603,6 +605,7 @@ describe("OwnerRowOutbox", () => {
 		const producer = generateIdentity();
 		const push = createConsolePushOps({
 			dataDir: dir,
+			ambient: processAmbient(),
 			ownerId: () => "owner",
 			routerClient: {
 				isConnected: () => false,

@@ -1,3 +1,5 @@
+import type { Ambient, IntervalHandle, TimerHandle } from "../../shared/ambient.js";
+
 export interface ShareAttestorDeps {
 	shares: () => string[];
 	liveJobIds: (sessionTarget: string) => string[];
@@ -6,15 +8,15 @@ export interface ShareAttestorDeps {
 	intervalMs?: number;
 	/** Floor between attestations, so a burst of job changes sends one frame set, not one each. */
 	minGapMs?: number;
-	now?: () => number;
+	ambient: Pick<Ambient, "now" | "setTimer" | "clearTimer" | "setInterval" | "clearInterval">;
 }
 
 export function createShareAttestor(deps: ShareAttestorDeps) {
 	let previousLive = new Map<string, string[]>();
-	let timer: ReturnType<typeof setInterval> | null = null;
-	let coalesce: ReturnType<typeof setTimeout> | null = null;
+	let timer: IntervalHandle | null = null;
+	let coalesce: TimerHandle | null = null;
 	let lastAt = Number.NEGATIVE_INFINITY;
-	const now = deps.now ?? (() => Date.now());
+	const now = () => deps.ambient.now();
 	const minGapMs = deps.minGapMs ?? 1_000;
 
 	/** Coalesced entry point: every caller outside the timer comes through here. */
@@ -25,11 +27,10 @@ export function createShareAttestor(deps: ShareAttestorDeps) {
 			send();
 			return;
 		}
-		coalesce = setTimeout(() => {
+		coalesce = deps.ambient.setTimer(() => {
 			coalesce = null;
 			send();
 		}, wait);
-		coalesce.unref?.();
 	};
 
 	const send = (): void => {
@@ -55,15 +56,14 @@ export function createShareAttestor(deps: ShareAttestorDeps) {
 	// the coalescing floor because it is the heartbeat, not a reaction to a change.
 	const start = (): void => {
 		if (timer) return;
-		timer = setInterval(send, deps.intervalMs ?? 60_000);
-		timer.unref?.();
+		timer = deps.ambient.setInterval(send, deps.intervalMs ?? 60_000);
 	};
 
 	const stop = (): void => {
-		if (coalesce) clearTimeout(coalesce);
+		if (coalesce) deps.ambient.clearTimer(coalesce);
 		coalesce = null;
 		if (!timer) return;
-		clearInterval(timer);
+		deps.ambient.clearInterval(timer);
 		timer = null;
 	};
 

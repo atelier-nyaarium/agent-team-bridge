@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { createBlobUploader } from "../gateway/router/blobUploader.js";
+import { processAmbient } from "../shared/ambient.js";
 import { blobIdFor } from "../shared/blob-store.js";
 import { BLOB_CHUNK_BYTES } from "../shared/router-protocol.js";
 import { openSealedBlobRange, sealedBlobSize } from "../shared/sealed-blob.js";
@@ -44,6 +45,7 @@ function uploader(
 	complete = true,
 ) {
 	return createBlobUploader({
+		ambient: processAmbient(),
 		call,
 		blobs: blobStub(bytes, complete),
 		incarnation: () => 1,
@@ -103,6 +105,7 @@ describe("blob uploader", () => {
 		const call = vi.fn();
 		expect(await uploader(bytes, call, false).upload(blobIdFor(bytes), "cache")).toEqual({ kind: "absent" });
 		const keyless = createBlobUploader({
+			ambient: processAmbient(),
 			call,
 			blobs: blobStub(bytes),
 			incarnation: () => 1,
@@ -148,6 +151,7 @@ describe("blob uploader", () => {
 		const blobs = blobStub(bytes);
 		const call = vi.fn();
 		const value = createBlobUploader({
+			ambient: processAmbient(),
 			call,
 			blobs,
 			incarnation: () => null,
@@ -173,6 +177,7 @@ describe("blob uploader", () => {
 			return { result: { complete: true } };
 		});
 		const value = createBlobUploader({
+			ambient: processAmbient(),
 			call,
 			blobs: blobMapStub(entries),
 			incarnation: () => 1,
@@ -187,6 +192,7 @@ describe("blob uploader", () => {
 		const entries = { held: Buffer.from("held"), cached: Buffer.from("cached") };
 		const call = vi.fn().mockResolvedValue({ result: { kind: "exists" } });
 		const value = createBlobUploader({
+			ambient: processAmbient(),
 			call,
 			blobs: blobMapStub(entries),
 			incarnation: () => 1,
@@ -221,6 +227,7 @@ describe("blob uploader", () => {
 			action === "blob_begin" ? { result: { kind: "lease", lease } } : { result: { complete: false } },
 		);
 		const value = createBlobUploader({
+			ambient: processAmbient(),
 			call,
 			blobs: blobMapStub(entries),
 			incarnation: () => 1,

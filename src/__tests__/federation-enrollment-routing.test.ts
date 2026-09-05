@@ -10,6 +10,7 @@ import type { FederationSecret } from "../federation-server/federationSecret.js"
 import { FileSecretStore } from "../federation-server/fileSecretStore.js";
 import type { SecretIO } from "../federation-server/secretIO.js";
 import { signAdmission, signRevocation } from "../shared/admission.js";
+import { processAmbient } from "../shared/ambient.js";
 import { generateIdentity } from "../shared/crypto.js";
 import { signXDomainLinkEdge } from "../shared/federation-lifecycle.js";
 
@@ -115,10 +116,10 @@ describe("resolveEnrollRoute (multi-tenant owner-fact routing)", () => {
 	});
 
 	it("a guest admission lands in the guest coordinator; the admin coordinator (the old routing) rejects it", () => {
-		const adminC = new EnrollmentCoordinator(router, inMemoryEnrollmentStore(), "admin-dom");
+		const adminC = new EnrollmentCoordinator(router, inMemoryEnrollmentStore(), "admin-dom", processAmbient());
 		const pa = adminC.mintEnrollOwner("admin-dom", "https://router", now);
 		adminC.redeemEnrollOwner(pa.nonce, adminOwner.sign.pub, adminOwner.box.pub, now);
-		const guestC = new EnrollmentCoordinator(router, inMemoryEnrollmentStore(), "guest-dom");
+		const guestC = new EnrollmentCoordinator(router, inMemoryEnrollmentStore(), "guest-dom", processAmbient());
 		const pg = guestC.mintEnrollOwner("guest-dom", "https://router", now);
 		guestC.redeemEnrollOwner(pg.nonce, guestOwner.sign.pub, guestOwner.box.pub, now);
 
@@ -138,8 +139,8 @@ describe("EnrollmentCoordinator domain isolation over one store", () => {
 		await store.init();
 		const ownerAdmin = generateIdentity();
 		const ownerWork = generateIdentity();
-		const admin = new EnrollmentCoordinator(router, store.domainStore("alice"), "alice");
-		const work = new EnrollmentCoordinator(router, store.domainStore("work"), "work");
+		const admin = new EnrollmentCoordinator(router, store.domainStore("alice"), "alice", processAmbient());
+		const work = new EnrollmentCoordinator(router, store.domainStore("work"), "work", processAmbient());
 		const ph = admin.mintEnrollOwner("alice", "https://router", now);
 		admin.redeemEnrollOwner(ph.nonce, ownerAdmin.sign.pub, ownerAdmin.box.pub, now);
 		const pw = work.mintEnrollOwner("work", "https://router", now);

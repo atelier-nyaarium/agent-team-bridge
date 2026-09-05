@@ -7,6 +7,7 @@ import { FileSecretStore } from "../federation-server/fileSecretStore.js";
 import { PublicApproval } from "../federation-server/publicApproval.js";
 import { RouterServer } from "../federation-server/routerServer.js";
 import { loadRouterTls } from "../federation-server/routerTls.js";
+import { processAmbient } from "../shared/ambient.js";
 import { generateIdentity } from "../shared/crypto.js";
 import { signFirstRoot } from "../shared/federation-lifecycle.js";
 
@@ -26,7 +27,11 @@ describe("federation router surfaces", () => {
 	});
 
 	it("keeps approval misses opaque and rejects non-public steps", async () => {
-		const server = new PublicApproval({ port: 0, onApproval: async () => ({ ok: false, error: "miss" }) });
+		const server = new PublicApproval({
+			port: 0,
+			onApproval: async () => ({ ok: false, error: "miss" }),
+			ambient: processAmbient(),
+		});
 		const miss = await server.handleRequest(
 			new Request("https://router/device-approval", {
 				method: "POST",
@@ -130,6 +135,7 @@ describe("federation router surfaces", () => {
 				federationToken: "federation-token",
 				store,
 				tls: loadRouterTls(dir),
+				ambient: processAmbient(),
 			});
 			const signed = signFirstRoot(
 				{

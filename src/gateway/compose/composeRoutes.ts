@@ -1,5 +1,6 @@
 // Stage 11: the HTTP route surface, rebuilt whenever federation activates.
 
+import type { Ambient } from "../../shared/ambient.js";
 import type { Identity } from "../../shared/crypto.js";
 import { ownerKeyId } from "../../shared/owner-id.js";
 import { createRoutes, createRoutesCarryOver } from "../routes.js";
@@ -15,7 +16,7 @@ export type GatewayRoutes = ReturnType<typeof createRoutes>;
 export interface RoutesStageDeps {
 	dataDir: string;
 	localGatewayId: string;
-	now: () => number;
+	ambient: Ambient;
 	identity: () => Identity;
 	context: FederationContext;
 	stores: StoresStage;
@@ -77,8 +78,7 @@ export function composeRoutes(deps: RoutesStageDeps): RoutesStage {
 			boardClient: f?.boardClient,
 			boardReplays: stores.boardReplays,
 			awareness: deps.awareness.awareness,
-			now: deps.now,
-			newId: () => crypto.randomUUID(),
+			ambient: deps.ambient,
 		});
 	}
 

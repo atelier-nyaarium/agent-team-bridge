@@ -1,3 +1,4 @@
+import type { Clock } from "../shared/ambient.js";
 import {
 	type ConsoleApprovalOp,
 	ConsoleApprovalOpSchema,
@@ -15,7 +16,7 @@ export interface PublicApprovalParams {
 	maxGlobalPerWindow?: number;
 	maxPerIdPerWindow?: number;
 	rateLimitWindowMs?: number;
-	now?: () => number;
+	ambient: Clock;
 }
 
 ////////////////////////////////
@@ -52,14 +53,14 @@ export class PublicApproval {
 		maxGlobalPerWindow,
 		maxPerIdPerWindow,
 		rateLimitWindowMs,
-		now,
+		ambient,
 	}: PublicApprovalParams) {
 		this.onApproval = onApproval;
 		this.maxBodyBytes = maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES;
 		this.maxGlobalPerWindow = maxGlobalPerWindow ?? DEFAULT_MAX_GLOBAL_PER_WINDOW;
 		this.maxPerIdPerWindow = maxPerIdPerWindow ?? DEFAULT_MAX_PER_ID_PER_WINDOW;
 		this.rateLimitWindowMs = rateLimitWindowMs ?? DEFAULT_RATE_LIMIT_WINDOW_MS;
-		this.now = now ?? Date.now;
+		this.now = () => ambient.now();
 		this.handleRequest = this.handleRequest.bind(this);
 	}
 

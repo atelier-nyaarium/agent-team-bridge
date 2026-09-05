@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createShareAttestor } from "../gateway/router/shareAttestor.js";
+import { processAmbient } from "../shared/ambient.js";
 
 describe("share attestor", () => {
 	it("attests live targets and clears jobs that disappeared", () => {
@@ -7,6 +8,7 @@ describe("share attestor", () => {
 		let jobs = ["job-1"];
 		const send = vi.fn(async () => ({}));
 		const attestor = createShareAttestor({
+			ambient: processAmbient(),
 			shares: () => shares,
 			liveJobIds: () => jobs,
 			send,
@@ -28,6 +30,7 @@ describe("share attestor", () => {
 		vi.useFakeTimers();
 		const send = vi.fn(async () => ({}));
 		const attestor = createShareAttestor({
+			ambient: processAmbient(),
 			shares: () => ["domain.gateway.team.session"],
 			liveJobIds: () => ["job-1"],
 			send,
@@ -49,6 +52,7 @@ describe("share attestor", () => {
 		vi.useFakeTimers();
 		const send = vi.fn(async () => ({}));
 		const attestor = createShareAttestor({
+			ambient: processAmbient(),
 			shares: () => ["domain.gateway.team.session"],
 			liveJobIds: () => ["job-1"],
 			send,
@@ -66,6 +70,7 @@ describe("share attestor", () => {
 		vi.useFakeTimers();
 		const send = vi.fn(async () => ({}));
 		const attestor = createShareAttestor({
+			ambient: processAmbient(),
 			shares: () => ["domain.gateway.team.session"],
 			liveJobIds: () => ["job-1"],
 			send,

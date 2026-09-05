@@ -8,6 +8,7 @@ import { DomainQuota } from "../federation-server/owner/domainQuota.js";
 import { OwnerQuarantined } from "../federation-server/owner/ownerStateStore.js";
 import type { ErasedOwnerOpHandler, OwnerOpHandler, OwnerOpKind } from "../federation-server/ownerOpRegistry.js";
 import { createPresenceService } from "../federation-server/presence/presenceService.js";
+import { processAmbient } from "../shared/ambient.js";
 import { TeamInfoSchema } from "../shared/schemasPresence.js";
 
 const roots: string[] = [];
@@ -33,7 +34,7 @@ const make = (pokeOwner?: (domainId: string, version: number, projection: unknow
 				reserveBytes: 0,
 				statfs: () => ({ available: 10_000_000 }),
 			}),
-		now: () => 100,
+		ambient: { now: () => 100 },
 	});
 	return {
 		registry,

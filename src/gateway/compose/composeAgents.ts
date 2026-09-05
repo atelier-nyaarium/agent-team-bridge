@@ -1,6 +1,7 @@
 // Stage 6: the Codex and Copilot catalogs, their host relays, and their HTTP routes.
 
 import { agentHttpPath } from "../../shared/agent-backend.js";
+import type { Ambient } from "../../shared/ambient.js";
 import { CodexAgentService } from "../codexAgentService.js";
 import { CodexRelay } from "../codexRelay.js";
 import { CodexRoute } from "../codexRoute.js";
@@ -13,6 +14,7 @@ import type { SessionsStage } from "./composeSessions.js";
 export interface AgentsStageDeps {
 	sessions: SessionsStage;
 	host: Pick<HostStage, "liveHostSocket">;
+	ambient: Ambient;
 }
 
 export interface AgentsStage {
@@ -21,7 +23,7 @@ export interface AgentsStage {
 	agentRoutes: Map<string, (req: Request, body: unknown) => Promise<Response>>;
 }
 
-export function composeAgents({ sessions, host }: AgentsStageDeps): AgentsStage {
+export function composeAgents({ sessions, host, ambient }: AgentsStageDeps): AgentsStage {
 	const sendToHost = (message: unknown): boolean => {
 		const hostWs = host.liveHostSocket();
 		if (!hostWs) return false;
@@ -46,14 +48,16 @@ export function composeAgents({ sessions, host }: AgentsStageDeps): AgentsStage 
 		service: codexAgentService,
 		sessionStore: sessions.sessionStore,
 		sendToHost,
+		ambient,
 	});
 	const copilotRelay = new CopilotRelay({
 		service: copilotAgentService,
 		sessionStore: sessions.sessionStore,
 		sendToHost,
+		ambient,
 	});
-	const codexRoute = new CodexRoute({ service: codexAgentService, relay: codexRelay });
-	const copilotRoute = new CopilotRoute({ service: copilotAgentService, relay: copilotRelay });
+	const codexRoute = new CodexRoute({ service: codexAgentService, relay: codexRelay, ambient });
+	const copilotRoute = new CopilotRoute({ service: copilotAgentService, relay: copilotRelay, ambient });
 
 	const agentRoutes = new Map<string, (req: Request, body: unknown) => Promise<Response>>([
 		[agentHttpPath("codex"), (req, body) => codexRoute.handle(req, body)],

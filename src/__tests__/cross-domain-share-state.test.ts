@@ -13,9 +13,9 @@ describe("CrossDomainShareState persistence", () => {
 	it("round-trips a share through a fresh store", () => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "share-state-"));
 		dirs.push(dir);
-		const store = new CrossDomainShareState(dir, undefined, () => 10);
+		const store = new CrossDomainShareState(dir, undefined, { now: () => 10 });
 		store.share("alpha/app", { kind: "domain", domainId: "carol" });
-		const reloaded = new CrossDomainShareState(dir, undefined, () => 20);
+		const reloaded = new CrossDomainShareState(dir, undefined, { now: () => 20 });
 		expect(reloaded.all()).toEqual([
 			{ sessionTarget: "alpha/app", target: { kind: "domain", domainId: "carol" }, lastSeenAt: 10 },
 		]);

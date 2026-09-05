@@ -1,4 +1,4 @@
-import crypto from "node:crypto";
+import type { Ambient } from "../../shared/ambient.js";
 import { pickTiers } from "../../shared/notice.js";
 import type { PendingJobStore } from "../../shared/pending-job-store.js";
 import { type Address, parseStoreKey } from "../../shared/session-id.js";
@@ -26,6 +26,7 @@ type ConsolePushOps = ReturnType<typeof import("../consolePushOps.js").createCon
 
 export interface RespondRoutesDeps {
 	config: GatewayConfig;
+	ambient: Pick<Ambient, "newId">;
 	localDomain: string;
 	registry: TeamRegistry;
 	conversationRegistry: ConversationRegistry;
@@ -77,6 +78,7 @@ export function createRespondRoutes({
 	refuseForeignReply,
 	refuseForeignPoll,
 	provedLocalSession,
+	ambient,
 }: RespondRoutesDeps) {
 	const { localGatewayId } = config;
 
@@ -239,7 +241,7 @@ export function createRespondRoutes({
 		// The push carries the full bytes; the store kept metadata only. message_id is the.
 		if (files && files.length > 0) {
 			push.files = files;
-			push.message_id = crypto.randomUUID();
+			push.message_id = ambient.newId();
 		}
 		const pushMsg = JSON.stringify(push);
 
@@ -257,7 +259,7 @@ export function createRespondRoutes({
 						status: response.status,
 						files: files && files.length > 0 ? files : undefined,
 					},
-					dedupeKey: crypto.randomUUID(),
+					dedupeKey: ambient.newId(),
 					label: "respond",
 				});
 				pushedViaConversation = delivered === true;

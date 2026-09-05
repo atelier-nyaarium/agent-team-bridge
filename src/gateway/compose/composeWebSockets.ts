@@ -1,5 +1,6 @@
 // Stage 10: the session sockets and the held-delivery handover that rides them.
 
+import type { Ambient } from "../../shared/ambient.js";
 import { ChannelDeliveryCoordinator } from "../channelDelivery.js";
 import { createWebSocketHandlers } from "../websocket.js";
 import type { AgentsStage } from "./composeAgents.js";
@@ -13,6 +14,7 @@ const MISSED_PINGS_LIMIT = 2;
 
 export interface WebSocketsStageDeps {
 	hostWsToken?: string;
+	ambient: Ambient;
 	stores: StoresStage;
 	sessions: SessionsStage;
 	host: Pick<HostStage, "wakeCoordinator" | "hostOpCoordinator" | "pushPresenceWatch">;
@@ -26,7 +28,7 @@ export interface WebSocketsStage {
 }
 
 export function composeWebSockets(deps: WebSocketsStageDeps): WebSocketsStage {
-	const { sessions, stores, host, agents, federation } = deps;
+	const { sessions, stores, host, agents, federation, ambient } = deps;
 	const channelDeliveries = new ChannelDeliveryCoordinator({
 		store: stores.pendingDeliveries,
 		registry: sessions.registry,
@@ -34,6 +36,7 @@ export function composeWebSockets(deps: WebSocketsStageDeps): WebSocketsStage {
 	});
 
 	const wsHandlers = createWebSocketHandlers({
+		ambient,
 		registry: sessions.registry,
 		conversationRegistry: sessions.conversationRegistry,
 		config: { HEARTBEAT_INTERVAL_MS, MISSED_PINGS_LIMIT, hostWsToken: deps.hostWsToken },

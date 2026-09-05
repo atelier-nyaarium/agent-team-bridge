@@ -79,25 +79,26 @@ export function composeGateway(deps: GatewayDeps): GatewayGraph {
 	const stores = composeStores({
 		dataDir: bootstrap.dataDir,
 		maxBlobStoreBytes: config.maxBlobStoreBytes,
+		ambient: bootstrap.ambient,
 		onJobChange: () => federation?.attest(),
 	});
-	const sessions = composeSessions({ localGatewayId: bootstrap.localGatewayId, stores, context });
-	const persistence = composePersistence({ now: bootstrap.now, stores, sessions, context });
-	const host = composeHost({
-		sessions,
-		wakeTimeoutMs: config.wakeTimeoutMs,
-		randomBytes: bootstrap.randomBytes,
+	const sessions = composeSessions({
+		localGatewayId: bootstrap.localGatewayId,
+		ambient: bootstrap.ambient,
+		stores,
+		context,
 	});
-	const agents = composeAgents({ sessions, host });
-	const awareness = composeAwareness({ sessions, host });
+	const persistence = composePersistence({ ambient: bootstrap.ambient, stores, sessions, context });
+	const host = composeHost({ sessions, wakeTimeoutMs: config.wakeTimeoutMs, ambient: bootstrap.ambient });
+	const agents = composeAgents({ sessions, host, ambient: bootstrap.ambient });
+	const awareness = composeAwareness({ sessions, host, ambient: bootstrap.ambient });
 
 	federation = composeFederation({
 		dataDir: bootstrap.dataDir,
 		federationDir: bootstrap.federationDir,
 		localGatewayId: bootstrap.localGatewayId,
 		routerBootstrapUrl: config.routerBootstrapUrl,
-		now: bootstrap.now,
-		randomBytes: bootstrap.randomBytes,
+		ambient: bootstrap.ambient,
 		context,
 		stores,
 		sessions,
@@ -116,6 +117,7 @@ export function composeGateway(deps: GatewayDeps): GatewayGraph {
 		enrollTlsPort: config.enrollTlsPort,
 		enrollLanHost: config.enrollLanHost,
 		openEnrollTls: deps.openEnrollTls,
+		ambient: bootstrap.ambient,
 		identity: bootstrap.identity,
 		contentKeyStore: bootstrap.contentKeyStore,
 		resolveBoot: bootstrap.resolveBoot,
@@ -124,6 +126,7 @@ export function composeGateway(deps: GatewayDeps): GatewayGraph {
 
 	websockets = composeWebSockets({
 		hostWsToken: config.hostWsToken,
+		ambient: bootstrap.ambient,
 		stores,
 		sessions,
 		host,
@@ -133,7 +136,7 @@ export function composeGateway(deps: GatewayDeps): GatewayGraph {
 	routes = composeRoutes({
 		dataDir: bootstrap.dataDir,
 		localGatewayId: bootstrap.localGatewayId,
-		now: bootstrap.now,
+		ambient: bootstrap.ambient,
 		identity: bootstrap.identity,
 		context,
 		stores,
@@ -142,10 +145,18 @@ export function composeGateway(deps: GatewayDeps): GatewayGraph {
 		awareness,
 		websockets,
 	});
-	routerPresence = composeRouterPresence({ context, stores, sessions, federation, routes: requireRoutes });
+	routerPresence = composeRouterPresence({
+		ambient: bootstrap.ambient,
+		context,
+		stores,
+		sessions,
+		federation,
+		routes: requireRoutes,
+	});
 	routerFrames = composeRouterFrames({
 		localGatewayId: bootstrap.localGatewayId,
 		wakeTimeoutMs: config.wakeTimeoutMs,
+		ambient: bootstrap.ambient,
 		context,
 		stores,
 		sessions,
@@ -159,6 +170,7 @@ export function composeGateway(deps: GatewayDeps): GatewayGraph {
 	const listener = composeListener({
 		dataDir: bootstrap.dataDir,
 		enrollNonce: config.enrollNonce,
+		ambient: bootstrap.ambient,
 		context,
 		stores,
 		sessions,

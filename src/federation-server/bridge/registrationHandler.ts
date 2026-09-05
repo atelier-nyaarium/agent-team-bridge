@@ -1,4 +1,5 @@
 import { type DomainSnapshot, REGISTER_MAX_SKEW_MS } from "../../shared/admission.js";
+import type { Ambient } from "../../shared/ambient.js";
 import {
 	FEDERATION_PROTOCOL_FLOOR,
 	FEDERATION_PROTOCOL_VERSION,
@@ -18,7 +19,7 @@ export interface RegistrationDeps {
 	adminDomainId: () => string | null;
 	reach?: GatewayBridgeParams["reach"];
 	inbox: InboxService | null;
-	now: () => number;
+	ambient: Pick<Ambient, "now" | "setTimer">;
 	migrationLease: (domainId: string, gatewayId: string) => void;
 	migrationFenced: (domainId: string, gatewayId: string) => boolean;
 	setConnection: (domainId: string, gatewayId: string, connId: ConnectionId) => void;
@@ -61,7 +62,7 @@ export class RegistrationHandler {
 				const denied = verifyRegistrationClaim(
 					parsed.data,
 					{ ownerSignPub: domain.ownerSignPub, revocations: domain.revocations },
-					this.deps.now(),
+					this.deps.ambient.now(),
 				);
 				if (denied) {
 					console.warn(`[BridgeServer] rejected registration for "${domainId}/${gatewayId}": ${denied}`);
@@ -131,7 +132,7 @@ export class RegistrationHandler {
 
 	private rememberRegisterNonce(nonce: string | undefined): boolean {
 		if (!nonce) return false;
-		const now = this.deps.now();
+		const now = this.deps.ambient.now();
 		for (const [key, expiry] of this.seenRegisterNonces) if (expiry <= now) this.seenRegisterNonces.delete(key);
 		if (this.seenRegisterNonces.has(nonce)) return false;
 		this.seenRegisterNonces.set(nonce, now + REGISTER_MAX_SKEW_MS);
@@ -142,7 +143,7 @@ export class RegistrationHandler {
 	private redeliverPending(domainId: string, gatewayId: string, incarnation: number): void {
 		const inbox = this.deps.inbox;
 		if (!inbox) return;
-		setTimeout(() => {
+		this.deps.ambient.setTimer(() => {
 			const connId = this.deps.getConnectionId(domainId, gatewayId);
 			if (!connId || this.deps.getIncarnation(connId) !== incarnation) return;
 			let pending: ReturnType<InboxService["pendingFor"]>;

@@ -1,5 +1,6 @@
 // Stage 9: the enrollment window, its pinned-TLS door, and the bootstrap install.
 
+import type { Ambient, TimerHandle } from "../../shared/ambient.js";
 import type { Identity } from "../../shared/crypto.js";
 import { GatewayBootstrapFrameSchema } from "../../shared/schemas.js";
 import type { GatewayBoot } from "../boot.js";
@@ -18,6 +19,7 @@ export interface EnrollmentStageDeps {
 	enrollTlsPort: number;
 	enrollLanHost: string;
 	openEnrollTls?: OpenEnrollTls;
+	ambient: Pick<Ambient, "now" | "setTimer" | "clearTimer">;
 	identity: () => Identity;
 	contentKeyStore: ContentKeyStore;
 	resolveBoot: (enrollNonce: string | null) => GatewayBoot;
@@ -33,8 +35,8 @@ export interface EnrollmentStage {
 }
 
 export function composeEnrollment(deps: EnrollmentStageDeps): EnrollmentStage {
-	const { context, federationDir, localGatewayId, contentKeyStore } = deps;
-	let enrollTimer: ReturnType<typeof setTimeout> | null = null;
+	const { context, federationDir, localGatewayId, contentKeyStore, ambient } = deps;
+	let enrollTimer: TimerHandle | null = null;
 	let enrollTlsServer: EnrollTlsListener | null = null;
 
 	function refuse(error: string, status: number): Response {
@@ -76,9 +78,9 @@ export function composeEnrollment(deps: EnrollmentStageDeps): EnrollmentStage {
 		const bundle = openBootstrapBundle(frame, enrollIdentity, nonce, localGatewayId);
 		const heldKeyCount = contentKeyStore.epochs().length;
 		const outerSignerSignPub = GatewayBootstrapFrameSchema.parse(frame).signerSignPub;
-		stageBootstrap(federationDir, bundle, enrollIdentity, contentKeyStore, outerSignerSignPub);
+		stageBootstrap(federationDir, bundle, enrollIdentity, contentKeyStore, ambient, outerSignerSignPub);
 		try {
-			activateStaged(federationDir);
+			activateStaged(federationDir, ambient);
 		} catch (error) {
 			const reason = error instanceof Error ? error.message : String(error);
 			console.error(`[enroll] bundle staged; a gateway restart completes it or a re-arm discards it: ${reason}`);
@@ -89,7 +91,7 @@ export function composeEnrollment(deps: EnrollmentStageDeps): EnrollmentStage {
 		context.standalone();
 		enrollTlsServer?.stop();
 		enrollTlsServer = null;
-		if (enrollTimer) clearTimeout(enrollTimer);
+		if (enrollTimer) ambient.clearTimer(enrollTimer);
 		const installedBoot = deps.resolveBoot(null);
 		if (installedBoot.kind === "active") {
 			try {
@@ -130,7 +132,7 @@ export function composeEnrollment(deps: EnrollmentStageDeps): EnrollmentStage {
 			);
 		}
 		logAdmitGatewayQr(enrollIdentity, localGatewayId, delivery);
-		enrollTimer = setTimeout(() => {
+		enrollTimer = ambient.setTimer(() => {
 			if (context.arming()) {
 				context.standalone();
 				enrollTlsServer?.stop(true);
@@ -138,7 +140,6 @@ export function composeEnrollment(deps: EnrollmentStageDeps): EnrollmentStage {
 				console.log("[enroll] enrollment window expired (~10 min); re-run setup.sh (Enroll gateway)");
 			}
 		}, ENROLL_WINDOW_MS);
-		enrollTimer.unref?.();
 		context.arm({
 			install: (frame) => install(frame, enrollIdentity, nonce),
 			admitPayload: admitGatewayPayload(enrollIdentity, localGatewayId, delivery),
@@ -150,7 +151,7 @@ export function composeEnrollment(deps: EnrollmentStageDeps): EnrollmentStage {
 		handleEnrollPost,
 		enrollTlsFetch,
 		stop: () => {
-			if (enrollTimer) clearTimeout(enrollTimer);
+			if (enrollTimer) ambient.clearTimer(enrollTimer);
 			enrollTlsServer?.stop(true);
 			enrollTlsServer = null;
 		},

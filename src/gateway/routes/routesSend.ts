@@ -1,4 +1,4 @@
-import crypto from "node:crypto";
+import type { Ambient } from "../../shared/ambient.js";
 import type { FederatedOp } from "../../shared/federation-protocol.js";
 import type { PendingJobStore } from "../../shared/pending-job-store.js";
 import {
@@ -37,7 +37,7 @@ type ConsolePushOps = ReturnType<typeof import("../consolePushOps.js").createCon
 export interface SendRoutesDeps {
 	config: GatewayConfig;
 	localDomain: string;
-	now: () => number;
+	ambient: Pick<Ambient, "now" | "newId" | "setTimer">;
 	registry: TeamRegistry;
 	conversationRegistry: ConversationRegistry;
 	store: Pick<PendingJobStore<ResponsePayload>, "create">;
@@ -71,7 +71,7 @@ export interface SendRoutesDeps {
 export function createSendRoutes({
 	config,
 	localDomain,
-	now,
+	ambient,
 	registry,
 	conversationRegistry,
 	store,
@@ -311,7 +311,7 @@ export function createSendRoutes({
 					}
 				}
 				// Claude Code needs time after MCP connect to initialize its channel listener.
-				await new Promise((r) => setTimeout(r, POST_WAKE_SETTLE_MS));
+				await new Promise((r) => ambient.setTimer(() => r(undefined), POST_WAKE_SETTLE_MS));
 				targetWs = resolveLiveIncarnation(registry, sessionStore, localName);
 			}
 		}
@@ -367,14 +367,14 @@ export function createSendRoutes({
 
 				// message_id is the file-materialization bucket key, read only when files are present.
 				const hasFiles = files !== undefined && files.length > 0;
-				const messageId = hasFiles ? crypto.randomUUID() : undefined;
+				const messageId = hasFiles ? ambient.newId() : undefined;
 				// Taken once, HERE, and carried on the row. Reading it at delivery would drop it on a.
 				const riding = awareness?.takeFor(localName) ?? undefined;
 
 				if (deliveries) {
 					const outcome = deliveries.accept({
 						// Minted per send. The console's own op store already collapses its retries before.
-						deliveryId: crypto.randomUUID(),
+						deliveryId: ambient.newId(),
 						team: targetWs?.data.teamName ?? localName,
 						channelJobId,
 						from,
@@ -382,7 +382,7 @@ export function createSendRoutes({
 						...(hasFiles ? { files, messageId } : {}),
 						...(riding ? { awareness: riding } : {}),
 						...(disposition ? { disposition } : {}),
-						enqueuedAt: now(),
+						enqueuedAt: ambient.now(),
 					});
 					if (outcome === "refused") {
 						return jsonResponse(

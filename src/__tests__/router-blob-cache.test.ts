@@ -7,6 +7,7 @@ import { RouterBlobCache } from "../federation-server/blobs/routerBlobCache.js";
 import { blobIdFor } from "../shared/blob-store.js";
 import { BLOB_CHUNK_BYTES, BlobChunkParamsSchema } from "../shared/router-protocol.js";
 import { sealBlobChunk, sealedBlobChunkCount, sealedBlobSize } from "../shared/sealed-blob.js";
+import { fakeAmbient } from "../testing/fakeAmbient.js";
 
 const key = Buffer.alloc(32, 9);
 const contextBase = { domainId: "domain", ownerSignPub: "owner", epoch: 2 };
@@ -43,7 +44,7 @@ describe("RouterBlobCache", () => {
 	function make(quotaBytesPerDomain = 3_000_000) {
 		const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "router-cache-"));
 		roots.push(dataDir);
-		return new RouterBlobCache({ dataDir, quotaBytesPerDomain, now: () => clock });
+		return new RouterBlobCache({ dataDir, quotaBytesPerDomain, ambient: fakeAmbient({ now: () => clock }) });
 	}
 
 	function begin(cache: RouterBlobCache, bytes: Buffer, blobId = blobIdFor(bytes)) {
@@ -238,7 +239,11 @@ describe("RouterBlobCache", () => {
 		cache.commitChunk("domain", blobId, sealed.lease, 0, sealed.ciphertext, true);
 		fs.rmSync(path.join(roots[0], "blobs", "domain", "cache", "index.json"));
 
-		const rebuilt = new RouterBlobCache({ dataDir: roots[0], quotaBytesPerDomain: 3_000_000, now: () => clock });
+		const rebuilt = new RouterBlobCache({
+			dataDir: roots[0],
+			quotaBytesPerDomain: 3_000_000,
+			ambient: fakeAmbient({ now: () => clock }),
+		});
 		expect(rebuilt.stat("domain", blobId)).toMatchObject({
 			kind: "complete",
 			size: bytes.length,
@@ -253,7 +258,11 @@ describe("RouterBlobCache", () => {
 		const bytes = Buffer.from("unreadable recovery");
 		const blobId = blobIdFor(bytes);
 		const sealed = sealBlob(bytes, blobId);
-		const cache = new RouterBlobCache({ dataDir, quotaBytesPerDomain: 3_000_000, now: () => clock });
+		const cache = new RouterBlobCache({
+			dataDir,
+			quotaBytesPerDomain: 3_000_000,
+			ambient: fakeAmbient({ now: () => clock }),
+		});
 		const begun = cache.begin(
 			"domain",
 			blobId,
@@ -272,7 +281,11 @@ describe("RouterBlobCache", () => {
 		fs.rmSync(sidecar);
 		fs.mkdirSync(sidecar);
 		const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-		new RouterBlobCache({ dataDir, quotaBytesPerDomain: 3_000_000, now: () => clock }).stat("domain", blobId);
+		new RouterBlobCache({
+			dataDir,
+			quotaBytesPerDomain: 3_000_000,
+			ambient: fakeAmbient({ now: () => clock }),
+		}).stat("domain", blobId);
 		expect(fs.existsSync(ciphertext)).toBe(false);
 		expect(fs.existsSync(sidecar)).toBe(false);
 		expect(warning).toHaveBeenCalledWith(`[router-blob-cache] unreadable recovery ${blobId}`);
@@ -312,7 +325,11 @@ describe("RouterBlobCache", () => {
 		const bytes = Buffer.from("crash complete");
 		const blobId = blobIdFor(bytes);
 		const sealed = sealBlob(bytes);
-		const cache = new RouterBlobCache({ dataDir, quotaBytesPerDomain: 3_000_000, now: () => clock });
+		const cache = new RouterBlobCache({
+			dataDir,
+			quotaBytesPerDomain: 3_000_000,
+			ambient: fakeAmbient({ now: () => clock }),
+		});
 		const begun = cache.begin(
 			"domain",
 			blobId,
@@ -328,7 +345,11 @@ describe("RouterBlobCache", () => {
 		fs.mkdirSync(path.dirname(complete), { recursive: true });
 		fs.writeFileSync(complete, sealed.ciphertext);
 
-		const reopened = new RouterBlobCache({ dataDir, quotaBytesPerDomain: 3_000_000, now: () => clock });
+		const reopened = new RouterBlobCache({
+			dataDir,
+			quotaBytesPerDomain: 3_000_000,
+			ambient: fakeAmbient({ now: () => clock }),
+		});
 		expect(reopened.stat("domain", blobId)).toMatchObject({
 			kind: "complete",
 			size: bytes.length,
@@ -344,7 +365,11 @@ describe("RouterBlobCache", () => {
 		const part = path.join(dataDir, "blobs", "domain", "cache", hash.slice(0, 2), `${hash}.part`);
 		fs.mkdirSync(path.dirname(part), { recursive: true });
 		fs.writeFileSync(part, "partial");
-		const cache = new RouterBlobCache({ dataDir, quotaBytesPerDomain: 3_000_000, now: () => clock });
+		const cache = new RouterBlobCache({
+			dataDir,
+			quotaBytesPerDomain: 3_000_000,
+			ambient: fakeAmbient({ now: () => clock }),
+		});
 		cache.stat("domain", blobId);
 		expect(fs.existsSync(part)).toBe(false);
 	});

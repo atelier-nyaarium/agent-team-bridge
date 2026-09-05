@@ -7,6 +7,7 @@ import { createConsolePushOps } from "../gateway/consolePushOps.js";
 import { CrossDomainShareState } from "../gateway/federation/crossDomainShareState.js";
 import { createGatewayRelayHandler } from "../gateway/federation/gatewayRelay.js";
 import { ReadAnchors } from "../gateway/readAnchors.js";
+import { processAmbient } from "../shared/ambient.js";
 import { DurableStore, openDurable } from "../shared/durable-store.js";
 import { invalidate, MIGRATING, readGatewayMigrationWindow, useMigrationEpochFile } from "../shared/migration-fence.js";
 import { PendingDeliveryStore } from "../shared/pending-delivery-store.js";
@@ -23,7 +24,7 @@ afterEach(() => {
 
 describe("delivery-state durability", () => {
 	it("persistent job anchors (and their stored result) survive snapshot/restore", () => {
-		const a = new PendingJobStore<string>();
+		const a = new PendingJobStore<string>(600_000, processAmbient());
 		a.create("conv:c1:host/team", "Aqua", "host/team", { persistent: true, fromConversationId: "c1" });
 		a.deliver("conv:c1:host/team", "hello"); // async (channel) delivery -> stored
 		a.create("transient", "x", "y"); // non-persistent: must NOT survive
@@ -32,19 +33,19 @@ describe("delivery-state durability", () => {
 		expect(snap.length).toBe(1);
 		expect(snap[0].id).toBe("conv:c1:host/team");
 
-		const b = new PendingJobStore<string>();
+		const b = new PendingJobStore<string>(600_000, processAmbient());
 		b.restore(snap);
 		expect(b.poll("conv:c1:host/team")).toBe("hello"); // anchor + result survived
 		expect(b.has("transient")).toBe(false);
 	});
 
 	it("a restore never clobbers a live entry that beat the load", () => {
-		const a = new PendingJobStore<string>();
+		const a = new PendingJobStore<string>(600_000, processAmbient());
 		a.create("conv:x", "from", "to", { persistent: true });
 		a.deliver("conv:x", "old");
 		const snap = a.snapshot();
 
-		const b = new PendingJobStore<string>();
+		const b = new PendingJobStore<string>(600_000, processAmbient());
 		b.create("conv:x", "from", "to", { persistent: true });
 		b.deliver("conv:x", "fresh"); // a registration raced the restore
 		b.restore(snap);
@@ -56,16 +57,18 @@ describe("migration fence durability", () => {
 	it("refuses durable writers while fenced and accepts them after removal", async () => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "migration-fence-"));
 		roots.push(dir);
-		const pending = openDurable(dir, "pending-deliveries", (store) => new PendingDeliveryStore(store));
-		const ops = new DurableOpStore(new DurableStore(dir, "console-ops"));
-		const anchors = new ReadAnchors(new PlaneRegistry(), undefined);
-		const shares = new CrossDomainShareState(dir);
+		const ambient = processAmbient();
+		const pending = openDurable(dir, "pending-deliveries", (store) => new PendingDeliveryStore(store, ambient));
+		const ops = new DurableOpStore(new DurableStore(dir, "console-ops"), ambient);
+		const anchors = new ReadAnchors(new PlaneRegistry(ambient), undefined);
+		const shares = new CrossDomainShareState(dir, undefined, ambient);
 		const push = createConsolePushOps({
 			dataDir: dir,
 			ownerId: () => "owner",
 			localGatewayId: "gateway",
 			localAddress: (() => ({ canonical: "domain.gateway.team.session" })) as never,
 			refuseImpersonation: () => null,
+			ambient,
 		});
 		const relay = createGatewayRelayHandler({
 			routes: {

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { EnrollmentCoordinator, inMemoryEnrollmentStore } from "../federation-server/enrollmentCoordinator.js";
 import type { EnrollmentState } from "../federation-server/federationSecret.js";
 import { signAdmission } from "../shared/admission.js";
+import { processAmbient } from "../shared/ambient.js";
 import { generateIdentity } from "../shared/crypto.js";
 
 const router = generateIdentity();
@@ -9,7 +10,7 @@ const owner = generateIdentity();
 const now = 1_000_000;
 
 function coordinator(initial?: EnrollmentState) {
-	return new EnrollmentCoordinator(router, inMemoryEnrollmentStore(initial), "alice");
+	return new EnrollmentCoordinator(router, inMemoryEnrollmentStore(initial), "alice", processAmbient());
 }
 
 describe("EnrollmentCoordinator enroll-owner", () => {
@@ -154,10 +155,10 @@ describe("EnrollmentCoordinator allowlist", () => {
 
 	it("persists the root so a reloaded coordinator is already rooted", () => {
 		const store = inMemoryEnrollmentStore();
-		const c1 = new EnrollmentCoordinator(router, store, "alice");
+		const c1 = new EnrollmentCoordinator(router, store, "alice", processAmbient());
 		const p = c1.mintEnrollOwner("alice", "https://router", now);
 		c1.redeemEnrollOwner(p.nonce, owner.sign.pub, owner.box.pub, now);
-		const c2 = new EnrollmentCoordinator(router, store, "alice");
+		const c2 = new EnrollmentCoordinator(router, store, "alice", processAmbient());
 		expect(c2.rooted).toBe(true);
 		expect(c2.getDomainSnapshot()?.ownerSignPub).toBe(owner.sign.pub);
 	});
@@ -165,7 +166,7 @@ describe("EnrollmentCoordinator allowlist", () => {
 
 describe("EnrollmentCoordinator domain status + display name (friend onboarding)", () => {
 	it("getDomainStatus reflects unrooted / pending / rooted", () => {
-		const unrooted = new EnrollmentCoordinator(router, inMemoryEnrollmentStore(), "alice");
+		const unrooted = new EnrollmentCoordinator(router, inMemoryEnrollmentStore(), "alice", processAmbient());
 		expect(unrooted.getDomainStatus()).toBe("unrooted");
 		expect(unrooted.displayName).toBeNull();
 
@@ -180,12 +181,13 @@ describe("EnrollmentCoordinator domain status + display name (friend onboarding)
 				pendingTenant: { displayName: "Carol", nonce: "aW52aXRl", issuedAt: 1, ttlMs: 60_000, rooted: false },
 			}),
 			"alice",
+			processAmbient(),
 		);
 		expect(pending.getDomainStatus()).toBe("pending");
 		expect(pending.displayName).toBe("Carol");
 		expect(pending.getDomainSnapshot()).toBeNull();
 
-		const c = new EnrollmentCoordinator(router, inMemoryEnrollmentStore(), "alice");
+		const c = new EnrollmentCoordinator(router, inMemoryEnrollmentStore(), "alice", processAmbient());
 		const p = c.mintEnrollOwner("alice", "https://router", now);
 		c.redeemEnrollOwner(p.nonce, owner.sign.pub, owner.box.pub, now);
 		expect(c.getDomainStatus()).toBe("rooted");
@@ -202,6 +204,7 @@ describe("EnrollmentCoordinator domain status + display name (friend onboarding)
 				displayName: "Nyaarium",
 			}),
 			"alice",
+			processAmbient(),
 		);
 		expect(c.getDomainSnapshot()?.displayName).toBe("Nyaarium");
 		expect(c.displayName).toBe("Nyaarium");

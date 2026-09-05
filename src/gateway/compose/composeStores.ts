@@ -1,5 +1,6 @@
 // Stage 2: every durable writer the gateway owns, and what the last run left on disk.
 
+import type { Ambient } from "../../shared/ambient.js";
 import { BlobStore } from "../../shared/blob-store.js";
 import { type BoardReply, isBoardReply } from "../../shared/board-structure.js";
 import { DurableStore, openDurable, restoreDurable } from "../../shared/durable-store.js";
@@ -15,6 +16,7 @@ import { createInboxClaims } from "../router/inboxClaims.js";
 export interface StoresStageDeps {
 	dataDir: string;
 	maxBlobStoreBytes: number;
+	ambient: Ambient;
 	/** Runs whenever a job lands or settles, so the share attestation follows the live set. */
 	onJobChange: () => void;
 }
@@ -43,20 +45,20 @@ export interface StoresStage {
 }
 
 export function composeStores(deps: StoresStageDeps): StoresStage {
-	const { dataDir } = deps;
-	const blobStore = new BlobStore(`${dataDir}/blobs`);
-	const jobs = new PendingJobStore<ResponsePayload>(600_000, deps.onJobChange);
+	const { dataDir, ambient } = deps;
+	const blobStore = new BlobStore(`${dataDir}/blobs`, ambient);
+	const jobs = new PendingJobStore<ResponsePayload>(600_000, ambient, deps.onJobChange);
 	jobs.startCleanup();
 
 	const jobsDurable = new DurableStore(dataDir, "pending-jobs");
-	const durableOpStore = openDurable(dataDir, "op-idempotency", (d) => new DurableOpStore(d));
-	const pendingDeliveries = openDurable(dataDir, "pending-deliveries", (d) => new PendingDeliveryStore(d));
-	const inboxClaims = createInboxClaims(dataDir);
+	const durableOpStore = openDurable(dataDir, "op-idempotency", (d) => new DurableOpStore(d, ambient));
+	const pendingDeliveries = openDurable(dataDir, "pending-deliveries", (d) => new PendingDeliveryStore(d, ambient));
+	const inboxClaims = createInboxClaims(dataDir, ambient);
 	const boardReplays = openDurable(dataDir, "board-idempotency", (d) =>
-		DurableOpStore.withValidator<BoardReply>(d, isBoardReply),
+		DurableOpStore.withValidator<BoardReply>(d, ambient, isBoardReply),
 	);
 	const sessionResumeDurable = new DurableStore(dataDir, "session-resume");
-	const capabilityStore = openDurable(dataDir, "console-capabilities", (d) => new CapabilityStore(d));
+	const capabilityStore = openDurable(dataDir, "console-capabilities", (d) => new CapabilityStore(d, ambient));
 	const daemonCapabilityStore = openDurable(dataDir, "daemon-capabilities", (d) => new DaemonCapabilityStore(d));
 
 	restoreDurable("pending-jobs", () => {

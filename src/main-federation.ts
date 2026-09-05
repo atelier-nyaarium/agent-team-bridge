@@ -3,6 +3,7 @@ import { FileSecretStore } from "./federation-server/fileSecretStore.js";
 import { decideServe } from "./federation-server/migration/serveGate.js";
 import { RouterServer } from "./federation-server/routerServer.js";
 import { loadRouterTls } from "./federation-server/routerTls.js";
+import { processAmbient } from "./shared/ambient.js";
 import { refuseFixtureIdentity } from "./shared/fixture-identity.js";
 import { installRejectionGuard } from "./shared/process-guards.js";
 
@@ -47,6 +48,7 @@ const server = new RouterServer({
 	federationToken,
 	store,
 	tls,
+	ambient: processAmbient(),
 	reach: publicPort ? { publicHost, publicPort, lanAddresses } : { publicHost, lanAddresses },
 });
 if (publicHost) console.log(`[federation-router] public host ${publicHost}:${publicPort ?? port}`);

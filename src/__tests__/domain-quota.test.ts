@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { FileSecretStore } from "../federation-server/fileSecretStore.js";
 import { DomainQuota } from "../federation-server/owner/domainQuota.js";
 import { OwnerStateStore } from "../federation-server/owner/ownerStateStore.js";
+import { processAmbient } from "../shared/ambient.js";
 
 const roots: string[] = [];
 const key = { domainId: "domain", ownerSignPub: Buffer.alloc(32, 8).toString("base64") };
@@ -26,7 +27,14 @@ describe("DomainQuota", () => {
 		roots.push(dir);
 		const available = 64 * 1024 * 1024 - 1;
 		const quota = new DomainQuota({ dir, limitBytes: 100_000_000, statfs: () => ({ available }) });
-		const owner = OwnerStateStore.open({ dataDir: dir, key, quota, heartbeatMs: 10, staleMs: 100 });
+		const owner = OwnerStateStore.open({
+			dataDir: dir,
+			key,
+			quota,
+			ambient: processAmbient(),
+			heartbeatMs: 10,
+			staleMs: 100,
+		});
 		expect(owner.put("share", "s", null, { clear: { value: 1 } })).toMatchObject({
 			kind: "durability_failure",
 			reason: "reserve",

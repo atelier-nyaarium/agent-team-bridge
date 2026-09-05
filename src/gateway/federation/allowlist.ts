@@ -14,6 +14,7 @@ import {
 	verifyAdmission,
 	verifyRevocation,
 } from "../../shared/admission.js";
+import type { Clock } from "../../shared/ambient.js";
 import { renameFileSync, writeFileAtomic } from "../../shared/atomic-write.js";
 
 ////////////////////////////////
@@ -51,7 +52,10 @@ export class Allowlist {
 	private file: string;
 	private state: AllowlistFile;
 
-	constructor(dataDir: string) {
+	constructor(
+		dataDir: string,
+		private readonly ambient: Clock,
+	) {
 		this.file = path.join(dataDir, ALLOWLIST_FILE);
 		this.state = this.read();
 	}
@@ -68,7 +72,7 @@ export class Allowlist {
 			const parsed = AllowlistFileSchema.safeParse(JSON.parse(raw));
 			if (parsed.success) return parsed.data;
 		} catch {}
-		const aside = `${this.file}.corrupt-${Date.now()}`;
+		const aside = `${this.file}.corrupt-${this.ambient.now()}`;
 		renameFileSync(this.file, aside);
 		console.warn(`[allowlist] invalid allowlist; moved aside to ${aside}`);
 		throw new AllowlistCorruptError(aside);

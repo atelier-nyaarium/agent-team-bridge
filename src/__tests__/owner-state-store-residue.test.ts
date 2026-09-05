@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { DomainQuota } from "../federation-server/owner/domainQuota.js";
 import { type OwnerKey, OwnerStateStore } from "../federation-server/owner/ownerStateStore.js";
+import { processAmbient } from "../shared/ambient.js";
 import { filesUnder } from "./helpers/residue.js";
 
 const key: OwnerKey = { domainId: "domain", ownerSignPub: Buffer.alloc(32, 8).toString("base64") };
@@ -17,13 +18,14 @@ describe("owner state residue", () => {
 			reserveBytes: 0,
 			statfs: () => ({ available: 10_000_000 }),
 		});
-		const store = OwnerStateStore.open({ dataDir: source, key, quota });
+		const store = OwnerStateStore.open({ dataDir: source, key, quota, ambient: processAmbient() });
 		store.put("share", "s", null, { clear: { x: 1 } });
 		const copyParent = fs.mkdtempSync(path.join(os.tmpdir(), "owner-copy-"));
 		const copy = path.join(copyParent, path.basename(source));
 		store.close();
 		fs.cpSync(source, copy, { recursive: true });
 		const reopened = OwnerStateStore.open({
+			ambient: processAmbient(),
 			dataDir: copy,
 			key,
 			quota: new DomainQuota({

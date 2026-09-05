@@ -1,4 +1,4 @@
-import crypto from "node:crypto";
+import type { Ambient } from "../../shared/ambient.js";
 
 export const BLOB_LEASE_MS = 10 * 60 * 1000;
 
@@ -14,12 +14,13 @@ export interface LeaseRecord extends BlobLease {
 }
 
 export function newLease(
+	ambient: Pick<Ambient, "newId">,
 	generation: number,
 	now: number,
 	expiresAt = now + BLOB_LEASE_MS,
 	expectedSize?: number,
 ): LeaseRecord {
-	return { id: crypto.randomUUID(), generation, expiresAt, lastRenewedAt: now, expectedSize };
+	return { id: ambient.newId(), generation, expiresAt, lastRenewedAt: now, expectedSize };
 }
 
 export function leaseMatches(

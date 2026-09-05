@@ -1,6 +1,7 @@
 import { ZodError } from "zod";
 import type { SignedAdmission, SignedRevocation } from "../../shared/admission.js";
 import { REGISTER_MAX_SKEW_MS, resolveAdmittedConsole } from "../../shared/admission.js";
+import type { Clock } from "../../shared/ambient.js";
 import { canonicalJson, sha256Hex } from "../../shared/canonical-json.js";
 import { FEDERATION_VALUE_PROTOCOL_VERSION } from "../../shared/router-protocol.js";
 import {
@@ -31,7 +32,7 @@ export interface OwnerOpIntakeParams {
 		domainId: string,
 	) => { ownerSignPub: string; admissions: SignedAdmission[]; revocations: SignedRevocation[] } | null;
 	push: (domainId: string, address: string, rows: InboxRow[]) => boolean;
-	now?: () => number;
+	ambient: Clock;
 	leases?: Pick<LeaseService, "ready">;
 	/** Answers kept for re-posts; the oldest goes when full. */
 	maxCachedAnswers?: number;
@@ -63,7 +64,7 @@ export class OwnerOpIntake {
 	private gatewayProtocol: ((domainId: string, gatewayId: string) => number | null) | undefined;
 
 	constructor(private readonly params: OwnerOpIntakeParams) {
-		this.now = params.now ?? Date.now;
+		this.now = () => params.ambient.now();
 		this.maxCachedAnswers = params.maxCachedAnswers ?? 5000;
 		this.registerInboxOps();
 	}

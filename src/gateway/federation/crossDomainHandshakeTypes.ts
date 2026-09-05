@@ -1,3 +1,4 @@
+import type { Ambient } from "../../shared/ambient.js";
 import type {
 	XDomainCommitReplyWire,
 	XDomainCommitWire,
@@ -79,7 +80,7 @@ export interface CrossDomainHandshakeDeps {
 	ttlMs?: number;
 	/** Hard cap on pairing attempts per listening token before it is invalidated. */
 	maxAttempts?: number;
-	now?: () => number;
+	ambient: Pick<Ambient, "now" | "randomBytes">;
 }
 
 ////////////////////////////////

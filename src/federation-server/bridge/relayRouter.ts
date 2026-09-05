@@ -1,3 +1,4 @@
+import type { Ambient, TimerHandle } from "../../shared/ambient.js";
 import {
 	type CrossDomainHandshakeReplyParams,
 	CrossDomainHandshakeReplyParamsSchema,
@@ -18,7 +19,7 @@ type WSLike = ReturnType<GatewayTransport["getConnection"]>;
 
 export interface RelayRouterDeps {
 	hasLinkEdge: (srcDomainId: string, dstDomainId: string) => boolean;
-	now: () => number;
+	ambient: Pick<Ambient, "now" | "setTimer" | "clearTimer">;
 	gatewayConnections: ReadonlyMap<string, ReadonlyMap<string, ConnectionId>>;
 	getConnection: (connId: ConnectionId) => WSLike;
 	/** Domain and gateway id of a registered connection, if any. */
@@ -31,7 +32,7 @@ export class RelayRouter {
 		string,
 		{
 			resolve: (r: GatewayRelayReplyParams) => void;
-			timer: ReturnType<typeof setTimeout>;
+			timer: TimerHandle;
 			dstDomainId: string;
 			dstGateway: string;
 		}
@@ -40,7 +41,7 @@ export class RelayRouter {
 		string,
 		{
 			resolve: (r: CrossDomainHandshakeReplyParams | CrossDomainHandshakeRevealReplyParams) => void;
-			timer: ReturnType<typeof setTimeout>;
+			timer: TimerHandle;
 			dstConnId: ConnectionId;
 			dstGateway: string;
 		}
@@ -51,12 +52,12 @@ export class RelayRouter {
 
 	stop(): void {
 		for (const [relayId, pending] of this.pendingRelays) {
-			clearTimeout(pending.timer);
+			this.deps.ambient.clearTimer(pending.timer);
 			pending.resolve({ relayId, ok: false, error: "gateway bridge shutting down" });
 		}
 		this.pendingRelays.clear();
 		for (const [handshakeId, pending] of this.pendingHandshakes) {
-			clearTimeout(pending.timer);
+			this.deps.ambient.clearTimer(pending.timer);
 			pending.resolve({ handshakeId, ok: false, error: "gateway bridge shutting down" });
 		}
 		this.pendingHandshakes.clear();
@@ -66,7 +67,7 @@ export class RelayRouter {
 	evictDomain(domainId: string, reason: string): void {
 		for (const [relayId, pending] of this.pendingRelays) {
 			if (pending.dstDomainId !== domainId) continue;
-			clearTimeout(pending.timer);
+			this.deps.ambient.clearTimer(pending.timer);
 			this.pendingRelays.delete(relayId);
 			pending.resolve({ relayId, ok: false, error: reason });
 		}
@@ -81,14 +82,14 @@ export class RelayRouter {
 		if (reg && wasCurrent) {
 			for (const [relayId, pending] of this.pendingRelays) {
 				if (pending.dstDomainId !== reg.domainId || pending.dstGateway !== reg.gatewayId) continue;
-				clearTimeout(pending.timer);
+				this.deps.ambient.clearTimer(pending.timer);
 				this.pendingRelays.delete(relayId);
 				pending.resolve({ relayId, ok: false, error: `gateway "${reg.gatewayId}" disconnected` });
 			}
 		}
 		for (const [handshakeId, pending] of this.pendingHandshakes) {
 			if (pending.dstConnId !== connId) continue;
-			clearTimeout(pending.timer);
+			this.deps.ambient.clearTimer(pending.timer);
 			this.pendingHandshakes.delete(handshakeId);
 			pending.resolve({ handshakeId, ok: false, error: `gateway "${pending.dstGateway}" disconnected` });
 		}
@@ -126,7 +127,7 @@ export class RelayRouter {
 		const ws = dstConnId ? this.deps.getConnection(dstConnId) : null;
 		if (!ws) return Promise.resolve({ relayId, ok: false, error: `gateway "${dstGateway}" is offline` });
 		return new Promise<GatewayRelayReplyParams>((resolve) => {
-			const timer = setTimeout(() => {
+			const timer = this.deps.ambient.setTimer(() => {
 				this.pendingRelays.delete(relayId);
 				resolve({ relayId, ok: false, error: `gateway "${dstGateway}" did not answer in time` });
 			}, GATEWAY_RELAY_TIMEOUT_MS);
@@ -144,7 +145,7 @@ export class RelayRouter {
 					}),
 				);
 			} catch (err) {
-				clearTimeout(timer);
+				this.deps.ambient.clearTimer(timer);
 				this.pendingRelays.delete(relayId);
 				resolve({ relayId, ok: false, error: `forward to "${dstGateway}" failed: ${err}` });
 			}
@@ -159,7 +160,7 @@ export class RelayRouter {
 		if (!pending || !reg || reg.domainId !== pending.dstDomainId || reg.gatewayId !== pending.dstGateway) {
 			return { settled: false };
 		}
-		clearTimeout(pending.timer);
+		this.deps.ambient.clearTimer(pending.timer);
 		this.pendingRelays.delete(parsed.data.relayId);
 		pending.resolve(parsed.data);
 		return { settled: true };
@@ -263,7 +264,7 @@ export class RelayRouter {
 		const ws = this.deps.getConnection(dstConnId);
 		if (!ws) return Promise.resolve({ handshakeId, ok: false, error: `gateway "${dstGateway}" is offline` });
 		return new Promise<CrossDomainHandshakeReplyParams>((resolve) => {
-			const timer = setTimeout(() => {
+			const timer = this.deps.ambient.setTimer(() => {
 				this.pendingHandshakes.delete(handshakeId);
 				resolve({ handshakeId, ok: false, error: `gateway "${dstGateway}" did not answer in time` });
 			}, CROSS_DOMAIN_HANDSHAKE_TIMEOUT_MS);
@@ -271,7 +272,7 @@ export class RelayRouter {
 			try {
 				ws.send(JSON.stringify({ type, ...frame }));
 			} catch (err) {
-				clearTimeout(timer);
+				this.deps.ambient.clearTimer(timer);
 				this.pendingHandshakes.delete(handshakeId);
 				resolve({ handshakeId, ok: false, error: `forward to "${dstGateway}" failed: ${err}` });
 			}
@@ -284,7 +285,7 @@ export class RelayRouter {
 	): { settled: boolean } {
 		const pending = this.pendingHandshakes.get(reply.handshakeId);
 		if (!pending || pending.dstConnId !== connId) return { settled: false };
-		clearTimeout(pending.timer);
+		this.deps.ambient.clearTimer(pending.timer);
 		this.pendingHandshakes.delete(reply.handshakeId);
 		pending.resolve(reply);
 		return { settled: true };
@@ -308,7 +309,7 @@ export class RelayRouter {
 	}
 
 	private allowHandshakeAttempt(srcDomain: string, dstGateway: string): boolean {
-		const now = this.deps.now();
+		const now = this.deps.ambient.now();
 		const key = `${srcDomain}|${dstGateway}`;
 		const cutoff = now - HANDSHAKE_RATE_WINDOW_MS;
 		for (const [k, timestamps] of this.handshakeAttempts) {

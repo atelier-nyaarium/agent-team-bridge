@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import type { Ambient } from "../../shared/ambient.js";
 import type {
 	CrossDomainConfirmResult,
 	CrossDomainListenResult,
@@ -95,6 +95,7 @@ export class CrossDomainHandshakeCoordinator {
 	private readonly ttlMs: number;
 	private readonly maxAttempts: number;
 	private readonly now: () => number;
+	private readonly ambient: Pick<Ambient, "now" | "randomBytes">;
 
 	// Receiver role: the open listening windows, keyed by token.
 	private readonly listening = new Map<string, ListeningSession>();
@@ -109,7 +110,8 @@ export class CrossDomainHandshakeCoordinator {
 		this.route = deps.route;
 		this.ttlMs = deps.ttlMs ?? DEFAULT_TTL_MS;
 		this.maxAttempts = deps.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
-		this.now = deps.now ?? Date.now;
+		this.ambient = deps.ambient;
+		this.now = () => deps.ambient.now();
 	}
 
 	/** RECEIVER: open a listening window. Mints a single-use token `<gatewayId>.<random>` (the
@@ -121,7 +123,7 @@ export class CrossDomainHandshakeCoordinator {
 		if (!ownerSignPub) {
 			throw new Error("this Gateway has no Domain owner yet; cannot open a cross-Domain listening window");
 		}
-		const token = `${this.self.gatewayId}.${randomBytes(TOKEN_RANDOM_BYTES).toString("base64url")}`;
+		const token = `${this.self.gatewayId}.${this.ambient.randomBytes(TOKEN_RANDOM_BYTES).toString("base64url")}`;
 		const expiresAt = this.now() + this.ttlMs;
 		this.listening.set(token, { token, expiresAt, attempts: 0 });
 		return {
@@ -157,7 +159,7 @@ export class CrossDomainHandshakeCoordinator {
 		// must not be displaced by a racing commit).
 		if (session.commit) throw new Error("this listening window is already pairing");
 
-		const receiverSalt = randomBytes(SALT_RANDOM_BYTES).toString("base64url");
+		const receiverSalt = this.ambient.randomBytes(SALT_RANDOM_BYTES).toString("base64url");
 		const receiverCommitment = crossDomainCommitment(this.selfParty(ownerSignPub), receiverSalt);
 		session.commit = {
 			pin: req.pin,
@@ -230,7 +232,7 @@ export class CrossDomainHandshakeCoordinator {
 			domainId: args.requesterDomainId,
 			gatewayId: args.requesterGatewayId,
 		};
-		const requesterSalt = randomBytes(SALT_RANDOM_BYTES).toString("base64url");
+		const requesterSalt = this.ambient.randomBytes(SALT_RANDOM_BYTES).toString("base64url");
 		const requesterCommitment = crossDomainCommitment(requesterParty, requesterSalt);
 
 		// Round 1: send our commitment, receive theirs (formed seeing only ours).

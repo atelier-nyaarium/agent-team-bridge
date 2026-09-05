@@ -17,6 +17,7 @@ import type {
 import { signXDomainLink } from "../shared/federation-protocol.js";
 import { signXDomainLinkEdge } from "../shared/federation-xdomain-links.js";
 import { MAX_BLOB_BYTES } from "../shared/router-protocol.js";
+import { type FakeAmbient, fakeAmbient } from "./fakeAmbient.js";
 import { attachFakeHost, createFakeCodexDaemon, type FakeHost, type FakeHostOptions } from "./fakeHost.js";
 import { FixtureWorld } from "./fixtureWorld.js";
 import { type IdentitySet, loadIdentitySet, mintIdentitySet, seedDomain, seedRouter } from "./identitySet.js";
@@ -27,6 +28,12 @@ import { createPhoneDriver, type PhoneDriver } from "./phoneDriver.js";
 
 export interface FederationHarnessOptions {
 	now?: () => number;
+	/**
+	 * "real" (the default) leaves every timer on the process clock, so the persist tick, the presence
+	 * watch, the awareness tick, the inbox pump, and the reconciler make progress on their own.
+	 * "manual" holds them until `ambient.advance` reaches their deadline.
+	 */
+	drive?: "real" | "manual";
 	wakeTimeoutMs?: number;
 	host?: Omit<FakeHostOptions, "token">;
 	/** False boots the gateway with an empty keyring, so it must ask the phone for epoch 1. */
@@ -44,6 +51,10 @@ export interface RouterOnlyHarness {
 	set: IdentitySet;
 	world: FixtureWorld;
 	now: () => number;
+	/** The Router's clock, entropy, and timers. */
+	ambient: FakeAmbient;
+	/** The ambient a gateway composed over `dir` runs on. */
+	ambientFor: (dir: string) => FakeAmbient;
 	router: { server: RouterServer; port: number; certFp: string; store: FileSecretStore; dataDir: string };
 	phone: PhoneDriver;
 	waitFor<T>(probe: () => Probe<T>, label: string, timeoutMs?: number): Promise<T>;
@@ -60,6 +71,8 @@ export interface DomainPeer {
 	set: IdentitySet;
 	world: FixtureWorld;
 	federationDir: string;
+	/** This peer's gateway clock, entropy, and timers. */
+	ambient: FakeAmbient;
 	gateway: GatewayGraph;
 	host: FakeHost;
 	phone: PhoneDriver;
@@ -86,6 +99,8 @@ export interface LinkResult {
 export interface FederationHarness extends DomainPeer {
 	root: string;
 	now: () => number;
+	/** The Router's own clock, entropy, and timers, apart from the home gateway's. */
+	routerAmbient: FakeAmbient;
 	router: { server: RouterServer; port: number; certFp: string; store: FileSecretStore; dataDir: string };
 	/** Polls until `probe` answers a value; throws with `label` on the deadline. */
 	waitFor<T>(probe: () => Probe<T>, label: string, timeoutMs?: number): Promise<T>;
@@ -119,7 +134,11 @@ const registered = (graph: GatewayGraph) =>
 	waitFor(() => graph.faults.routerRegistered() || undefined, "gateway registration", 15_000);
 
 export async function startFederationHarness(options: FederationHarnessOptions = {}): Promise<FederationHarness> {
-	const base = await startRouterOnly({ now: options.now, wakeTimeoutMs: options.wakeTimeoutMs });
+	const base = await startRouterOnly({
+		now: options.now,
+		drive: options.drive,
+		wakeTimeoutMs: options.wakeTimeoutMs,
+	});
 	const peers: DomainPeer[] = [];
 	let home: DomainPeer;
 	try {
@@ -138,6 +157,8 @@ export async function startFederationHarness(options: FederationHarnessOptions =
 		set: home.set,
 		world: home.world,
 		federationDir: home.federationDir,
+		ambient: home.ambient,
+		routerAmbient: base.ambient,
 		get gateway() {
 			return home.gateway;
 		},
@@ -160,7 +181,7 @@ export async function startFederationHarness(options: FederationHarnessOptions =
 				federationToken: base.set.tokens.federation,
 				store,
 				tls: loadRouterTls(base.router.dataDir),
-				now: base.now,
+				ambient: base.ambient,
 			});
 			try {
 				await server.start();
@@ -230,6 +251,7 @@ async function attachDomain(
 		set,
 		world,
 		federationDir,
+		ambient: base.ambientFor(gatewayDir),
 		get gateway() {
 			return currentGateway;
 		},
@@ -319,11 +341,23 @@ async function linkDomains(receiver: DomainPeer, requester: DomainPeer, now: () 
 }
 
 export async function startRouterOnly(
-	options: { now?: () => number; wakeTimeoutMs?: number } = {},
+	options: { now?: () => number; drive?: "real" | "manual"; wakeTimeoutMs?: number } = {},
 ): Promise<RouterOnlyHarness> {
 	const set = loadIdentitySet();
 	const world = FixtureWorld.from(set);
-	const now = options.now ?? Date.now;
+	const drive = options.drive ?? "real";
+	const ambient = fakeAmbient({ now: options.now, drive });
+	const now = () => ambient.now();
+	// Each graph draws its own entropy, so two peers never mint the same nonce.
+	const gatewayAmbients = new Map<string, FakeAmbient>();
+	const ambientFor = (key: string): FakeAmbient => {
+		let held = gatewayAmbients.get(key);
+		if (!held) {
+			held = fakeAmbient({ now: options.now, drive });
+			gatewayAmbients.set(key, held);
+		}
+		return held;
+	};
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), "federation-harness-"));
 	const routerDir = path.join(root, "router");
 	const gatewayDir = path.join(root, "gateway");
@@ -338,7 +372,7 @@ export async function startRouterOnly(
 			federationToken: set.tokens.federation,
 			store,
 			tls,
-			now,
+			ambient,
 		});
 		await server.start();
 		const router = { server, port, certFp: tls.certFp, store, dataDir: routerDir };
@@ -348,11 +382,14 @@ export async function startRouterOnly(
 			gatewayOptions: GatewayComposeOptions = {},
 		): GatewayGraph => {
 			const federationDir = path.join(dir, "federation");
+			const gatewayAmbient = ambientFor(dir);
 			if (!gatewayOptions.arming) {
-				FixtureWorld.from(gatewaySet).gatewayBootstrap(federationDir, {
-					routerUrl: `https://127.0.0.1:${port}`,
-					routerCertFp: tls.certFp,
-				});
+				FixtureWorld.from(gatewaySet).gatewayBootstrap(
+					federationDir,
+					{ routerUrl: `https://127.0.0.1:${port}`, routerCertFp: tls.certFp },
+					undefined,
+					gatewayAmbient,
+				);
 				if (gatewayOptions.seedContentKey === false) fs.rmSync(path.join(federationDir, "content-keys.json"));
 			}
 			return composeGateway({
@@ -369,7 +406,7 @@ export async function startRouterOnly(
 					routerBootstrapUrl: null,
 					...(gatewayOptions.enrollNonce ? { enrollNonce: gatewayOptions.enrollNonce } : {}),
 				},
-				now,
+				ambient: gatewayAmbient,
 				allowFixtureIdentity: true,
 			});
 		};
@@ -384,6 +421,8 @@ export async function startRouterOnly(
 			set,
 			world,
 			now,
+			ambient,
+			ambientFor,
 			router,
 			phone: phoneFor(set),
 			waitFor,

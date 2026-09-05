@@ -20,7 +20,7 @@ function make(epoch = 7) {
 		ownerOf: (domainId) => (domainId === "alpha" ? owner.sign.pub : null),
 		quotaFor: () =>
 			new DomainQuota({ dir: dataDir, limitBytes: 100_000_000, statfs: () => ({ available: 100_000_000 }) }),
-		now: () => 100,
+		ambient: { now: () => 100 },
 	});
 	return {
 		registry,

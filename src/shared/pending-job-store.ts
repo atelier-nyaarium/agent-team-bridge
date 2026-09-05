@@ -1,6 +1,7 @@
 ////////////////////////////////
 //  Interfaces & Types
 
+import type { Ambient, IntervalHandle, TimerHandle } from "./ambient.js";
 import type { ReturnRoute } from "./federation-protocol.js";
 import { type Address, parseStoreKey } from "./session-id.js";
 
@@ -30,7 +31,7 @@ interface JobEntry<T> {
 	persistent: boolean;
 	state: JobState;
 	createdAt: number;
-	timer: ReturnType<typeof setTimeout> | null;
+	timer: TimerHandle | null;
 	resolve: ((result: WaitResult<T>) => void) | null;
 	storedResult: T | null;
 }
@@ -98,10 +99,14 @@ export interface PersistentJobSnapshot<T> {
 export class PendingJobStore<T> {
 	private entries = new Map<string, JobEntry<T>>();
 	private ttlMs: number;
-	private cleanupTimer: ReturnType<typeof setInterval> | null = null;
+	private cleanupTimer: IntervalHandle | null = null;
 	private onCrossDomainJobChange: (() => void) | undefined;
 
-	constructor(ttlMs = 600_000, onCrossDomainJobChange?: () => void) {
+	constructor(
+		ttlMs: number,
+		private readonly ambient: Ambient,
+		onCrossDomainJobChange?: () => void,
+	) {
 		this.ttlMs = ttlMs;
 		this.onCrossDomainJobChange = onCrossDomainJobChange;
 	}
@@ -116,12 +121,12 @@ export class PendingJobStore<T> {
 
 	startCleanup(intervalMs = 60_000): void {
 		if (this.cleanupTimer) return;
-		this.cleanupTimer = setInterval(() => this.sweep(), intervalMs);
+		this.cleanupTimer = this.ambient.setInterval(() => this.sweep(), intervalMs);
 	}
 
 	stopCleanup(): void {
 		if (this.cleanupTimer) {
-			clearInterval(this.cleanupTimer);
+			this.ambient.clearInterval(this.cleanupTimer);
 			this.cleanupTimer = null;
 		}
 	}
@@ -147,7 +152,7 @@ export class PendingJobStore<T> {
 			// Keep an existing Domain binding if this refresh did not carry one.
 			if (dstDomainId !== undefined) existing.dstDomainId = dstDomainId;
 			existing.persistent = persistent || existing.persistent;
-			existing.createdAt = Date.now();
+			existing.createdAt = this.ambient.now();
 			if (wasCrossDomain || (existing.persistent && existing.returnRoute)) this.onCrossDomainJobChange?.();
 			return;
 		}
@@ -160,7 +165,7 @@ export class PendingJobStore<T> {
 			dstDomainId: dstDomainId ?? null,
 			persistent,
 			state: "waiting",
-			createdAt: Date.now(),
+			createdAt: this.ambient.now(),
 			timer: null,
 			resolve: null,
 			storedResult: null,
@@ -173,7 +178,7 @@ export class PendingJobStore<T> {
 		if (!entry) return Promise.resolve({ delivered: false });
 		return new Promise((resolve) => {
 			entry.resolve = resolve;
-			entry.timer = setTimeout(() => {
+			entry.timer = this.ambient.setTimer(() => {
 				entry.state = "timed_out";
 				entry.timer = null;
 				entry.resolve = null;
@@ -209,7 +214,7 @@ export class PendingJobStore<T> {
 
 		if (entry.state === "waiting" && entry.resolve) {
 			// Synchronous delivery: someone is waiting via waitForResult()
-			if (entry.timer) clearTimeout(entry.timer);
+			if (entry.timer) this.ambient.clearTimer(entry.timer);
 			entry.timer = null;
 			entry.resolve({ delivered: true, result });
 			entry.resolve = null;
@@ -219,7 +224,7 @@ export class PendingJobStore<T> {
 			} else {
 				entry.state = "stored";
 				entry.storedResult = result;
-				entry.createdAt = Date.now();
+				entry.createdAt = this.ambient.now();
 			}
 			this.notifyCrossDomainJobChange(entry);
 			return meta();
@@ -229,7 +234,7 @@ export class PendingJobStore<T> {
 			// Async delivery: channel mode, no one called waitForResult(). Store for polling.
 			entry.state = "stored";
 			entry.storedResult = result;
-			entry.createdAt = Date.now();
+			entry.createdAt = this.ambient.now();
 			this.notifyCrossDomainJobChange(entry);
 			return meta();
 		}
@@ -237,7 +242,7 @@ export class PendingJobStore<T> {
 		if (entry.state === "timed_out") {
 			entry.state = "stored";
 			entry.storedResult = result;
-			entry.createdAt = Date.now();
+			entry.createdAt = this.ambient.now();
 			this.notifyCrossDomainJobChange(entry);
 			return meta();
 		}
@@ -245,7 +250,7 @@ export class PendingJobStore<T> {
 		if (entry.state === "stored") {
 			// Re-delivery: channel sessions may receive multiple replies
 			entry.storedResult = result;
-			entry.createdAt = Date.now();
+			entry.createdAt = this.ambient.now();
 			this.notifyCrossDomainJobChange(entry);
 			return meta();
 		}
@@ -255,7 +260,7 @@ export class PendingJobStore<T> {
 
 	remove(id: string): void {
 		const entry = this.entries.get(id);
-		if (entry?.timer) clearTimeout(entry.timer);
+		if (entry?.timer) this.ambient.clearTimer(entry.timer);
 		this.entries.delete(id);
 		this.notifyCrossDomainJobChange(entry);
 	}
@@ -273,7 +278,7 @@ export class PendingJobStore<T> {
 			if (entry.dstDomainId !== dstDomainId) continue;
 			// The TTL timeout's settle path (see waitForResult), but with an explicit reason and
 			// the entry removed outright (an unlinked job has no reply to poll for later).
-			if (entry.timer) clearTimeout(entry.timer);
+			if (entry.timer) this.ambient.clearTimer(entry.timer);
 			entry.timer = null;
 			entry.state = "timed_out";
 			const resolve = entry.resolve;
@@ -300,7 +305,7 @@ export class PendingJobStore<T> {
 		for (const [id, entry] of this.entries) {
 			if (entry.dstDomainId !== dstDomainId) continue;
 			if (jobAddress(entry.id)?.canonical !== sessionTarget) continue;
-			if (entry.timer) clearTimeout(entry.timer);
+			if (entry.timer) this.ambient.clearTimer(entry.timer);
 			entry.timer = null;
 			entry.state = "timed_out";
 			const resolve = entry.resolve;
@@ -368,7 +373,7 @@ export class PendingJobStore<T> {
 		sessionTarget: string,
 		isCrossDomainPeer: (gatewayId: string) => boolean,
 		maxAgeMs: number,
-		now: number = Date.now(),
+		now: number,
 	): string[] {
 		const ids: string[] = [];
 		for (const entry of this.entries.values()) {
@@ -384,7 +389,7 @@ export class PendingJobStore<T> {
 		sessionTarget: string,
 		isCrossDomainPeer: (gatewayId: string) => boolean,
 		maxAgeMs: number,
-		now: number = Date.now(),
+		now: number,
 	): boolean {
 		for (const entry of this.entries.values()) {
 			if (!entry.persistent || !entry.returnRoute) continue;
@@ -451,11 +456,11 @@ export class PendingJobStore<T> {
 	}
 
 	private sweep(): void {
-		const now = Date.now();
+		const now = this.ambient.now();
 		for (const [id, entry] of this.entries) {
 			if (entry.persistent) continue;
 			if (entry.state !== "waiting" && now - entry.createdAt > this.ttlMs) {
-				if (entry.timer) clearTimeout(entry.timer);
+				if (entry.timer) this.ambient.clearTimer(entry.timer);
 				this.entries.delete(id);
 			}
 		}

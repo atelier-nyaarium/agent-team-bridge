@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import type { Ambient, TimerHandle } from "./ambient.js";
 import { mintEpoch } from "./epoch.js";
 
 ////////////////////////////////
@@ -121,7 +122,9 @@ class Plane<T> {
 export class PlaneRegistry {
 	private readonly planes = new Map<string, Plane<unknown>>();
 	private waiters: Waiter[] = [];
-	private readonly coalesceTimers = new Map<string, ReturnType<typeof setTimeout>>();
+	private readonly coalesceTimers = new Map<string, TimerHandle>();
+
+	constructor(private readonly ambient: Pick<Ambient, "setTimer" | "clearTimer">) {}
 
 	/** `identityOf` must be pure and canonically order any unordered collection inside it. */
 	registerPlane<T>(def: PlaneDefinition<T>, restored?: PlanePersistedState): void {
@@ -139,7 +142,7 @@ export class PlaneRegistry {
 		if (!this.planes.delete(name)) return;
 		const pending = this.coalesceTimers.get(name);
 		if (pending) {
-			clearTimeout(pending);
+			this.ambient.clearTimer(pending);
 			this.coalesceTimers.delete(name);
 		}
 		for (const waiter of [...this.waiters]) {
@@ -165,7 +168,7 @@ export class PlaneRegistry {
 		if (this.coalesceTimers.has(name)) return;
 		this.coalesceTimers.set(
 			name,
-			setTimeout(() => {
+			this.ambient.setTimer(() => {
 				this.coalesceTimers.delete(name);
 				const p = this.planes.get(name);
 				if (p?.recompute()) this.wake(name);
@@ -202,17 +205,17 @@ export class PlaneRegistry {
 	): Promise<boolean> {
 		if (this.changedSince(presented, scope).length > 0) return Promise.resolve(true);
 		return new Promise((resolve) => {
-			let timer: ReturnType<typeof setTimeout> | undefined;
+			let timer: TimerHandle | undefined;
 			const waiter: Waiter = {
 				presentedMap: presented,
 				settle: (woke) => {
-					clearTimeout(timer);
+					if (timer) this.ambient.clearTimer(timer);
 					const i = this.waiters.indexOf(waiter);
 					if (i >= 0) this.waiters.splice(i, 1);
 					resolve(woke);
 				},
 			};
-			timer = setTimeout(() => waiter.settle(false), timeoutMs);
+			timer = this.ambient.setTimer(() => waiter.settle(false), timeoutMs);
 			this.waiters.push(waiter);
 		});
 	}

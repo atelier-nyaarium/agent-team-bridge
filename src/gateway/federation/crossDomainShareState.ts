@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
+import type { Clock } from "../../shared/ambient.js";
 import { fenced } from "../../shared/migration-fence.js";
 import { CrossDomainShareTargetSchema } from "../../shared/schemas.js";
 import {
@@ -38,8 +39,8 @@ export class CrossDomainShareState {
 
 	constructor(
 		dataDir: string,
-		onChange?: (reason: ShareChangeReason) => void,
-		private readonly now: () => number = () => Date.now(),
+		onChange: ((reason: ShareChangeReason) => void) | undefined,
+		private readonly ambient: Clock,
 	) {
 		this.file = path.join(dataDir, XDOMAIN_SHARE_FILE);
 		this.state = this.read();
@@ -63,7 +64,7 @@ export class CrossDomainShareState {
 
 	share(sessionTarget: string, target: CrossDomainShareTarget): void {
 		if (fenced()) return;
-		this.state = shareRule(this.state, sessionTarget, target, this.now());
+		this.state = shareRule(this.state, sessionTarget, target, this.ambient.now());
 		this.persist();
 		this.onChange?.(target.kind === "domain" ? { kind: "domain", domainId: target.domainId } : { kind: "sweep" });
 	}
@@ -93,7 +94,7 @@ export class CrossDomainShareState {
 	touch(sessionTarget: string): void {
 		if (fenced()) return;
 		const before = this.state.shares;
-		this.state = touchShares(this.state, sessionTarget, this.now());
+		this.state = touchShares(this.state, sessionTarget, this.ambient.now());
 		const changed = this.state.shares.some((s, i) => s.lastSeenAt !== before[i]?.lastSeenAt);
 		if (changed) this.persist();
 	}

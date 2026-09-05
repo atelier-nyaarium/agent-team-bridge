@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createPresenceReporter } from "../gateway/router/presenceReporter.js";
+import { processAmbient } from "../shared/ambient.js";
 import type { PresenceRow } from "../shared/presence-identity.js";
 import { PresenceBaselineParamsSchema, PresenceDeltaParamsSchema } from "../shared/schemasRouterPresence.js";
 
@@ -18,6 +19,7 @@ function setup(answers: Array<{ error?: string; result?: unknown }> = []) {
 	let spawnPoints = { gatewayId: "gateway", hostSpawns: [] as string[] };
 	const frames: Array<{ action: string; params: Record<string, unknown> }> = [];
 	const reporter = createPresenceReporter({
+		ambient: processAmbient(),
 		rows: () => rows,
 		spawnPoints: () => spawnPoints,
 		incarnation: () => incarnation,

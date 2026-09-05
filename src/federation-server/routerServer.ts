@@ -5,6 +5,7 @@ import path from "node:path";
 import { WebSocketServer } from "ws";
 import packageJson from "../../package.json";
 import { resolveAdmitted, resolveAdmittedConsole } from "../shared/admission.js";
+import type { Ambient, IntervalHandle } from "../shared/ambient.js";
 import { fingerprint } from "../shared/crypto.js";
 import type { EnrollOp } from "../shared/federation-lifecycle.js";
 import {
@@ -52,7 +53,8 @@ export interface RouterServerParams {
 	tls?: RouterTls;
 	/** Reach requires app token. */
 	reach?: RouterReachAnswer;
-	now?: () => number;
+	/** The clock, entropy, ids, and timers this Router runs on. */
+	ambient: Ambient;
 }
 
 export class RouterServer {
@@ -71,47 +73,43 @@ export class RouterServer {
 	private readonly transportNonces = new Map<string, number>();
 	private readonly trustPendingNonces = new Map<string, number>();
 	private readonly domain: RouterDomainBootstrap;
-	private readonly sweepTimer: ReturnType<typeof setInterval>;
+	private readonly sweepTimer: IntervalHandle;
 	private readonly ownerOps: OwnerOpIntake;
 	private readonly consoleSockets: ConsoleSockets;
 	private readonly ownerServices: ReturnType<typeof createOwnerServices>;
-	private readonly now: () => number;
+	private readonly now = () => this.params.ambient.now();
 
 	public constructor(private readonly params: RouterServerParams) {
-		const now = params.now ?? Date.now;
-		this.now = now;
+		const ambient = params.ambient;
 		this.domain = RouterDomainBootstrap.assemble({
 			dataDir: params.dataDir,
 			store: params.store,
-			now,
+			ambient,
 			tls: params.tls,
 			quotaBytes: Number(process.env.ROUTER_DOMAIN_QUOTA_BYTES ?? 2 * 1024 * 1024 * 1024),
 			blobCacheBytes: Number(process.env.ROUTER_BLOB_CACHE_BYTES ?? 1024 * 1024 * 1024),
 		});
 		this.wsServer.on("error", () => {});
-		this.deviceApproval = new DeviceApprovalCoordinator(undefined, undefined, undefined, now);
-		this.enrollHandshake = new EnrollHandshakeCoordinator(undefined, undefined, undefined, now);
-		this.trustRendezvous = new TrustRendezvousCoordinator(undefined, undefined, undefined, undefined, now);
-		this.tenantAdmin = new TenantAdmin(
-			params.store,
-			() => {
-				const id = params.store.adminDomainId();
-				return id ? (params.store.loadDomain(id)?.ownerSignPub ?? null) : null;
-			},
-			now,
-		);
+		this.deviceApproval = new DeviceApprovalCoordinator(ambient);
+		this.enrollHandshake = new EnrollHandshakeCoordinator(ambient);
+		this.trustRendezvous = new TrustRendezvousCoordinator(ambient);
+		const adminOwner = () => {
+			const id = params.store.adminDomainId();
+			return id ? (params.store.loadDomain(id)?.ownerSignPub ?? null) : null;
+		};
+		this.tenantAdmin = new TenantAdmin(params.store, adminOwner, ambient);
 		this.ownerOps = new OwnerOpIntake({
 			inbox: this.domain.inbox,
 			getDomain: (domainId) => this.coordinatorFor(domainId)?.getDomainSnapshot() ?? null,
 			push: (domainId, address, rows) => this.bridge.pushInboxRows(domainId, address, rows),
 			leases: this.domain.leases,
-			now,
+			ambient,
 		});
 		this.bridge = new GatewayBridge({
 			port: params.port,
 			authToken: params.federationToken,
 			inbox: this.domain.inbox,
-			now,
+			ambient,
 			adminDomainId: () => params.store.adminDomainId(),
 			getDomain: (domainId) => this.coordinatorFor(domainId)?.getDomainSnapshot() ?? null,
 			getDomainMeta: (domainId) => {
@@ -125,6 +123,7 @@ export class RouterServer {
 			reach: () => params.reach ?? { publicHost: null, lanAddresses: [] },
 		});
 		this.consoleSockets = createConsoleSockets({
+			ambient,
 			handleOwnerOp: (raw) => this.ownerOps.handle(raw),
 			registerConsumer: (domainId, signerSignPub, incarnation) =>
 				this.domain.inbox.registerConsumer(domainId, signerSignPub, incarnation),
@@ -144,7 +143,7 @@ export class RouterServer {
 					throw error;
 				}
 			},
-			now: () => this.domain.ownerRegistry.now(),
+			seenAt: () => this.domain.ownerRegistry.now(),
 			advanceCursor: (domainId, signerSignPub, cursor, cursorEpoch) =>
 				this.domain.inbox.advanceCursor(domainId, signerSignPub, cursor, cursorEpoch),
 			ownerFloor: (domainId) => this.domain.inbox.ownerFloor(domainId),
@@ -169,6 +168,7 @@ export class RouterServer {
 		});
 		this.bridge.setOwnerRowPush((domainId, row) => this.consoleSockets.pushOwnerRow(domainId, null, row));
 		this.ownerServices = createOwnerServices({
+			ambient,
 			registry: this.domain.ownerRegistry,
 			inbox: this.domain.inbox,
 			bridge: this.bridge,
@@ -239,7 +239,7 @@ export class RouterServer {
 			},
 			onOwnerOp: (raw) => this.ownerOps.handle(raw),
 		});
-		this.sweepTimer = setInterval(() => {
+		this.sweepTimer = ambient.setInterval(() => {
 			// Refuse imports during service.
 			if (decideServe(params.dataDir).kind === "refuse") {
 				console.error(`[router] an import began while serving; exiting rather than answering from it`);
@@ -253,11 +253,10 @@ export class RouterServer {
 				console.warn(`[router] sweep failed: ${(error as Error).message}`);
 			}
 		}, 60_000);
-		this.sweepTimer.unref?.();
 		this.approval = new PublicApproval({
 			port: params.port,
 			onApproval: (op) => this.deviceApproval.handle(op),
-			now,
+			ambient,
 		});
 	}
 
@@ -336,7 +335,7 @@ export class RouterServer {
 	}
 
 	public async stop(): Promise<void> {
-		clearInterval(this.sweepTimer);
+		this.params.ambient.clearInterval(this.sweepTimer);
 		this.console.stop();
 		this.approval.stop();
 		this.bridge.stop();
@@ -458,6 +457,7 @@ export class RouterServer {
 				this.domain.identity,
 				this.params.store.domainStore(domainId),
 				domainId,
+				this.params.ambient,
 			);
 			this.coordinators.set(domainId, coordinator);
 		}

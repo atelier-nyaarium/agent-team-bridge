@@ -1,4 +1,3 @@
-import crypto from "node:crypto";
 import type { ServerWebSocket } from "bun";
 import { agentInboundFrameTypes } from "../shared/agent-backend.js";
 import { isHostSpawnSession } from "../shared/host-spawn.js";
@@ -50,7 +49,7 @@ export function createWebSocketHandlers({
 	auth,
 	presenceWriter,
 	announcePresenceDirty,
-	now,
+	ambient,
 }: WebSocketDeps) {
 	const { HEARTBEAT_INTERVAL_MS = 30000, MISSED_PINGS_LIMIT = 2 } = config;
 	// Falls back to sessionStore directly (its own methods have identical signatures) when no.
@@ -75,10 +74,10 @@ export function createWebSocketHandlers({
 			}
 		}
 	}
-	const heartbeatInterval = setInterval(heartbeatTick, HEARTBEAT_INTERVAL_MS);
+	const heartbeatInterval = ambient.setInterval(heartbeatTick, HEARTBEAT_INTERVAL_MS);
 
 	// The handshake's state and rules (which hs-* id a socket owes, throttle windows, attempt caps,.
-	const handshakeGate = new HandshakeGate(now);
+	const handshakeGate = new HandshakeGate(ambient);
 
 	/** Mint a fresh lead handshake for a channel socket and send it. Sent once at register; a session
 	 * that already reports its remembered role skips this entirely (see the register handler's
@@ -157,7 +156,7 @@ export function createWebSocketHandlers({
 				return;
 			}
 			const team = reg.data.team;
-			const subId = reg.data.subId || crypto.randomUUID().slice(0, 8);
+			const subId = reg.data.subId || ambient.newId().slice(0, 8);
 			// Every bridge connection is channel mode.
 			const mode: ConnectionMode = "channel";
 			const conversationId = reg.data.conversationId ?? null;

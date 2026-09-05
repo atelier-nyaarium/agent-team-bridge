@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { EnrollHandshakeCoordinator } from "../federation-server/enrollHandshakeCoordinator.js";
+import { processAmbient } from "../shared/ambient.js";
 import type { EnrollReveal } from "../shared/federation-lifecycle.js";
 
 const reveal = (tag: string): EnrollReveal => ({
@@ -11,7 +12,7 @@ const reveal = (tag: string): EnrollReveal => ({
 
 describe("EnrollHandshakeCoordinator (dumb broker)", () => {
 	it("relays commits then reveals between the two roles", () => {
-		const c = new EnrollHandshakeCoordinator();
+		const c = new EnrollHandshakeCoordinator(processAmbient());
 		const id = "hsX";
 
 		// Admin commits first: no peer yet.
@@ -46,7 +47,7 @@ describe("EnrollHandshakeCoordinator (dumb broker)", () => {
 	});
 
 	it("binds a role slot to its first committer (anti-hijack) but allows an idempotent re-commit", () => {
-		const c = new EnrollHandshakeCoordinator();
+		const c = new EnrollHandshakeCoordinator(processAmbient());
 		c.handle({ step: "commit", handshakeId: "h", role: "ADMIN", commitment: "first" });
 		// A different commitment for the bound role is refused (never overwrites).
 		expect(c.handle({ step: "commit", handshakeId: "h", role: "ADMIN", commitment: "other" }).ok).toBe(false);
@@ -55,7 +56,7 @@ describe("EnrollHandshakeCoordinator (dumb broker)", () => {
 	});
 
 	it("caps commit attempts per window (fresh bindings + floods charge; an idempotent re-poll does not)", () => {
-		const c = new EnrollHandshakeCoordinator(600_000, 3, 256);
+		const c = new EnrollHandshakeCoordinator(processAmbient(), 600_000, 3, 256);
 		// maxAttempts=3: the two role bindings charge, an idempotent re-poll does not, and a flood
 		// of DIFFERENT commitments for a bound role charges too - so the 4th charged commit trips
 		// the cap and tears the window down.
@@ -73,7 +74,7 @@ describe("EnrollHandshakeCoordinator (dumb broker)", () => {
 	});
 
 	it("bounds total concurrent windows", () => {
-		const c = new EnrollHandshakeCoordinator(600_000, 10, 2);
+		const c = new EnrollHandshakeCoordinator(processAmbient(), 600_000, 10, 2);
 		expect(c.handle({ step: "commit", handshakeId: "a", role: "ADMIN", commitment: "c" }).ok).toBe(true);
 		expect(c.handle({ step: "commit", handshakeId: "b", role: "ADMIN", commitment: "c" }).ok).toBe(true);
 		const overflow = c.handle({ step: "commit", handshakeId: "c", role: "ADMIN", commitment: "c" });
@@ -82,12 +83,12 @@ describe("EnrollHandshakeCoordinator (dumb broker)", () => {
 	});
 
 	it("rejects a reveal before its commit", () => {
-		const c = new EnrollHandshakeCoordinator();
+		const c = new EnrollHandshakeCoordinator(processAmbient());
 		expect(c.handle({ step: "reveal", handshakeId: "h", role: "ADMIN", reveal: reveal("A") }).ok).toBe(false);
 	});
 
 	it("cancel evicts the window", () => {
-		const c = new EnrollHandshakeCoordinator();
+		const c = new EnrollHandshakeCoordinator(processAmbient());
 		c.handle({ step: "commit", handshakeId: "h", role: "ADMIN", commitment: "c" });
 		expect(c.handle({ step: "cancel", handshakeId: "h", role: "ADMIN" })).toEqual({ ok: true });
 		// After cancel, a reveal finds no window.
@@ -96,7 +97,7 @@ describe("EnrollHandshakeCoordinator (dumb broker)", () => {
 
 	it("sweeps windows past the TTL (injected clock)", () => {
 		let t = 1_000;
-		const c = new EnrollHandshakeCoordinator(100, 10, 256, () => t);
+		const c = new EnrollHandshakeCoordinator({ now: () => t }, 100, 10, 256);
 		c.handle({ step: "commit", handshakeId: "h", role: "ADMIN", commitment: "c" });
 		t = 1_000 + 101; // past the 100ms TTL
 		// The next call sweeps the stale window; a reveal then finds nothing.
@@ -104,7 +105,7 @@ describe("EnrollHandshakeCoordinator (dumb broker)", () => {
 	});
 
 	it("never returns a SAS or any computed value beyond the relayed frames", () => {
-		const c = new EnrollHandshakeCoordinator();
+		const c = new EnrollHandshakeCoordinator(processAmbient());
 		const r = c.handle({ step: "commit", handshakeId: "h", role: "ADMIN", commitment: "c" });
 		// Only ok/error/peerCommitment/peerReveal exist; the Router computes nothing.
 		expect(Object.keys(r).sort()).toEqual(["ok", "peerCommitment"].sort());

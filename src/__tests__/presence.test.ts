@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { PresenceFacade, type TeamRegistry } from "../gateway/presence.js";
+import { processAmbient } from "../shared/ambient.js";
 import { PlaneRegistry } from "../shared/plane-registry.js";
 import { SessionStore } from "../shared/session-store.js";
 
@@ -14,7 +15,7 @@ function makeRegistry(entries: Record<string, unknown>): TeamRegistry {
 }
 
 function makeFacade(opts: { registry?: TeamRegistry; offlineCatalog?: Map<string, string>; now?: () => number } = {}) {
-	const sessionStore = new SessionStore(opts.now ? { now: opts.now } : {});
+	const sessionStore = new SessionStore({ ambient: { now: opts.now ?? Date.now } });
 	const registry = opts.registry ?? (new Map() as TeamRegistry);
 	const offlineCatalog = opts.offlineCatalog ?? new Map<string, string>();
 	const facade = new PresenceFacade({
@@ -26,7 +27,7 @@ function makeFacade(opts: { registry?: TeamRegistry; offlineCatalog?: Map<string
 		displayName: () => null,
 		isAdminDomain: () => null,
 	});
-	const planeRegistry = new PlaneRegistry();
+	const planeRegistry = new PlaneRegistry(processAmbient());
 	facade.attach(planeRegistry);
 	facade.registerPlane();
 	return { facade, registry, planeRegistry };

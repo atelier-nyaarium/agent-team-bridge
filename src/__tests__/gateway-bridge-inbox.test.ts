@@ -8,6 +8,7 @@ import { RouterBlobCache } from "../federation-server/blobs/routerBlobCache.js";
 import { GatewayBridge } from "../federation-server/gatewayBridge.js";
 import { OwnerQuarantined } from "../federation-server/owner/ownerStateStore.js";
 import { signAdmission, signRegister } from "../shared/admission.js";
+import { processAmbient } from "../shared/ambient.js";
 import { blobIdFor } from "../shared/blob-store.js";
 import { generateIdentity } from "../shared/crypto.js";
 import { formatInboxAddress, signRowEnvelope } from "../shared/schemasInbox.js";
@@ -64,6 +65,7 @@ async function registered(
 		owner.sign.pub,
 	);
 	const bridge = new GatewayBridge({
+		ambient: processAmbient(),
 		port: 0,
 		authToken: "token",
 		getDomain: () => ({ ownerSignPub: owner.sign.pub, admissions: [admission], revocations: [] }),
@@ -140,7 +142,7 @@ describe("GatewayBridge inbox", () => {
 	it("refuses a held blob begin for a missing record", async () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-held-"));
 		try {
-			const held = new ReferenceHeldStore({ dataDir: root });
+			const held = new ReferenceHeldStore({ dataDir: root, ambient: processAmbient() });
 			held.setReferenceExists(() => false);
 			const { bridge } = await registered(fakeInbox(), false, undefined, held);
 			const answer = await bridge.handleCall("c1", "blob_begin", {
@@ -162,7 +164,7 @@ describe("GatewayBridge inbox", () => {
 	it("refuses a held blob begin when the owner is quarantined", async () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-held-"));
 		try {
-			const held = new ReferenceHeldStore({ dataDir: root });
+			const held = new ReferenceHeldStore({ dataDir: root, ambient: processAmbient() });
 			held.setReferenceExists(() => {
 				throw new OwnerQuarantined({ from: 1, to: 2 });
 			});
@@ -186,7 +188,11 @@ describe("GatewayBridge inbox", () => {
 	it("accepts sealed cache begin and chunk frames", async () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-blob-"));
 		try {
-			const cache = new RouterBlobCache({ dataDir: root, quotaBytesPerDomain: 1_000 });
+			const cache = new RouterBlobCache({
+				dataDir: root,
+				quotaBytesPerDomain: 1_000,
+				ambient: processAmbient(),
+			});
 			const { bridge } = await registered(fakeInbox(), false, cache as never);
 			const plain = Buffer.from("bridge blob");
 			const blobId = blobIdFor(plain);
@@ -459,6 +465,7 @@ describe("GatewayBridge inbox", () => {
 	it("gives an identity-less registration no incarnation and refuses inbox frames", async () => {
 		const owner = generateIdentity();
 		const bridge = new GatewayBridge({
+			ambient: processAmbient(),
 			port: 0,
 			authToken: "token",
 			getDomain: () => ({ ownerSignPub: owner.sign.pub, admissions: [], revocations: [] }),

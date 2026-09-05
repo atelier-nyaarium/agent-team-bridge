@@ -9,6 +9,7 @@ import {
 	createCrossDomainPresenceSource,
 	crossDomainPresenceSourcePlaneName,
 } from "../gateway/federation/crossDomainPresenceSource.js";
+import { processAmbient } from "../shared/ambient.js";
 import { type CrossDomainPresenceSession, MAX_CROSSDOMAIN_PRESENCE_SESSIONS } from "../shared/federation-protocol.js";
 import { PlaneRegistry } from "../shared/plane-registry.js";
 import { presenceForDomain, toCrossDomainPresenceSession } from "../shared/presence-projection.js";
@@ -75,8 +76,8 @@ describe("cross-domain presence landing", () => {
 	it("stores sanitized content, defers a burst, and restores the cap and teardown state", () => {
 		vi.useFakeTimers();
 		try {
-			const registry = new PlaneRegistry();
-			const consumer = new CrossDomainPresenceConsumer(registry, undefined, 1_000);
+			const registry = new PlaneRegistry(processAmbient());
+			const consumer = new CrossDomainPresenceConsumer(registry, undefined, processAmbient(), 1_000);
 			const unsafe = landed("story", { sessionLabel: "bad\u202elabel", description: "one\ntwo" });
 			consumer.land("friend", [unsafe]);
 			consumer.land("friend", [unsafe, landed("app")]);
@@ -94,7 +95,12 @@ describe("cross-domain presence landing", () => {
 				(beforeFreshness?.counter ?? 0) + 1,
 			);
 
-			const restored = new CrossDomainPresenceConsumer(new PlaneRegistry(), undefined, 0);
+			const restored = new CrossDomainPresenceConsumer(
+				new PlaneRegistry(processAmbient()),
+				undefined,
+				processAmbient(),
+				0,
+			);
 			restored.restore(consumer.snapshot());
 			restored.teardown("friend");
 			restored.land("friend", [landed("relinked")]);
@@ -116,15 +122,18 @@ describe("cross-domain presence pusher", () => {
 			let answer: { ok: boolean } = { ok: false };
 			let first = true;
 			let resolveFirst: ((value: { ok: boolean }) => void) | undefined;
-			const pusher = createCoalescedPresencePusher(async (_domainId, sessions) => {
-				if (first) {
-					first = false;
-					return new Promise((resolve) => (resolveFirst = resolve));
-				}
-				if (!answer.ok) return answer;
-				remote = sessions;
-				return answer;
-			});
+			const pusher = createCoalescedPresencePusher(
+				async (_domainId, sessions) => {
+					if (first) {
+						first = false;
+						return new Promise((resolve) => (resolveFirst = resolve));
+					}
+					if (!answer.ok) return answer;
+					remote = sessions;
+					return answer;
+				},
+				{ ambient: processAmbient() },
+			);
 
 			pusher.push("friend", [landed("story")]);
 			pusher.push("friend", [landed("story"), landed("app")]);
@@ -142,11 +151,14 @@ describe("cross-domain presence pusher", () => {
 			expect(remote[0]?.team).toBe("retry");
 
 			let resolveStale: ((value: { ok: boolean }) => void) | undefined;
-			const canceled = createCoalescedPresencePusher(async (_domainId, sessions) => {
-				if (sessions[0]?.team === "stale") return new Promise((resolve) => (resolveStale = resolve));
-				remote = sessions;
-				return { ok: true };
-			});
+			const canceled = createCoalescedPresencePusher(
+				async (_domainId, sessions) => {
+					if (sessions[0]?.team === "stale") return new Promise((resolve) => (resolveStale = resolve));
+					remote = sessions;
+					return { ok: true };
+				},
+				{ ambient: processAmbient() },
+			);
 			remote = [];
 			canceled.push("friend", [landed("stale")]);
 			canceled.cancel("friend");
@@ -162,8 +174,8 @@ describe("cross-domain presence pusher", () => {
 
 describe("cross-domain presence reconciliation", () => {
 	it("keeps state on an unavailable pull, suppresses overlap, and permits a fresh pull after cancel", async () => {
-		const registry = new PlaneRegistry();
-		const consumer = new CrossDomainPresenceConsumer(registry, undefined, 0);
+		const registry = new PlaneRegistry(processAmbient());
+		const consumer = new CrossDomainPresenceConsumer(registry, undefined, processAmbient(), 0);
 		consumer.land("friend", [landed("prior")]);
 		let resolvePull: ((value: CrossDomainPresenceSession[] | null) => void) | undefined;
 		let source = ["friend"];
@@ -197,7 +209,7 @@ describe("cross-domain presence reconciliation", () => {
 
 describe("cross-domain presence source", () => {
 	it("pushes cold content, suppresses unchanged content, and starts fresh after teardown", () => {
-		const registry = new PlaneRegistry();
+		const registry = new PlaneRegistry(processAmbient());
 		let current = [landed("story")];
 		let linked = ["friend"];
 		let cached: CrossDomainPresenceSession[] | undefined;

@@ -3,6 +3,7 @@ import { decideAcceptance } from "../gateway/codexAgentReducers.js";
 import { CodexAgentService } from "../gateway/codexAgentService.js";
 import { createSessionAuthority } from "../gateway/sessionAuthority.js";
 import { resolveLiveIncarnation, type TeamRegistry } from "../gateway/websocket.js";
+import { processAmbient } from "../shared/ambient.js";
 import {
 	CODEX_ACTIVITY_MAX_BYTES,
 	CODEX_ERROR_MAX_BYTES,
@@ -83,6 +84,7 @@ function requestedAgent(agentId = AGENT_ID, operationId = OPERATION_ID): CodexPe
 function ownedService() {
 	let writer: CodexCatalogWriter | undefined;
 	const sessionStore = new SessionStore({
+		ambient: processAmbient(),
 		codexCatalogPersistence: { persistChecked: () => {}, receiveWriter: (value) => (writer = value) },
 	});
 	const auth = createSessionAuthority({

@@ -1,5 +1,6 @@
 // Stage 12a: the Router frames this Gateway answers, and the console dispatcher behind the value op.
 
+import type { Ambient } from "../../shared/ambient.js";
 import { opPayloadAadKind } from "../../shared/content-envelope.js";
 import { ValueOpFrameSchema } from "../../shared/router-protocol.js";
 import { ConsoleOpSchema } from "../../shared/schemasConsoleOp.js";
@@ -20,6 +21,7 @@ import type { FederationContext } from "./federationContext.js";
 export interface RouterFramesStageDeps {
 	localGatewayId: string;
 	wakeTimeoutMs: number;
+	ambient: Ambient;
 	context: FederationContext;
 	stores: StoresStage;
 	sessions: SessionsStage;
@@ -37,7 +39,7 @@ export interface RouterFramesStage {
 }
 
 export function composeRouterFrames(deps: RouterFramesStageDeps): RouterFramesStage {
-	const { context, stores, sessions, host, localGatewayId } = deps;
+	const { context, stores, sessions, host, localGatewayId, ambient } = deps;
 
 	function build(slice: FederationSlice, presence: RouterPresenceBuild): RouterFramesBuild {
 		const routes = deps.routes();
@@ -52,6 +54,7 @@ export function composeRouterFrames(deps: RouterFramesStageDeps): RouterFramesSt
 			routes,
 			localGatewayId,
 			localDomainId,
+			ambient,
 			isTrustedCatalogProject: sessions.isTrustedCatalogProject,
 			dropSessionResume: (team, disposition) => {
 				void context.slice()?.boardClient.sessionEnded(team, disposition);

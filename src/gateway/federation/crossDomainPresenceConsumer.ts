@@ -1,6 +1,7 @@
 // Cross-Domain presence, consumer side: this Gateway storing what a linked friend pushed to it.
 
 import { z } from "zod";
+import type { Ambient, TimerHandle } from "../../shared/ambient.js";
 import { type CrossDomainPresenceSession, CrossDomainPresenceSessionSchema } from "../../shared/federation-protocol.js";
 import type { PlanePersistedState, PlaneRegistry } from "../../shared/plane-registry.js";
 import { stableHash } from "../../shared/plane-registry.js";
@@ -85,21 +86,21 @@ export class CrossDomainPresenceConsumer {
 	private readonly restoredPlanes: Record<string, PlanePersistedState> | undefined;
 	private readonly registered = new Set<string>();
 	private readonly lastLandedAt = new Map<string, number>();
-	private readonly pendingLand = new Map<
-		string,
-		{ sessions: CrossDomainPresenceSession[]; timer: ReturnType<typeof setTimeout> }
-	>();
+	private readonly pendingLand = new Map<string, { sessions: CrossDomainPresenceSession[]; timer: TimerHandle }>();
 	private readonly minLandIntervalMs: number;
+	private readonly ambient: Pick<Ambient, "now" | "setTimer" | "clearTimer">;
 
 	/** `minLandIntervalMs` defaults to the production floor (`MIN_LAND_INTERVAL_MS`) - overridable
 	 * (e.g. to 0) for a test that needs to land the same Domain repeatedly without waiting. */
 	constructor(
 		planeRegistry: PlaneRegistry,
 		restoredPlanes: Record<string, PlanePersistedState> | undefined,
+		ambient: Pick<Ambient, "now" | "setTimer" | "clearTimer">,
 		minLandIntervalMs = MIN_LAND_INTERVAL_MS,
 	) {
 		this.planeRegistry = planeRegistry;
 		this.restoredPlanes = restoredPlanes;
+		this.ambient = ambient;
 		this.minLandIntervalMs = minLandIntervalMs;
 	}
 
@@ -182,7 +183,7 @@ export class CrossDomainPresenceConsumer {
 	 * `CoalescedPusher`) and applied once the window actually elapses - a legitimate fast burst of
 	 * real changes is delayed, never silently and permanently lost. */
 	land(srcDomainId: string, sessions: CrossDomainPresenceSession[]): void {
-		const now = Date.now();
+		const now = this.ambient.now();
 		const last = this.lastLandedAt.get(srcDomainId);
 		if (last !== undefined && now - last < this.minLandIntervalMs) {
 			this.schedulePendingLand(srcDomainId, sessions, this.minLandIntervalMs - (now - last));
@@ -200,10 +201,10 @@ export class CrossDomainPresenceConsumer {
 			existing.sessions = sessions;
 			return;
 		}
-		const timer = setTimeout(() => {
+		const timer = this.ambient.setTimer(() => {
 			const pending = this.pendingLand.get(srcDomainId);
 			this.pendingLand.delete(srcDomainId);
-			if (pending) this.applyLand(srcDomainId, pending.sessions, Date.now());
+			if (pending) this.applyLand(srcDomainId, pending.sessions, this.ambient.now());
 		}, delayMs);
 		this.pendingLand.set(srcDomainId, { sessions, timer });
 	}
@@ -232,7 +233,7 @@ export class CrossDomainPresenceConsumer {
 		this.lastLandedAt.delete(domainId);
 		const pending = this.pendingLand.get(domainId);
 		if (pending) {
-			clearTimeout(pending.timer);
+			this.ambient.clearTimer(pending.timer);
 			this.pendingLand.delete(domainId);
 		}
 		this.state.delete(domainId);

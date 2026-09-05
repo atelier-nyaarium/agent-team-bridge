@@ -1,4 +1,5 @@
 import type { DomainSnapshot } from "../shared/admission.js";
+import type { Ambient } from "../shared/ambient.js";
 import { FEDERATION_VALUE_PROTOCOL_VERSION } from "../shared/router-protocol.js";
 import { type InboxRow, parseInboxAddress } from "../shared/schemasInbox.js";
 import { GATEWAY_ERROR_STALE_INCARNATION } from "../shared/wire-vocabulary.js";
@@ -27,7 +28,7 @@ export interface GatewayBridgeParams {
 	inbox?: InboxService;
 	blobCache?: RouterBlobCache;
 	referenceHeld?: ReferenceHeldStore;
-	now?: () => number;
+	ambient: Pick<Ambient, "now" | "setTimer" | "clearTimer">;
 }
 
 /** Authenticated frame identity, not payload identity. */
@@ -79,6 +80,7 @@ export class GatewayBridge implements ToolProvider {
 	private readonly adminDomainIdGetter: () => string | null;
 	private readonly reachGetter: GatewayBridgeParams["reach"];
 	private readonly now: () => number;
+	private readonly ambient: Pick<Ambient, "now" | "setTimer" | "clearTimer">;
 
 	public constructor({
 		port,
@@ -91,9 +93,10 @@ export class GatewayBridge implements ToolProvider {
 		inbox,
 		blobCache,
 		referenceHeld,
-		now,
+		ambient,
 	}: GatewayBridgeParams) {
-		this.now = now ?? Date.now;
+		this.ambient = ambient;
+		this.now = () => ambient.now();
 		this.port = port;
 		this.authToken = authToken;
 		this.getDomain = getDomain;
@@ -105,7 +108,7 @@ export class GatewayBridge implements ToolProvider {
 		this.blobCache = blobCache ?? null;
 		this.referenceHeld = referenceHeld ?? null;
 		this.blobFetch = blobCache
-			? new BlobFetchRoute(blobCache, (domainId, gatewayId) => {
+			? new BlobFetchRoute(blobCache, ambient, (domainId, gatewayId) => {
 					const connId = this.gatewayConnections.get(domainId)?.get(gatewayId);
 					const ws = connId ? this.transport?.getConnection(connId) : null;
 					const incarnation = connId ? this.connGateways.get(connId)?.incarnation : null;
@@ -116,7 +119,7 @@ export class GatewayBridge implements ToolProvider {
 			: null;
 		this.relayRouter = new RelayRouter({
 			hasLinkEdge: this.hasLinkEdge,
-			now: this.now,
+			ambient,
 			gatewayConnections: this.gatewayConnections,
 			getConnection: (connId) => this.transport?.getConnection(connId) ?? null,
 			registrationOf: (connId) => {
@@ -130,7 +133,7 @@ export class GatewayBridge implements ToolProvider {
 			adminDomainId: this.adminDomainIdGetter,
 			reach: this.reachGetter,
 			inbox: this.inbox,
-			now: this.now,
+			ambient,
 			migrationLease: (domainId, gatewayId) => this.migrationLease?.(domainId, gatewayId),
 			migrationFenced: (domainId, gatewayId) => this.migrationFenced?.(domainId, gatewayId) ?? false,
 			setConnection: (domainId, gatewayId, connId) => this.domainMap(domainId).set(gatewayId, connId),
@@ -145,6 +148,7 @@ export class GatewayBridge implements ToolProvider {
 		});
 		this.inboxFrames = new InboxFrames({
 			inbox: this.inbox,
+			ambient,
 			hasLinkEdge: this.hasLinkEdge,
 			getDomain: this.getDomain,
 			blobCache: this.blobCache,

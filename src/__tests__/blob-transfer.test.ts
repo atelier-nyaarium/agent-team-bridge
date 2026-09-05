@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { BlobFetchRoute } from "../federation-server/inbox/blobFetchRoute.js";
+import { processAmbient } from "../shared/ambient.js";
 
 describe("blob transfer", () => {
 	it("forwards a fetch with the destination incarnation", async () => {
 		const frames: Record<string, unknown>[] = [];
 		const cache = { stat: () => ({ kind: "miss" as const }) };
-		const route = new BlobFetchRoute(cache as never, () => ({
+		const route = new BlobFetchRoute(cache as never, processAmbient(), () => ({
 			connId: "origin",
 			incarnation: 3,
 			send: (frame) => frames.push(frame),

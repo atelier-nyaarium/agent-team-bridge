@@ -1,3 +1,4 @@
+import type { Ambient } from "../shared/ambient.js";
 import type { FederatedOp } from "../shared/federation-protocol.js";
 import { BLOB_CHUNK_BYTES, MAX_BLOB_BYTES } from "../shared/router-protocol.js";
 import { openSealedBlobRange } from "../shared/sealed-blob.js";
@@ -17,6 +18,7 @@ export interface BlobFetcherDeps {
 	domainId?: string;
 	ownerSignPub?: () => string | null;
 	contentKeys?: { keyFor(epoch: number): Buffer | null };
+	ambient: Pick<Ambient, "newId">;
 }
 
 export function createBlobFetcher({
@@ -29,6 +31,7 @@ export function createBlobFetcher({
 	domainId,
 	ownerSignPub,
 	contentKeys,
+	ambient,
 }: BlobFetcherDeps) {
 	/** Fetch and cache a blob. */
 	function fetchBlobFromGateway(blobId: string, fromGateway: string): Promise<BlobFetchOutcome> {
@@ -71,7 +74,7 @@ export function createBlobFetcher({
 			if (offset > MAX_BLOB_BYTES) return "unreachable";
 			const relay = routerFetch
 				? await routerFetch({
-						opId: crypto.randomUUID(),
+						opId: ambient.newId(),
 						blobId,
 						range: { offset, length: BLOB_CHUNK_BYTES },
 						origin: { domainId: fromDomain ?? domainId, gatewayId: fromGateway },

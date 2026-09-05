@@ -12,6 +12,7 @@ import { OwnerOpIntake } from "../federation-server/inbox/ownerOpIntake.js";
 import { OwnerStoreRegistry } from "../federation-server/inbox/ownerStoreRegistry.js";
 import { DomainQuota } from "../federation-server/owner/domainQuota.js";
 import { signAdmission, signRevocation } from "../shared/admission.js";
+import { processAmbient } from "../shared/ambient.js";
 import { generateIdentity } from "../shared/crypto.js";
 import { signOwnerOp, signRowEnvelope } from "../shared/schemasInbox.js";
 
@@ -48,7 +49,7 @@ function setup(overrides: Partial<ConsoleSocketsDeps> = {}) {
 		ownerOf: () => owner.sign.pub,
 		quotaFor: () =>
 			new DomainQuota({ dir: dataDir, limitBytes: 100_000_000, statfs: () => ({ available: 100_000_000 }) }),
-		now: () => now,
+		ambient: { now: () => now },
 	});
 	const inbox = new InboxService(registry, { signPub: router.sign.pub, signPriv: router.sign.priv });
 	const admission = signAdmission(
@@ -68,7 +69,7 @@ function setup(overrides: Partial<ConsoleSocketsDeps> = {}) {
 		inbox,
 		getDomain: () => ({ ownerSignPub: owner.sign.pub, admissions: admitted, revocations }),
 		push: () => true,
-		now: () => now,
+		ambient: { now: () => now },
 	});
 	intake.register("hello", (op) => ({
 		hello: { domainId: op.domainId, signerSignPub: op.signerSignPub },
@@ -81,7 +82,8 @@ function setup(overrides: Partial<ConsoleSocketsDeps> = {}) {
 		advanceCursor: inbox.advanceCursor.bind(inbox),
 		ownerFloor: inbox.ownerFloor.bind(inbox),
 		planeVersions: () => ({ board: 4 }),
-		now: () => now,
+		ambient: processAmbient(),
+		seenAt: () => now,
 		admittedConsoleSigners: () => admitted.map((item) => item.admission.signPub),
 		...overrides,
 	});
@@ -172,6 +174,8 @@ describe("console sockets", () => {
 			readOwnerKeyRows: () => [],
 			advanceCursor: () => ({ outcome: "ok" as const }),
 			ownerFloor: () => 1,
+			ambient: processAmbient(),
+			seenAt: () => Date.now(),
 		});
 		hub.open(client);
 		await hub.message(client, JSON.stringify({ type: "hello", ownerOp: hello(fixture) }));

@@ -4,6 +4,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import type { Ambient } from "../shared/ambient.js";
 import type { Identity } from "../shared/crypto.js";
 import { DOMAIN_ID_FILE, sanitizeDomainId } from "../shared/domain-id.js";
 import { refuseFixtureIdentity } from "../shared/fixture-identity.js";
@@ -100,9 +101,9 @@ export class GatewayBootstrap {
 	static resolve(
 		paths: { federationDir: string },
 		env: { enrollNonce: string | null; allowFixtureIdentity: boolean; domainIdEnv?: string },
-		io: { identity?: () => Identity; contentKeys?: ContentKeyStore } = {},
+		io: { ambient: Ambient; identity?: () => Identity; contentKeys?: ContentKeyStore },
 	): GatewayBoot {
-		const allowlist = new Allowlist(paths.federationDir);
+		const allowlist = new Allowlist(paths.federationDir, io.ambient);
 		const transport = loadRouterTransport(paths.federationDir);
 		const domainId = resolveDomainId(paths.federationDir, allowlist, env.domainIdEnv);
 		const decision = decideBootPhase({
@@ -119,7 +120,8 @@ export class GatewayBootstrap {
 		}
 		const identity = io.identity?.() ?? loadOrCreateIdentity(paths.federationDir);
 		if (!env.allowFixtureIdentity) refuseFixtureIdentity(identity.sign.pub, "gateway");
-		const contentKeys = io.contentKeys ?? new ContentKeyStore(paths.federationDir, () => identity.box.priv);
+		const contentKeys =
+			io.contentKeys ?? new ContentKeyStore(paths.federationDir, () => identity.box.priv, io.ambient);
 		return {
 			kind: "active",
 			boot: new GatewayBootstrap(

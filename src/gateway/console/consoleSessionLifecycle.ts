@@ -1,3 +1,4 @@
+import type { Ambient, TimerHandle } from "../../shared/ambient.js";
 import type { BoardDisposition } from "../../shared/board-authority.js";
 import type { ConsoleOp } from "../../shared/console-protocol.js";
 import { type HostOp, type HostOpResult, isSpawnWorkdirPath } from "../../shared/host-op.js";
@@ -14,6 +15,7 @@ import { CreateSessionAmbiguousError } from "./consoleTypes.js";
 export interface SessionLifecycleDeps {
 	targets: ConsoleTargets;
 	createSessionBoundMs: number;
+	ambient: Pick<Ambient, "setTimer" | "clearTimer">;
 	relayToHost?: (op: HostOp) => Promise<HostOpResult>;
 	tryWakeTeam?: (team: string) => Promise<WakeResult>;
 	isWakeInFlight?: (team: string) => boolean;
@@ -40,6 +42,7 @@ export interface SessionLifecycleDeps {
 export function createSessionLifecycleHandlers({
 	targets,
 	createSessionBoundMs,
+	ambient,
 	relayToHost,
 	tryWakeTeam,
 	isWakeInFlight,
@@ -135,12 +138,12 @@ export function createSessionLifecycleHandlers({
 				}
 			});
 
-			let boundTimer: ReturnType<typeof setTimeout> | undefined;
+			let boundTimer: TimerHandle | undefined;
 			const bound = new Promise<null>((resolve) => {
-				boundTimer = setTimeout(() => resolve(null), createSessionBoundMs);
+				boundTimer = ambient.setTimer(() => resolve(null), createSessionBoundMs);
 			});
 			const winner = await Promise.race([launch, bound]);
-			clearTimeout(boundTimer);
+			if (boundTimer) ambient.clearTimer(boundTimer);
 
 			if (winner === null) {
 				void launch
@@ -195,13 +198,13 @@ export function createSessionLifecycleHandlers({
 			return current === adopted && current.confirmedAt === undefined;
 		};
 		// Bounded like create_session: a slow launch answers pending and finishes on its own.
-		let boundTimer: ReturnType<typeof setTimeout> | undefined;
+		let boundTimer: TimerHandle | undefined;
 		const bound = new Promise<null>((resolve) => {
-			boundTimer = setTimeout(() => resolve(null), createSessionBoundMs);
+			boundTimer = ambient.setTimer(() => resolve(null), createSessionBoundMs);
 		});
 		const wakeCall = tryWakeTeam(name);
 		const winner = await Promise.race([wakeCall, bound]);
-		clearTimeout(boundTimer);
+		if (boundTimer) ambient.clearTimer(boundTimer);
 		if (winner === null) {
 			void wakeCall
 				.then((r) => {

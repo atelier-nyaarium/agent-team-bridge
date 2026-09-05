@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { WakeCoordinator } from "../gateway/wake.js";
 import { WakeService, type WakeServiceDeps } from "../gateway/wakeService.js";
 import type { TeamRegistry, WsData } from "../gateway/websocket.js";
+import { processAmbient } from "../shared/ambient.js";
 import { SessionStore } from "../shared/session-store.js";
 
 /** The wake orchestration's own contract: join semantics, the fast refusals, mint and rollback. */
@@ -16,9 +17,9 @@ describe("WakeService", () => {
 	}
 
 	function setup(over: Partial<WakeServiceDeps> = {}) {
-		const sessionStore = new SessionStore();
+		const sessionStore = new SessionStore({ ambient: processAmbient() });
 		const registry: TeamRegistry = new Map();
-		const wakeCoordinator = new WakeCoordinator();
+		const wakeCoordinator = new WakeCoordinator(processAmbient());
 		const sent: { team: string; projectPath?: string }[] = [];
 		const hostWs = {
 			readyState: 1,

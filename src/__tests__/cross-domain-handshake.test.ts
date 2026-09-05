@@ -10,9 +10,11 @@ import {
 	createCrossDomainHandshakePump,
 } from "../gateway/federation/crossDomainHandshake.js";
 import { CrossDomainPeers } from "../gateway/federation/crossDomainPeers.js";
+import { processAmbient } from "../shared/ambient.js";
 import { type CrossDomainParty, crossDomainCommitment } from "../shared/cross-domain-sas.js";
 import { generateIdentity, type Identity } from "../shared/crypto.js";
 import { signXDomainLink } from "../shared/federation-protocol.js";
+import { fakeAmbient } from "../testing/fakeAmbient.js";
 import { type DomainPeer, type FederationHarness, startFederationHarness } from "../testing/federationHarness.js";
 
 const dirs: string[] = [];
@@ -97,7 +99,7 @@ describe("cross-Domain handshake coordinator", () => {
 			peers: new CrossDomainPeers(peersPath()),
 			ttlMs: 100,
 			maxAttempts: 2,
-			now: () => now,
+			ambient: fakeAmbient({ now: () => now }),
 		});
 		const token = coordinator.listen().listeningToken;
 		const commit = (pin: string) => ({
@@ -130,6 +132,7 @@ describe("cross-Domain handshake coordinator", () => {
 		const receiverCoordinator = new CrossDomainHandshakeCoordinator({
 			self: self(receiver),
 			peers: new CrossDomainPeers(peersPath()),
+			ambient: processAmbient(),
 		});
 		const token = receiverCoordinator.listen().listeningToken;
 		expect(receiverCoordinator.cancel({ listeningToken: token })).toBe(true);
@@ -144,6 +147,7 @@ describe("cross-Domain handshake coordinator", () => {
 		const requesterCoordinator = new CrossDomainHandshakeCoordinator({
 			self: self(requester),
 			peers: new CrossDomainPeers(peersPath()),
+			ambient: processAmbient(),
 			route: {
 				sendCommit: async (_, request) => receiverCoordinator.handleIncomingCommit(request),
 				sendReveal: async (_, request) => receiverCoordinator.handleIncomingReveal(request),
@@ -166,6 +170,7 @@ describe("cross-Domain handshake coordinator", () => {
 		const coordinator = new CrossDomainHandshakeCoordinator({
 			self: self(value),
 			peers: new CrossDomainPeers(peersPath()),
+			ambient: processAmbient(),
 			route: {
 				sendCommit: async () => ({ receiverCommitment: "x" }),
 				sendReveal: async () => {
@@ -185,6 +190,7 @@ describe("cross-Domain handshake coordinator", () => {
 		const receiverCoordinator = new CrossDomainHandshakeCoordinator({
 			self: self(receiver),
 			peers: new CrossDomainPeers(peersPath()),
+			ambient: processAmbient(),
 		});
 		const token = receiverCoordinator.listen().listeningToken;
 		const route: CrossDomainRouter = {
@@ -194,6 +200,7 @@ describe("cross-Domain handshake coordinator", () => {
 		const pending = new CrossDomainHandshakeCoordinator({
 			self: self(value),
 			peers: new CrossDomainPeers(peersPath()),
+			ambient: processAmbient(),
 			route,
 		});
 		const first = pending.request({ ...args, listeningToken: token });
@@ -208,6 +215,7 @@ describe("cross-Domain handshake coordinator", () => {
 		const coordinator = new CrossDomainHandshakeCoordinator({
 			self: self(receiver),
 			peers: new CrossDomainPeers(peersPath()),
+			ambient: processAmbient(),
 		});
 		const { token, salt } = rounds(coordinator, requester);
 		expect(() =>
@@ -227,6 +235,7 @@ describe("cross-Domain handshake coordinator", () => {
 		const receiverCoordinator = new CrossDomainHandshakeCoordinator({
 			self: self(receiver),
 			peers: new CrossDomainPeers(peersPath()),
+			ambient: processAmbient(),
 		});
 		const token = receiverCoordinator.listen().listeningToken;
 		const salt = "cmVjdmVyLXNhbHQ";
@@ -241,6 +250,7 @@ describe("cross-Domain handshake coordinator", () => {
 		const coordinator = new CrossDomainHandshakeCoordinator({
 			self: self(requester),
 			peers: new CrossDomainPeers(peersPath()),
+			ambient: processAmbient(),
 			route,
 		});
 		await expect(
@@ -256,6 +266,7 @@ describe("cross-Domain handshake coordinator", () => {
 		const failing = new CrossDomainHandshakeCoordinator({
 			self: self(requester),
 			peers: new CrossDomainPeers(peersPath()),
+			ambient: processAmbient(),
 			route: {
 				sendCommit: async () => {
 					throw new Error("router refused");
@@ -278,6 +289,7 @@ describe("cross-Domain handshake coordinator", () => {
 		const transportFailure = new CrossDomainHandshakeCoordinator({
 			self: self(requester),
 			peers: new CrossDomainPeers(peersPath()),
+			ambient: processAmbient(),
 			route: {
 				sendCommit: async () => ({ receiverCommitment: crossDomainCommitment(party(receiver), salt) }),
 				sendReveal: async () => {
@@ -300,7 +312,11 @@ describe("cross-Domain handshake coordinator", () => {
 		const receiver = domain("alice", "alice-gw");
 		const requester = domain("bob", "bob-gw");
 		const peers = new CrossDomainPeers(peersPath());
-		const coordinator = new CrossDomainHandshakeCoordinator({ self: self(receiver), peers });
+		const coordinator = new CrossDomainHandshakeCoordinator({
+			self: self(receiver),
+			peers,
+			ambient: processAmbient(),
+		});
 		const { token, salt } = rounds(coordinator, requester);
 		coordinator.handleIncomingReveal({
 			listeningToken: token,
@@ -313,7 +329,11 @@ describe("cross-Domain handshake coordinator", () => {
 		).toThrow();
 
 		const secondPeers = new CrossDomainPeers(peersPath());
-		const second = new CrossDomainHandshakeCoordinator({ self: self(receiver), peers: secondPeers });
+		const second = new CrossDomainHandshakeCoordinator({
+			self: self(receiver),
+			peers: secondPeers,
+			ambient: processAmbient(),
+		});
 		const secondRound = rounds(second, requester);
 		second.handleIncomingReveal({
 			listeningToken: secondRound.token,

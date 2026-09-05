@@ -5,6 +5,7 @@ import type { BlobFetchOutcome } from "../blobOps.js";
 
 export interface BlobRoutesDeps {
 	config: GatewayConfig;
+	ambient: Pick<import("../../shared/ambient.js").Ambient, "newId">;
 	/** This Gateway's byte store, for pulling in a blob a peer Gateway holds. Absent in tests that
 	 * never move bytes, which makes a cross-Gateway fetch a clean refusal rather than a crash. */
 	blobStore?: import("../../shared/blob-store.js").BlobStore;
@@ -24,6 +25,7 @@ export interface BlobRoutesDeps {
 
 export function createBlobRoutes({
 	config,
+	ambient,
 	blobStore,
 	crossDomainPeers,
 	contentKeyStore,
@@ -34,6 +36,7 @@ export function createBlobRoutes({
 }: BlobRoutesDeps) {
 	return createBlobFetcher({
 		blobStore,
+		ambient,
 		crossDomainPeers,
 		localGatewayId: config.localGatewayId,
 		relayToGateway,

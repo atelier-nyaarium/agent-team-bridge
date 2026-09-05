@@ -1,3 +1,4 @@
+import type { Ambient, TimerHandle } from "../../shared/ambient.js";
 import type { PresenceRow } from "../../shared/presence-identity.js";
 import type { GatewaySpawnPoints } from "../../shared/types.js";
 import { applyAnswer, nextFrame, type PresenceAnswer, type Sync } from "./presenceProtocol.js";
@@ -7,7 +8,7 @@ export interface PresenceReporterDeps {
 	spawnPoints: () => GatewaySpawnPoints;
 	send: (action: string, params: Record<string, unknown>) => Promise<PresenceAnswer>;
 	incarnation: () => number | null;
-	now?: () => number;
+	ambient: Pick<Ambient, "now" | "setTimer" | "clearTimer">;
 	debounceMs?: number;
 	retryMs?: number;
 }
@@ -15,11 +16,11 @@ export interface PresenceReporterDeps {
 const retryMsOf = (deps: PresenceReporterDeps): number => deps.retryMs ?? 30_000;
 
 export function createPresenceReporter(deps: PresenceReporterDeps) {
-	const now = deps.now ?? Date.now;
+	const now = () => deps.ambient.now();
 	let sync: Sync = { at: "needsBaseline" };
 	let dirty = false;
 	let deadline: number | null = null;
-	let timer: ReturnType<typeof setTimeout> | null = null;
+	let timer: TimerHandle | null = null;
 	let pumping = false;
 	/** The spawn points the last landed baseline put on the wire. */
 	let sentSpawns: string | null = null;
@@ -32,15 +33,14 @@ export function createPresenceReporter(deps: PresenceReporterDeps) {
 	};
 
 	const arm = (): void => {
-		if (timer) clearTimeout(timer);
+		if (timer) deps.ambient.clearTimer(timer);
 		timer = null;
 		if (deadline === null) return;
 		const delay = Math.max(0, deadline - now());
-		timer = setTimeout(() => {
+		timer = deps.ambient.setTimer(() => {
 			timer = null;
 			void pump();
 		}, delay);
-		timer.unref?.();
 	};
 
 	const setDeadline = (at: number | null): void => {
@@ -138,7 +138,7 @@ export function createPresenceReporter(deps: PresenceReporterDeps) {
 	};
 
 	const stop = (): void => {
-		if (timer) clearTimeout(timer);
+		if (timer) deps.ambient.clearTimer(timer);
 		timer = null;
 		deadline = null;
 		wakeWaiters();

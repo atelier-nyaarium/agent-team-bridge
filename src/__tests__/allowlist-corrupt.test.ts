@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { ALLOWLIST_FILE, Allowlist, AllowlistCorruptError } from "../gateway/federation/allowlist.js";
+import { processAmbient } from "../shared/ambient.js";
 
 describe("corrupt allowlist", () => {
 	it("moves the original aside and refuses construction", () => {
@@ -13,7 +14,7 @@ describe("corrupt allowlist", () => {
 
 		let error: unknown;
 		try {
-			new Allowlist(dir);
+			new Allowlist(dir, processAmbient());
 		} catch (caught) {
 			error = caught;
 		}

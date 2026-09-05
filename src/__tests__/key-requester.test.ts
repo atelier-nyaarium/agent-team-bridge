@@ -1,19 +1,20 @@
+import { randomBytes } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { createKeyRequester } from "../gateway/router/keyRequester.js";
+import { processAmbient, type TimerHandle } from "../shared/ambient.js";
 import { generateIdentity } from "../shared/crypto.js";
 
 function clock() {
 	let current = 0;
 	let nextId = 0;
-	const timers = new Map<number, { due: number; run: () => void; handle: { unref: ReturnType<typeof vi.fn> } }>();
-	const setTimeout = (run: () => void, delay: number) => {
-		const handle = { unref: vi.fn() };
-		const timerHandle = handle as unknown as ReturnType<typeof globalThis.setTimeout>;
+	const timers = new Map<number, { due: number; run: () => void; handle: TimerHandle }>();
+	const setTimer = (run: () => void, delay: number) => {
+		const handle = {} as TimerHandle;
 		const id = ++nextId;
 		timers.set(id, { due: current + delay, run, handle });
-		return timerHandle;
+		return handle;
 	};
-	const clearTimeout = (handle: unknown) => {
+	const clearTimer = (handle: TimerHandle) => {
 		for (const [id, timer] of timers) if (timer.handle === handle) timers.delete(id);
 	};
 	const advance = async (milliseconds: number) => {
@@ -27,7 +28,8 @@ function clock() {
 			await Promise.resolve();
 		}
 	};
-	return { now: () => current, setTimeout, clearTimeout, advance, timers };
+	const ambient = { now: () => current, randomBytes, setTimer, clearTimer };
+	return { ambient, now: () => current, advance, timers };
 }
 
 function requester(options: { send?: (action: string, params: Record<string, unknown>) => Promise<unknown> } = {}) {
@@ -45,9 +47,7 @@ function requester(options: { send?: (action: string, params: Record<string, unk
 			return options.send?.(action, params);
 		},
 		onError,
-		now: time.now,
-		setTimeout: time.setTimeout,
-		clearTimeout: time.clearTimeout,
+		ambient: time.ambient,
 	});
 	return { instance, sends, onError, time };
 }
@@ -117,13 +117,20 @@ describe("key requester", () => {
 		expect(test.sends).toHaveLength(2);
 	});
 
-	it("unrefs scheduled timers", async () => {
+	it("drops a scheduled timer once its epoch installs", async () => {
 		const test = requester();
 		test.instance.request(1);
-		const timer = [...test.time.timers.values()][0];
+		expect(test.time.timers.size).toBe(1);
 
-		expect(timer.handle.unref).toHaveBeenCalledTimes(1);
 		test.instance.installed(1);
 		expect(test.time.timers.size).toBe(0);
+	});
+
+	// The unref moved to the ambient, which is now the only timer owner.
+	it("the process ambient hands back an unref'd timer", () => {
+		const handle = processAmbient().setTimer(() => undefined, 60_000) as unknown as {
+			hasRef?: () => boolean;
+		};
+		expect(handle.hasRef?.()).toBe(false);
 	});
 });

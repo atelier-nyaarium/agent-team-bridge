@@ -64,14 +64,14 @@ function make() {
 		ownerOf: (id) => (id === domainId ? owner.sign.pub : null),
 		quotaFor: () =>
 			new DomainQuota({ dir: dataDir, limitBytes: 100_000_000, statfs: () => ({ available: 100_000_000 }) }),
-		now: () => now,
+		ambient: { now: () => now },
 	});
 	const inbox = new InboxService(registry, { signPub: router.sign.pub, signPriv: router.sign.priv });
 	const intake = new OwnerOpIntake({
 		inbox,
 		getDomain: (id) => (id === domainId ? domain : null),
 		push: () => false,
-		now: () => now,
+		ambient: { now: () => now },
 	});
 	const ownerOps = new Map<string, ErasedOwnerOpHandler>();
 	const frames = new Map<string, (reg: GatewayRegistration, value: Record<string, unknown>) => unknown>();

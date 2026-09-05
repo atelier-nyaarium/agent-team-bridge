@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import type { Ambient } from "../../shared/ambient.js";
 import { canonicalJson, sha256Hex } from "../../shared/canonical-json.js";
 import type { SealedEnvelope } from "../../shared/crypto.js";
 import type { FederatedOp } from "../../shared/federation-protocol.js";
@@ -20,20 +21,23 @@ export interface RelayDeps {
 	crossDomainPeers?: import("../federation/crossDomainPeers.js").CrossDomainPeers | null;
 	// Whether a gateway id resolves to a LOCAL (single-owner allowlist) peer. Mirrors the.
 	resolvesLocalGateway?: ((gatewayId: string) => boolean) | null;
+	ambient: Pick<Ambient, "newId" | "setTimer">;
 }
 
 export type Relay = ReturnType<typeof createRelay>;
 
-export function createRelay({
-	config,
-	localDomain,
-	producerSignPriv,
-	routerClient,
-	sealer,
-	blobUploader,
-	crossDomainPeers,
-	resolvesLocalGateway,
-}: RelayDeps) {
+export function createRelay(deps: RelayDeps) {
+	const {
+		config,
+		localDomain,
+		producerSignPriv,
+		routerClient,
+		sealer,
+		blobUploader,
+		crossDomainPeers,
+		resolvesLocalGateway,
+		ambient,
+	} = deps;
 	const { localGatewayId, localDomainId } = config;
 
 	/** The resolved target Domain id for a cross-Gateway send, or null for a local /
@@ -92,7 +96,7 @@ export function createRelay({
 				opKey: {
 					conversationId: sha256Hex(op.kind === "send" ? op.returnRoute.srcConversationId : op.session_id),
 					// The caller's id when it sent one: the ledger dedupes on this, so a per-attempt mint.
-					opId: producerOpId ?? crypto.randomUUID(),
+					opId: producerOpId ?? ambient.newId(),
 				},
 				epoch: "peer" as const,
 				kind: op.kind === "send" ? ("message" as const) : ("reply" as const),
@@ -115,7 +119,7 @@ export function createRelay({
 		}
 		// The Domain the target actually resolved to (authoritative over the caller's hint),.
 		const resolvedDstDomain = typeof target === "string" ? undefined : target.domainId;
-		const relayId = crypto.randomUUID();
+		const relayId = ambient.newId();
 		const call = await routerClient.callTool("gateway_relay", {
 			relayId,
 			srcGateway: localGatewayId,
@@ -149,7 +153,7 @@ export function createRelay({
 	): Promise<{ ok: boolean; error?: string }> {
 		const maxAttempts = 5;
 		// One id for the whole sequence, so the retries are one ledger operation.
-		const opId = producerOpId ?? crypto.randomUUID();
+		const opId = producerOpId ?? ambient.newId();
 		let attempt = 0;
 		return new Promise((resolveOutcome) => {
 			const tryOnce = async (): Promise<void> => {
@@ -171,7 +175,7 @@ export function createRelay({
 					resolveOutcome({ ok: false, error });
 					return;
 				}
-				setTimeout(() => void tryOnce(), Math.min(2000 * 2 ** (attempt - 1), 30_000));
+				ambient.setTimer(() => void tryOnce(), Math.min(2000 * 2 ** (attempt - 1), 30_000));
 			};
 			void tryOnce();
 		});

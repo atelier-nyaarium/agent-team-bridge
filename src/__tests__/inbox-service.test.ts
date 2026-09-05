@@ -6,6 +6,7 @@ import { InboxService } from "../federation-server/inbox/inboxService.js";
 import { OwnerStoreRegistry } from "../federation-server/inbox/ownerStoreRegistry.js";
 import { DomainQuota } from "../federation-server/owner/domainQuota.js";
 import { OwnerQuarantined } from "../federation-server/owner/ownerStateStore.js";
+import { processAmbient } from "../shared/ambient.js";
 import { generateIdentity } from "../shared/crypto.js";
 import { INBOX_ROW_TTL_MS, type InboxAddress, type InboxRowInput, signRowEnvelope } from "../shared/schemasInbox.js";
 
@@ -24,7 +25,7 @@ const make = (options: { now?: () => number; ownerOf?: (domainId: string) => str
 		ownerOf: options.ownerOf ?? (() => owner.sign.pub),
 		quotaFor: () =>
 			new DomainQuota({ dir: dataDir, limitBytes: 100_000_000, statfs: () => ({ available: 100_000_000 }) }),
-		now: options.now ?? (() => 100),
+		ambient: { now: options.now ?? (() => 100) },
 	});
 	return {
 		service: new InboxService(registry, { signPub: router.sign.pub, signPriv: router.sign.priv }),
@@ -235,6 +236,7 @@ describe("InboxService", () => {
 					limitBytes: 100_000_000,
 					statfs: () => ({ available: 100_000_000 }),
 				}),
+			ambient: processAmbient(),
 		});
 		const service = new InboxService(registry, {
 			signPub: first.router.sign.pub,
@@ -304,6 +306,7 @@ describe("InboxService", () => {
 				id === "destination" ? destinationOwner.sign.pub : id === "sender" ? senderOwner.sign.pub : null,
 			quotaFor: () =>
 				new DomainQuota({ dir: dataDir, limitBytes: 100_000_000, statfs: () => ({ available: 100_000_000 }) }),
+			ambient: processAmbient(),
 		});
 		const service = new InboxService(registry, { signPub: router.sign.pub, signPriv: router.sign.priv });
 		const address: InboxAddress = {
@@ -444,7 +447,7 @@ describe("InboxService", () => {
 			ownerOf: (id) => owners.get(id) ?? null,
 			quotaFor: () =>
 				new DomainQuota({ dir: dataDir, limitBytes: 100_000_000, statfs: () => ({ available: 100_000_000 }) }),
-			now: () => now,
+			ambient: { now: () => now },
 		});
 		const service = new InboxService(registry, { signPub: router.sign.pub, signPriv: router.sign.priv });
 		const address: InboxAddress = { kind: "gateway", domainId: "target", gatewayId: "destination" };

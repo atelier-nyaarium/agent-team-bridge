@@ -1,3 +1,4 @@
+import type { Ambient } from "../shared/ambient.js";
 import type { Identity } from "../shared/crypto.js";
 import { ReferenceHeldStore } from "./blobs/referenceHeldStore.js";
 import { RouterBlobCache } from "./blobs/routerBlobCache.js";
@@ -38,7 +39,7 @@ export class RouterDomainBootstrap {
 	public static assemble(params: {
 		dataDir: string;
 		store: FileSecretStore;
-		now: () => number;
+		ambient: Ambient;
 		tls?: RouterTls;
 		quotaBytes?: number;
 		blobCacheBytes?: number;
@@ -50,7 +51,7 @@ export class RouterDomainBootstrap {
 			dataDir: params.dataDir,
 			ownerOf: (domainId) => params.store.loadDomain(domainId)?.ownerSignPub ?? null,
 			quotaFor: () => new DomainQuota({ dir: params.dataDir, limitBytes: quotaBytes }),
-			now: params.now,
+			ambient: params.ambient,
 		});
 		const leases = createLeaseService({
 			registry: ownerRegistry,
@@ -63,9 +64,13 @@ export class RouterDomainBootstrap {
 		const blobCache = new RouterBlobCache({
 			dataDir: params.dataDir,
 			quotaBytesPerDomain: params.blobCacheBytes ?? 1024 * 1024 * 1024,
-			now: params.now,
+			ambient: params.ambient,
 		});
-		const referenceHeld = new ReferenceHeldStore({ dataDir: params.dataDir, quotaBytesPerDomain: quotaBytes });
+		const referenceHeld = new ReferenceHeldStore({
+			dataDir: params.dataDir,
+			quotaBytesPerDomain: quotaBytes,
+			ambient: params.ambient,
+		});
 		return new RouterDomainBootstrap({
 			tls,
 			identity,

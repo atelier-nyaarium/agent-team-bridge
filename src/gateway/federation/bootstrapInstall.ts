@@ -6,6 +6,7 @@ import {
 	verifyAdmission,
 	verifyRevocation,
 } from "../../shared/admission.js";
+import type { Clock } from "../../shared/ambient.js";
 import { writeFileAtomic } from "../../shared/atomic-write.js";
 import { type Identity, unseal } from "../../shared/crypto.js";
 import {
@@ -27,9 +28,10 @@ export function stageBootstrap(
 	bundle: GatewayBootstrapBundle,
 	gatewayIdentity: Identity,
 	contentKeyStore: ContentKeyStore,
+	ambient: Clock,
 	outerSignerSignPub?: string,
 ): void {
-	const liveAllowlist = new Allowlist(federationDir);
+	const liveAllowlist = new Allowlist(federationDir, ambient);
 	const liveSnapshot = liveAllowlist.getSnapshot();
 	const liveOwnerSignPub = liveAllowlist.ownerSignPub;
 	if (liveOwnerSignPub && liveOwnerSignPub !== bundle.domain.ownerSignPub) {
@@ -101,12 +103,12 @@ export function stageBootstrap(
 	}
 }
 
-export function activateStaged(federationDir: string): void {
+export function activateStaged(federationDir: string, ambient: Clock): void {
 	const stagingDir = path.join(federationDir, STAGING_DIR);
 	if (!fs.existsSync(path.join(stagingDir, "INSTALLED"))) return;
 	if (!stagedIsWhole(federationDir)) throw new Error("bootstrap staging artifact is missing");
-	const stagedAllowlist = new Allowlist(stagingDir);
-	const liveAllowlist = new Allowlist(federationDir);
+	const stagedAllowlist = new Allowlist(stagingDir, ambient);
+	const liveAllowlist = new Allowlist(federationDir, ambient);
 	if (
 		!stagedAllowlist.ownerSignPub ||
 		(liveAllowlist.ownerSignPub && stagedAllowlist.ownerSignPub !== liveAllowlist.ownerSignPub)
@@ -149,20 +151,20 @@ export function stagedIsWhole(federationDir: string): boolean {
 	);
 }
 
-export function recoverStaging(federationDir: string): void {
+export function recoverStaging(federationDir: string, ambient: Clock): void {
 	const stagingDir = path.join(federationDir, STAGING_DIR);
 	if (!fs.existsSync(stagingDir)) return;
 	if (fs.existsSync(path.join(stagingDir, "INSTALLED"))) {
 		let stagedAllowlist: Allowlist;
 		try {
-			stagedAllowlist = new Allowlist(stagingDir);
+			stagedAllowlist = new Allowlist(stagingDir, ambient);
 		} catch (error) {
 			if (!(error instanceof AllowlistCorruptError)) throw error;
 			fs.rmSync(stagingDir, { recursive: true, force: true });
 			console.warn("[bootstrap] discarded corrupt staging");
 			return;
 		}
-		const liveAllowlist = new Allowlist(federationDir);
+		const liveAllowlist = new Allowlist(federationDir, ambient);
 		if (
 			!stagedIsWhole(federationDir) ||
 			!stagedAllowlist.ownerSignPub ||
@@ -173,7 +175,7 @@ export function recoverStaging(federationDir: string): void {
 			return;
 		}
 		try {
-			activateStaged(federationDir);
+			activateStaged(federationDir, ambient);
 		} catch (error) {
 			console.error(
 				`[bootstrap] activation failed, staging kept for retry: ${error instanceof Error ? error.message : String(error)}`,

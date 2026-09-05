@@ -6,7 +6,9 @@ import {
 	HANDSHAKE_REPUSH_DEDUPE_MS,
 	HANDSHAKE_REPUSH_MAX_ATTEMPTS,
 } from "../gateway/wsTypes.js";
+import { processAmbient } from "../shared/ambient.js";
 import { SessionStore } from "../shared/session-store.js";
+import { fakeAmbient } from "../testing/fakeAmbient.js";
 
 const WINDOW = HANDSHAKE_REPUSH_DEDUPE_MS;
 const TTL = HANDSHAKE_PENDING_TTL_MS;
@@ -15,7 +17,7 @@ const TTL = HANDSHAKE_PENDING_TTL_MS;
 describe("HandshakeGate", () => {
 	function makeGate() {
 		let now = 1_000_000;
-		const gate = new HandshakeGate(() => now);
+		const gate = new HandshakeGate(fakeAmbient({ now: () => now }));
 		return {
 			gate,
 			advance: (ms: number) => {
@@ -157,7 +159,7 @@ describe("HandshakeGate", () => {
 		const { gate } = makeGate();
 		// A real binding value from the sole authority; the gate passes it through untouched.
 		const auth = createSessionAuthority({
-			sessionStore: new SessionStore(),
+			sessionStore: new SessionStore({ ambient: processAmbient() }),
 			registry: new Map(),
 			resolveLive: () => undefined,
 			localDomainId: () => "local",

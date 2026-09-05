@@ -9,6 +9,7 @@ import { InboxService } from "../federation-server/inbox/inboxService.js";
 import { OwnerStoreRegistry } from "../federation-server/inbox/ownerStoreRegistry.js";
 import { DomainQuota } from "../federation-server/owner/domainQuota.js";
 import { OwnerQuarantined } from "../federation-server/owner/ownerStateStore.js";
+import { processAmbient } from "../shared/ambient.js";
 import { type BlobReference, formatBlobReference } from "../shared/blob-reference.js";
 import { blobIdFor } from "../shared/blob-store.js";
 import { BOARD_BODY_KIND, BOARD_NAME_KIND, BOARD_TITLE_KIND, type BoardTextKind } from "../shared/content-envelope.js";
@@ -40,7 +41,7 @@ const make = (sessionExists = true, referenceHeld?: ReferenceHeld, useRealInbox 
 		ownerOf: (domainId) => owners.get(domainId) ?? null,
 		quotaFor: () =>
 			new DomainQuota({ dir: dataDir, limitBytes: 100_000_000, statfs: () => ({ available: 100_000_000 }) }),
-		now: () => 100,
+		ambient: { now: () => 100 },
 	});
 	const router = generateIdentity();
 	const inbox = new InboxService(registry, { signPub: router.sign.pub, signPriv: router.sign.priv });
@@ -273,7 +274,7 @@ describe("router board service", () => {
 	it("keeps attachment bytes when membership overlaps", () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "router-board-held-"));
 		roots.push(root);
-		const held = new ReferenceHeldStore({ dataDir: root });
+		const held = new ReferenceHeldStore({ dataDir: root, ambient: processAmbient() });
 		const wrap: ReferenceHeld = {
 			has: (domainId, blobId) => held.has(domainId, blobId),
 			applyRefs: (domainId, sets) => held.applyRefs(domainId, sets),
@@ -321,7 +322,7 @@ describe("router board service", () => {
 	it("keeps attachment bytes when one blob moves between entries in a single write", () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "router-board-move-"));
 		roots.push(root);
-		const held = new ReferenceHeldStore({ dataDir: root });
+		const held = new ReferenceHeldStore({ dataDir: root, ambient: processAmbient() });
 		const wrap: ReferenceHeld = {
 			has: (domainId, blobId) => held.has(domainId, blobId),
 			applyRefs: (domainId, sets) => held.applyRefs(domainId, sets),

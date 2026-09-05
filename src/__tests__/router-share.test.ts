@@ -39,7 +39,7 @@ const make = () => {
 		ownerOf: (domainId) => owners.get(domainId) ?? null,
 		quotaFor: () =>
 			new DomainQuota({ dir: dataDir, limitBytes: 100_000_000, statfs: () => ({ available: 100_000_000 }) }),
-		now: () => now,
+		ambient: { now: () => now },
 	});
 	const deps: ShareServiceDeps = {
 		registry,

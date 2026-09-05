@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import type { Clock } from "../../shared/ambient.js";
 import { renameFileSync, sweepAtomicTemps, writeFileAtomic } from "../../shared/atomic-write.js";
 import { fingerprint } from "../../shared/crypto.js";
 import type { DomainQuota } from "./domainQuota.js";
@@ -122,7 +123,7 @@ export class OwnerStateStore {
 		dataDir: string;
 		key: OwnerKey;
 		quota: DomainQuota;
-		now?: () => number;
+		ambient: Clock;
 		heartbeatMs?: number;
 		staleMs?: number;
 	}): OwnerStateStore {
@@ -130,7 +131,7 @@ export class OwnerStateStore {
 		fs.mkdirSync(dir, { recursive: true });
 		sweepAtomicTemps(dir);
 		const lock = OwnerLock.open(dir, opts.heartbeatMs, opts.staleMs);
-		const now = opts.now ?? Date.now;
+		const now = () => opts.ambient.now();
 		try {
 			const manifestPath = path.join(dir, MANIFEST);
 			const fresh = !fs.existsSync(manifestPath);

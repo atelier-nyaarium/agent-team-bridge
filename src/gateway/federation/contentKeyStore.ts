@@ -1,8 +1,8 @@
-import { randomBytes as nodeRandomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 import { resolveAdmittedConsole, type SignedAdmission, type SignedRevocation } from "../../shared/admission.js";
+import type { Ambient } from "../../shared/ambient.js";
 import { renameFileSync, writeFileAtomic } from "../../shared/atomic-write.js";
 import { type ContentAad, openContent, sealContentWithNonce, unwrapContentKey } from "../../shared/content-envelope.js";
 import { b64Field } from "../../shared/crypto.js";
@@ -46,8 +46,8 @@ export class ContentKeyStore {
 
 	constructor(
 		dir: string,
-		recipientBoxPriv: string | (() => string) = "",
-		private readonly randomBytes: (size: number) => Buffer = nodeRandomBytes,
+		recipientBoxPriv: string | (() => string),
+		private readonly ambient: Pick<Ambient, "now" | "randomBytes">,
 	) {
 		this.file = path.join(dir, CONTENT_KEYS_FILE);
 		this.recipientBoxPriv = recipientBoxPriv;
@@ -89,7 +89,7 @@ export class ContentKeyStore {
 	}
 
 	private quarantine(reason: string): Map<number, Buffer> {
-		const aside = `${this.file}.corrupt-${Date.now()}`;
+		const aside = `${this.file}.corrupt-${this.ambient.now()}`;
 		renameFileSync(this.file, aside);
 		console.warn(`[content-key-store] ${reason}; moved aside to ${aside}`);
 		return new Map();
@@ -179,7 +179,12 @@ export class ContentKeyStore {
 		if (epoch === undefined || !key) return { kind: "no_key" };
 		return {
 			kind: "ok",
-			envelope: sealContentWithNonce(plaintext, key, { ...aad, epoch }, this.randomBytes(CONTENT_NONCE_BYTES)),
+			envelope: sealContentWithNonce(
+				plaintext,
+				key,
+				{ ...aad, epoch },
+				this.ambient.randomBytes(CONTENT_NONCE_BYTES),
+			),
 		};
 	}
 

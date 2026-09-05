@@ -1,4 +1,3 @@
-import { randomBytes } from "node:crypto";
 import {
 	type DomainSnapshot,
 	type SignedAdmission,
@@ -6,6 +5,7 @@ import {
 	verifyAdmission,
 	verifyRevocation,
 } from "../shared/admission.js";
+import type { Ambient } from "../shared/ambient.js";
 import { fingerprint, type Identity } from "../shared/crypto.js";
 import {
 	type EnrollOp,
@@ -53,6 +53,7 @@ export class EnrollmentCoordinator {
 		private readonly identity: Identity,
 		private readonly store: EnrollmentStore,
 		private readonly domainId: string,
+		private readonly ambient: Pick<Ambient, "randomBytes">,
 		private readonly nonceTtlMs: number = DEFAULT_NONCE_TTL_MS,
 	) {
 		this.state = store.load() ?? { ownerSignPub: null, ownerBoxPub: null, admissions: [], revocations: [] };
@@ -72,7 +73,7 @@ export class EnrollmentCoordinator {
 	}
 
 	public mintEnrollOwner(domainId: string, routerAddr: string, nowMs: number): EnrollOwnerPayload {
-		const nonce = randomBytes(WIRE_NONCE_BYTES).toString("base64url");
+		const nonce = this.ambient.randomBytes(WIRE_NONCE_BYTES).toString("base64url");
 		this.nonces.set(nonce, nowMs + this.nonceTtlMs);
 		return {
 			type: "enroll-owner",

@@ -1,8 +1,8 @@
 // Stage 1: the directories, the identity, the keyring, and the boot decision, before any store opens.
 
-import { randomBytes as nodeRandomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import type { Ambient } from "../../shared/ambient.js";
 import { sweepAtomicTemps } from "../../shared/atomic-write.js";
 import type { Identity } from "../../shared/crypto.js";
 import { resolveLocalDomainId } from "../../shared/domain-id.js";
@@ -19,8 +19,7 @@ export interface BootstrapStage {
 	logDir: string;
 	federationDir: string;
 	localGatewayId: string;
-	now: () => number;
-	randomBytes: (size: number) => Buffer;
+	ambient: Ambient;
 	identity: () => Identity;
 	contentKeyStore: ContentKeyStore;
 	/** The boot decision made at construction. */
@@ -31,9 +30,7 @@ export interface BootstrapStage {
 }
 
 export function composeBootstrap(deps: GatewayDeps): BootstrapStage {
-	const { config } = deps;
-	const now = deps.now ?? Date.now;
-	const randomBytes = deps.randomBytes ?? nodeRandomBytes;
+	const { config, ambient } = deps;
 	const dataDir = config.dataDir;
 	const logDir = config.logDir;
 	const federationDir = config.federationDir;
@@ -43,12 +40,12 @@ export function composeBootstrap(deps: GatewayDeps): BootstrapStage {
 	useMigrationEpochFile(dataDir);
 	fs.mkdirSync(dataDir, { recursive: true });
 	console.log(`[gateway] Gateway id: ${localGatewayId}`);
-	recoverStaging(federationDir);
+	recoverStaging(federationDir, ambient);
 	for (const name of sweepAtomicTemps(federationDir)) console.log(`[gateway] removed atomic temp ${name}`);
 
 	let cachedIdentity: Identity | null = null;
 	const identity = () => (cachedIdentity ??= loadOrCreateIdentity(federationDir));
-	const contentKeyStore = new ContentKeyStore(federationDir, () => identity().box.priv, randomBytes);
+	const contentKeyStore = new ContentKeyStore(federationDir, () => identity().box.priv, ambient);
 
 	const resolveBoot = (enrollNonce: string | null): GatewayBoot =>
 		GatewayBootstrap.resolve(
@@ -58,7 +55,7 @@ export function composeBootstrap(deps: GatewayDeps): BootstrapStage {
 				allowFixtureIdentity: deps.allowFixtureIdentity ?? false,
 				domainIdEnv: process.env.FEDERATION_DOMAIN_ID,
 			},
-			{ identity, contentKeys: contentKeyStore },
+			{ ambient, identity, contentKeys: contentKeyStore },
 		);
 
 	const gatewayBoot = resolveBoot(config.enrollNonce ?? null);
@@ -73,8 +70,7 @@ export function composeBootstrap(deps: GatewayDeps): BootstrapStage {
 		logDir,
 		federationDir,
 		localGatewayId,
-		now,
-		randomBytes,
+		ambient,
 		identity,
 		contentKeyStore,
 		gatewayBoot,

@@ -1,4 +1,5 @@
 import type { DomainSnapshot } from "../shared/admission.js";
+import type { Ambient, TimerHandle } from "../shared/ambient.js";
 import type { BlobReference } from "../shared/blob-reference.js";
 import type { ContentEnvelope } from "../shared/schemasContentKey.js";
 import {
@@ -40,25 +41,28 @@ export interface OwnerServicesDeps {
 	/** Owner rows wait for the next read. */
 	consoleSockets?: Pick<ConsoleSockets, "pushOwnerRow" | "pushPlane" | "forget" | "readPlanes">;
 	leases?: ReturnType<typeof createLeaseService>;
+	ambient: ChainTimers;
 }
 
 const MAX_TIMER_MS = 2_147_483_647;
 
-export function chainedTimer(delayMs: number, fn: () => void): { handle: () => ReturnType<typeof setTimeout> } {
-	let current: ReturnType<typeof setTimeout>;
+type ChainTimers = Pick<Ambient, "setTimer" | "clearTimer">;
+
+/** Re-arms past the platform's timer ceiling. */
+export function chainedTimer(ambient: ChainTimers, delayMs: number, fn: () => void): { handle: () => TimerHandle } {
+	let current: TimerHandle;
 	const arm = (remaining: number) => {
-		current = setTimeout(
+		current = ambient.setTimer(
 			() => (remaining > MAX_TIMER_MS ? arm(remaining - MAX_TIMER_MS) : fn()),
 			Math.min(remaining, MAX_TIMER_MS),
 		);
-		current.unref?.();
 	};
 	arm(delayMs);
 	return { handle: () => current };
 }
 
 export function createOwnerServices(deps: OwnerServicesDeps) {
-	const { registry, inbox, bridge, referenceHeld } = deps;
+	const { registry, inbox, bridge, referenceHeld, ambient } = deps;
 	deps.intake.setGatewayProtocol((domainId, gatewayId) => bridge.gatewayProtocol(domainId, gatewayId));
 	referenceHeld.setReferenceExists((domainId, ref) => {
 		const store = registry.for(domainId);
@@ -231,8 +235,8 @@ export function createOwnerServices(deps: OwnerServicesDeps) {
 			applyRefs: (domainId, sets) => referenceHeld.applyRefs(domainId, sets),
 		},
 		scheduler: {
-			set: (ms, fn) => chainedTimer(ms, fn),
-			clear: (handle) => clearTimeout((handle as ReturnType<typeof chainedTimer>).handle()),
+			set: (ms, fn) => chainedTimer(ambient, ms, fn),
+			clear: (handle) => ambient.clearTimer((handle as ReturnType<typeof chainedTimer>).handle()),
 		},
 		now: () => registry.now(),
 	});

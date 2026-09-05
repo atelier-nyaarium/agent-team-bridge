@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { DurableOpStore } from "../gateway/console/durableOpStore.js";
 import { CrossDomainShareState } from "../gateway/federation/crossDomainShareState.js";
 import { ReadAnchors } from "../gateway/readAnchors.js";
+import { processAmbient } from "../shared/ambient.js";
 import type { DurableStore } from "../shared/durable-store.js";
 import {
 	MIGRATING,
@@ -151,7 +152,7 @@ describe("migration fence residue", () => {
 	});
 
 	it("a held delivery refuses under the fence", () => {
-		const store = new PendingDeliveryStore();
+		const store = new PendingDeliveryStore(undefined, processAmbient());
 		const delivery = { deliveryId: "d1", team: "t", queuedAt: 0 } as never;
 
 		expect(store.enqueue(delivery)).toBe("enqueued");
@@ -162,7 +163,7 @@ describe("migration fence residue", () => {
 
 	it("pending delivery writers refuse and write after removal", () => {
 		let now = 2_000;
-		const store = new PendingDeliveryStore(undefined, 100, undefined, undefined, () => now);
+		const store = new PendingDeliveryStore(undefined, { now: () => now }, 100);
 		store.enqueue({ ...(delivery("d1") as object), enqueuedAt: 1_000 } as never);
 		setMigrationEpoch(7);
 		expect(store.acknowledge("d1")).toBe(MIGRATING);
@@ -178,7 +179,7 @@ describe("migration fence residue", () => {
 	});
 
 	it("a read anchor never advances under the fence", () => {
-		const anchors = new ReadAnchors(new PlaneRegistry(), undefined);
+		const anchors = new ReadAnchors(new PlaneRegistry(processAmbient()), undefined);
 
 		expect(anchors.report("alice", "team", { epoch: 1, seq: 1, at: 1 })).toBe(true);
 		setMigrationEpoch(7);
@@ -187,7 +188,7 @@ describe("migration fence residue", () => {
 	});
 
 	it("taking ownership of an op key answers null under the fence", () => {
-		const store = new DurableOpStore(fakeDurable());
+		const store = new DurableOpStore(fakeDurable(), processAmbient());
 
 		expect(store.markInFlight("conv", "op-1")).toEqual(expect.any(Number));
 		setMigrationEpoch(7);
@@ -196,7 +197,7 @@ describe("migration fence residue", () => {
 	});
 
 	it("the settle drops in-flight records and keeps completed ones", () => {
-		const store = new DurableOpStore(fakeDurable());
+		const store = new DurableOpStore(fakeDurable(), processAmbient());
 		store.markInFlight("conv", "done");
 		store.markComplete("conv", "done", { delivered: true } as never);
 		store.markInFlight("conv", "caught");
@@ -208,14 +209,14 @@ describe("migration fence residue", () => {
 	});
 
 	it("the share sweep removes nothing under the fence", () => {
-		const state = new CrossDomainShareState(tempDir());
+		const state = new CrossDomainShareState(tempDir(), undefined, processAmbient());
 		setMigrationEpoch(7);
 
 		expect(state.sweep(Date.now(), 0, () => false)).toBe(0);
 	});
 
 	it("a share is neither taken nor withdrawn under the fence", () => {
-		const state = new CrossDomainShareState(tempDir());
+		const state = new CrossDomainShareState(tempDir(), undefined, processAmbient());
 		const target = { kind: "domain", domainId: "beta" } as never;
 		state.share("alpha.gw.spawn.session", target);
 		setMigrationEpoch(7);

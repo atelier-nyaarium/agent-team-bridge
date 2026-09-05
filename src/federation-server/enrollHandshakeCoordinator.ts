@@ -1,3 +1,4 @@
+import type { Clock } from "../shared/ambient.js";
 import type { EnrollHandshakeOp, EnrollHandshakeResult, EnrollReveal } from "../shared/federation-lifecycle.js";
 
 ////////////////////////////////
@@ -30,11 +31,15 @@ export class EnrollHandshakeCoordinator {
 	private readonly windows = new Map<string, HandshakeWindow>();
 
 	public constructor(
+		private readonly ambient: Clock,
 		private readonly ttlMs: number = DEFAULT_TTL_MS,
 		private readonly maxAttempts: number = DEFAULT_MAX_ATTEMPTS,
 		private readonly maxWindows: number = DEFAULT_MAX_WINDOWS,
-		private readonly now: () => number = Date.now,
 	) {}
+
+	private now(): number {
+		return this.ambient.now();
+	}
 
 	public handle(op: EnrollHandshakeOp): EnrollHandshakeResult {
 		this.sweep();

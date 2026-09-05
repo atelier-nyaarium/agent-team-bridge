@@ -1,7 +1,8 @@
+import type { Clock } from "../../shared/ambient.js";
 import { type Identity, type SealedEnvelope, seal, unseal } from "../../shared/crypto.js";
 import type { Allowlist } from "./allowlist.js";
 import type { CrossDomainPeers } from "./crossDomainPeers.js";
-import { ReplayGuard } from "./replayGuard.js";
+import type { ReplayGuard } from "./replayGuard.js";
 
 ////////////////////////////////
 //  Interfaces & Types
@@ -69,8 +70,8 @@ export function createSealer(
 	localGatewayId: string,
 	crossDomainPeers: CrossDomainPeers,
 	localDomainId: string,
-	replayGuard: ReplayGuard = new ReplayGuard(),
-	now: () => number = Date.now,
+	replayGuard: ReplayGuard,
+	ambient: Clock,
 ): Sealer {
 	function openWithSource(
 		srcGateway: string,
@@ -92,7 +93,7 @@ export function createSealer(
 		// Bind the cleartext route to the signed source.
 		if (wrapped?.src !== srcGateway) throw new Error(`seal: source mismatch (claimed "${srcGateway}")`);
 		if (wrapped.dst !== localGatewayId) throw new Error(`seal: not addressed to this Gateway`);
-		if (Math.abs((opts?.sealedAt ?? now()) - (wrapped.at ?? 0)) > SEAL_MAX_AGE_MS)
+		if (Math.abs((opts?.sealedAt ?? ambient.now()) - (wrapped.at ?? 0)) > SEAL_MAX_AGE_MS)
 			throw new Error(`seal: stale envelope`);
 		if (wrapped.v === 1) {
 			// Local peers must use v1 so Domain bindings cannot be stripped.
@@ -118,7 +119,7 @@ export function createSealer(
 			if (typeof dst === "string") {
 				const localPeer = allowlist.resolveGateway(dst);
 				if (localPeer) {
-					const wrapped: SealedBodyV1 = { v: 1, src: localGatewayId, dst, at: now(), body: obj };
+					const wrapped: SealedBodyV1 = { v: 1, src: localGatewayId, dst, at: ambient.now(), body: obj };
 					return seal(Buffer.from(JSON.stringify(wrapped)), localPeer.boxPub, identity.sign.priv);
 				}
 			}
@@ -132,7 +133,7 @@ export function createSealer(
 						dst: dst.gatewayId,
 						srcDomain: localDomainId,
 						dstDomain: peer.friendDomainId,
-						at: now(),
+						at: ambient.now(),
 						body: obj,
 					};
 					return seal(Buffer.from(JSON.stringify(wrapped)), peer.friendBoxPub, identity.sign.priv);

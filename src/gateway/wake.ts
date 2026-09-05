@@ -1,3 +1,4 @@
+import type { Ambient, TimerHandle } from "../shared/ambient.js";
 import { sanitizeLabel } from "../shared/session-sanitize.js";
 
 ////////////////////////////////
@@ -48,7 +49,7 @@ export function decideWakeCreate(
 
 interface WakeWaiter {
 	resolve: (result: WakeResult) => void;
-	timer: ReturnType<typeof setTimeout>;
+	timer: TimerHandle;
 	/** When this wait must be over, whatever happens later. Kept so a re-arm can only bring the
 	 * deadline in, never push it out. */
 	deadlineAt: number;
@@ -60,13 +61,15 @@ interface WakeWaiter {
 export class WakeCoordinator {
 	private waiters = new Map<string, WakeWaiter[]>();
 
+	constructor(private readonly ambient: Pick<Ambient, "now" | "setTimer" | "clearTimer">) {}
+
 	waitFor(team: string, timeoutMs: number): Promise<WakeResult> {
 		return new Promise((resolve) => {
-			const timer = setTimeout(() => {
+			const timer = this.ambient.setTimer(() => {
 				this.removeWaiter(team, entry);
 				resolve({ ok: false, errorKind: "timeout" });
 			}, timeoutMs);
-			const entry: WakeWaiter = { resolve, timer, deadlineAt: Date.now() + timeoutMs };
+			const entry: WakeWaiter = { resolve, timer, deadlineAt: this.ambient.now() + timeoutMs };
 			if (!this.waiters.has(team)) this.waiters.set(team, []);
 			this.waiters.get(team)!.push(entry);
 		});
@@ -76,7 +79,7 @@ export class WakeCoordinator {
 		const entries = this.waiters.get(team);
 		if (!entries) return;
 		for (const entry of entries) {
-			clearTimeout(entry.timer);
+			this.ambient.clearTimer(entry.timer);
 			entry.resolve({ ok: success });
 		}
 		this.waiters.delete(team);
@@ -91,13 +94,13 @@ export class WakeCoordinator {
 	ackReceived(team: string, registerWindowMs: number): void {
 		const entries = this.waiters.get(team);
 		if (!entries) return;
-		const now = Date.now();
+		const now = this.ambient.now();
 		for (const entry of entries) {
-			clearTimeout(entry.timer);
+			this.ambient.clearTimer(entry.timer);
 			// Clamped to what was left. A bare re-arm EXTENDS the wait when the ack lands near the
 			// original deadline, which is the opposite of this method's whole purpose.
 			const remaining = Math.max(0, Math.min(registerWindowMs, entry.deadlineAt - now));
-			entry.timer = setTimeout(() => {
+			entry.timer = this.ambient.setTimer(() => {
 				this.removeWaiter(team, entry);
 				entry.resolve({ ok: false, errorKind: "timeout" });
 			}, remaining);
@@ -112,7 +115,7 @@ export class WakeCoordinator {
 	failAll(): void {
 		for (const entries of this.waiters.values()) {
 			for (const entry of entries) {
-				clearTimeout(entry.timer);
+				this.ambient.clearTimer(entry.timer);
 				entry.resolve({ ok: false, errorKind: "disconnected" });
 			}
 		}

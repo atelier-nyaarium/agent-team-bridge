@@ -1,5 +1,6 @@
 // Stage 13: the HTTP entry point, and the shutdown that flushes before it stops anything.
 
+import type { Ambient } from "../../shared/ambient.js";
 import { reportUnrecognizedDataEntries } from "../dataDirInventory.js";
 import { createHttpRouter } from "../httpRouter.js";
 import type { AgentsStage } from "./composeAgents.js";
@@ -18,6 +19,7 @@ import type { FederationContext } from "./federationContext.js";
 export interface ListenerStageDeps {
 	dataDir: string;
 	enrollNonce?: string;
+	ambient: Pick<Ambient, "clearInterval">;
 	context: FederationContext;
 	stores: StoresStage;
 	sessions: SessionsStage;
@@ -38,7 +40,7 @@ export interface ListenerStage {
 }
 
 export function composeListener(deps: ListenerStageDeps): ListenerStage {
-	const { context, stores, sessions, persistence, host, awareness, websockets, routes } = deps;
+	const { ambient, context, stores, sessions, persistence, host, awareness, websockets, routes } = deps;
 
 	const router = createHttpRouter({
 		handleEnrollPost: deps.enrollment.handleEnrollPost,
@@ -57,11 +59,11 @@ export function composeListener(deps: ListenerStageDeps): ListenerStage {
 		stores.jobsDurable.saveChecked(stores.jobs.snapshot());
 		stores.sessionResumeDurable.saveChecked(sessions.sessionResumeSnapshot(true));
 		persistence.persistDelivery(true);
-		clearInterval(sessions.tripwireTimer);
-		clearInterval(persistence.persistTimer);
-		clearInterval(host.presenceWatchTimer);
-		clearInterval(awareness.awarenessTimer);
-		clearInterval(websockets.wsHandlers.heartbeatInterval);
+		ambient.clearInterval(sessions.tripwireTimer);
+		ambient.clearInterval(persistence.persistTimer);
+		ambient.clearInterval(host.presenceWatchTimer);
+		ambient.clearInterval(awareness.awarenessTimer);
+		ambient.clearInterval(websockets.wsHandlers.heartbeatInterval);
 		deps.routerPresence.stop();
 		deps.enrollment.stop();
 		routes.stop();

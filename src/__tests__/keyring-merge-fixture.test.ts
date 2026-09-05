@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { ContentKeyStore } from "../gateway/federation/contentKeyStore.js";
 import { signAdmission } from "../shared/admission.js";
+import { processAmbient } from "../shared/ambient.js";
 import { generateIdentity } from "../shared/crypto.js";
 import type { KeyEnvelope } from "../shared/schemasContentKey.js";
 
@@ -29,7 +30,7 @@ describe("content keyring merge fixture", () => {
 	it.each(fixture.cases)("$name", (testCase) => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "switchboard-keyring-merge-"));
 		try {
-			const store = new ContentKeyStore(dir, fixture.recipientBox.priv);
+			const store = new ContentKeyStore(dir, fixture.recipientBox.priv, processAmbient());
 			store.commit(
 				new Map(
 					Object.entries(fixture.held).map(([epoch, key]) => [Number(epoch), Buffer.from(key, "base64")]),

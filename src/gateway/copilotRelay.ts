@@ -1,4 +1,4 @@
-import crypto from "node:crypto";
+import type { Ambient } from "../shared/ambient.js";
 import {
 	type CopilotDaemonCommand,
 	CopilotDaemonCommandSchema,
@@ -28,7 +28,7 @@ export interface CopilotRelayDeps {
 	service: CopilotAgentService;
 	sessionStore: SessionStore;
 	sendToHost(message: Record<string, unknown>): boolean;
-	now?(): number;
+	ambient: Pick<Ambient, "now" | "newId" | "setTimer" | "clearTimer">;
 }
 
 function agentKey(ownerKey: string, agentId: string): string {
@@ -69,7 +69,7 @@ export class CopilotRelay {
 	constructor(private readonly deps: CopilotRelayDeps) {}
 
 	dispatch(command: CopilotCommandRequest): boolean {
-		const message = { type: "copilot_command", requestId: crypto.randomUUID(), ...command };
+		const message = { type: "copilot_command", requestId: this.deps.ambient.newId(), ...command };
 		if (!CopilotDaemonCommandSchema.safeParse(message).success) return false;
 		return this.deps.sendToHost(message);
 	}
@@ -113,11 +113,11 @@ export class CopilotRelay {
 		return new Promise((resolve) => {
 			let unsubscribe = () => {};
 			const finish = (value: boolean) => {
-				clearTimeout(timer);
+				this.deps.ambient.clearTimer(timer);
 				unsubscribe();
 				resolve(value);
 			};
-			const timer = setTimeout(() => finish(false), Math.max(0, deadline - this.now()));
+			const timer = this.deps.ambient.setTimer(() => finish(false), Math.max(0, deadline - this.now()));
 			unsubscribe = this.onAgentChange(ownerKey, agentId, () => {
 				if (settled()) finish(true);
 			});
@@ -305,6 +305,6 @@ export class CopilotRelay {
 	}
 
 	private now(): number {
-		return this.deps.now?.() ?? Date.now();
+		return this.deps.ambient.now();
 	}
 }

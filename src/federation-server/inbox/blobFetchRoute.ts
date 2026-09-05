@@ -1,3 +1,4 @@
+import type { Ambient, TimerHandle } from "../../shared/ambient.js";
 import type { BlobFetchParams, BlobFetchReplyParams } from "../../shared/router-protocol.js";
 import { ciphertextRangeForPlaintext } from "../../shared/sealed-blob.js";
 import type { RouterBlobCache } from "../blobs/routerBlobCache.js";
@@ -11,11 +12,12 @@ export type BlobFetchAnswer =
 export class BlobFetchRoute {
 	private readonly pending = new Map<
 		string,
-		{ resolve: (answer: BlobFetchAnswer) => void; timer: ReturnType<typeof setTimeout>; connId: string }
+		{ resolve: (answer: BlobFetchAnswer) => void; timer: TimerHandle; connId: string }
 	>();
 
 	constructor(
 		private readonly cache: RouterBlobCache,
+		private readonly ambient: Pick<Ambient, "setTimer" | "clearTimer">,
 		private readonly resolveOrigin: (
 			domainId: string,
 			gatewayId: string,
@@ -26,7 +28,7 @@ export class BlobFetchRoute {
 	failConnection(connId: string): void {
 		for (const [opId, pending] of this.pending) {
 			if (pending.connId !== connId) continue;
-			clearTimeout(pending.timer);
+			this.ambient.clearTimer(pending.timer);
 			this.pending.delete(opId);
 			pending.resolve({ outcome: "unreachable" });
 		}
@@ -59,7 +61,7 @@ export class BlobFetchRoute {
 		const target = this.resolveOrigin(origin.domainId, origin.gatewayId);
 		if (!target) return Promise.resolve({ outcome: "unreachable" });
 		return new Promise((resolve) => {
-			const timer = setTimeout(() => {
+			const timer = this.ambient.setTimer(() => {
 				this.pending.delete(params.opId);
 				resolve({ outcome: "timeout" });
 			}, this.timeoutMs);
@@ -73,7 +75,7 @@ export class BlobFetchRoute {
 					incarnation: target.incarnation ?? params.incarnation,
 				});
 			} catch {
-				clearTimeout(timer);
+				this.ambient.clearTimer(timer);
 				this.pending.delete(params.opId);
 				resolve({ outcome: "unreachable" });
 			}
@@ -83,7 +85,7 @@ export class BlobFetchRoute {
 	settle(connId: string, reply: BlobFetchReplyParams): boolean {
 		const pending = this.pending.get(reply.opId);
 		if (!pending || pending.connId !== connId) return false;
-		clearTimeout(pending.timer);
+		this.ambient.clearTimer(pending.timer);
 		this.pending.delete(reply.opId);
 		if (reply.outcome === "absent") pending.resolve({ outcome: "absent" });
 		else pending.resolve({ outcome: "fetched", bytes: reply.bytes ?? "", eof: reply.eof ?? true, sealed: false });
@@ -92,7 +94,7 @@ export class BlobFetchRoute {
 
 	stop(): void {
 		for (const pending of this.pending.values()) {
-			clearTimeout(pending.timer);
+			this.ambient.clearTimer(pending.timer);
 			pending.resolve({ outcome: "timeout" });
 		}
 		this.pending.clear();

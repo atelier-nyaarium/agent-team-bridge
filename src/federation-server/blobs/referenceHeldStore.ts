@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import type { Ambient } from "../../shared/ambient.js";
 import { renameFileSync, writeFileAtomic } from "../../shared/atomic-write.js";
 import { type BlobReference, formatBlobReference, parseBlobReference } from "../../shared/blob-reference.js";
 import { BlobStore } from "../../shared/blob-store.js";
@@ -34,7 +35,7 @@ export class ReferenceHeldStore {
 	private readonly domains = new Map<string, { store: BlobStore; index: HeldIndex }>();
 	private referenceExists: ((domainId: string, ref: BlobReference) => boolean) | null = null;
 
-	constructor(private readonly options: { dataDir: string; quotaBytesPerDomain?: number }) {}
+	constructor(private readonly options: { dataDir: string; quotaBytesPerDomain?: number; ambient: HeldAmbient }) {}
 
 	setReferenceExists(check: (domainId: string, ref: BlobReference) => boolean): void {
 		this.referenceExists = check;
@@ -121,7 +122,11 @@ export class ReferenceHeldStore {
 		}, 0);
 		if (reserved + ciphertextSize > quota) return { kind: "quota" };
 		const generation = domain.index.entries[blobId]?.generation ?? 0;
-		const lease = { id: cryptoRandomId(), generation: generation + 1, expiresAt: Number.MAX_SAFE_INTEGER };
+		const lease = {
+			id: this.options.ambient.newId(),
+			generation: generation + 1,
+			expiresAt: Number.MAX_SAFE_INTEGER,
+		};
 		const next = domain.index.entries[blobId] ?? { refs: [] };
 		next.leaseId = lease.id;
 		next.generation = lease.generation;
@@ -198,7 +203,7 @@ export class ReferenceHeldStore {
 			if (!index || typeof index.entries !== "object") throw new Error("invalid index");
 		} catch (error) {
 			if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-				const corrupt = `${file}.corrupt-${Date.now()}`;
+				const corrupt = `${file}.corrupt-${this.options.ambient.now()}`;
 				renameFileSync(file, corrupt);
 				throw new CorruptHeldIndexError(`held index moved to ${corrupt}`);
 			}
@@ -218,7 +223,7 @@ export class ReferenceHeldStore {
 			index = { entries: {} };
 			this.persist(domainId, index);
 		}
-		const result = { store: new BlobStore(root), index };
+		const result = { store: new BlobStore(root, this.options.ambient), index };
 		this.domains.set(domainId, result);
 		return result;
 	}
@@ -235,6 +240,4 @@ export class ReferenceHeldStore {
 	}
 }
 
-function cryptoRandomId(): string {
-	return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-}
+type HeldAmbient = Pick<Ambient, "now" | "newId">;

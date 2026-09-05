@@ -1,4 +1,5 @@
 import { publishedActivities } from "../shared/agent-record.js";
+import type { Clock } from "../shared/ambient.js";
 import {
 	CODEX_WAIT_BUDGET_MS,
 	type CodexAgentResult,
@@ -26,7 +27,7 @@ import { presentedByRequest } from "./sessionAuthority.js";
 export interface CodexRouteDeps {
 	service: CodexAgentService;
 	relay: CodexRelay;
-	now?(): number;
+	ambient: Clock;
 	/** How long a waiting call blocks. The tool's own documented budget; overridable for tests. */
 	waitBudgetMs?: number;
 }
@@ -447,7 +448,7 @@ export class CodexRoute {
 	}
 
 	private now(): number {
-		return this.deps.now?.() ?? Date.now();
+		return this.deps.ambient.now();
 	}
 }
 

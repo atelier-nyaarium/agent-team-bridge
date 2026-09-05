@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import type { Ambient } from "../../shared/ambient.js";
 import { writeFileAtomic } from "../../shared/atomic-write.js";
 import { BlobStore, isBlobId } from "../../shared/blob-store.js";
 import { MAX_BLOB_BYTES } from "../../shared/router-protocol.js";
@@ -51,8 +52,14 @@ export class RouterBlobCache {
 	private readonly domains = new Map<string, { store: BlobStore; index: CacheIndex }>();
 	private readonly now: () => number;
 
-	constructor(private readonly options: { dataDir: string; quotaBytesPerDomain: number; now?: () => number }) {
-		this.now = options.now ?? (() => Date.now());
+	constructor(
+		private readonly options: {
+			dataDir: string;
+			quotaBytesPerDomain: number;
+			ambient: Pick<Ambient, "now" | "newId">;
+		},
+	) {
+		this.now = () => options.ambient.now();
 	}
 
 	begin(
@@ -93,7 +100,7 @@ export class RouterBlobCache {
 		if (this.used(domain) - heldForBlob + ciphertextSize > this.options.quotaBytesPerDomain)
 			return { kind: "quota" };
 		const generation = (entry?.lease?.generation ?? 0) + 1;
-		const lease = newLease(generation, this.now(), undefined, ciphertextSize);
+		const lease = newLease(this.options.ambient, generation, this.now(), undefined, ciphertextSize);
 		domain.index.entries[blobId] = {
 			origin,
 			lastReadAt: entry?.lastReadAt ?? this.now(),
@@ -229,7 +236,7 @@ export class RouterBlobCache {
 			index = { entries: {} };
 			this.rebuild(domainId, root, index);
 		}
-		const result = { store: new BlobStore(root), index };
+		const result = { store: new BlobStore(root, this.options.ambient), index };
 		this.reconcile(domainId, result, this.now());
 		this.reclaimOrphans(root, index);
 		this.persist(domainId, index);

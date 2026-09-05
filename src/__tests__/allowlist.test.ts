@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { Allowlist } from "../gateway/federation/allowlist.js";
 import { type Admission, signAdmission, signRevocation } from "../shared/admission.js";
+import { processAmbient } from "../shared/ambient.js";
 import { generateIdentity } from "../shared/crypto.js";
 
 const dirs: string[] = [];
@@ -32,12 +33,12 @@ function hostAdmission(over: Partial<Admission> = {}): Admission {
 
 describe("Allowlist", () => {
 	it("rejects an admission before the owner is set", () => {
-		const a = new Allowlist(tmpDir());
+		const a = new Allowlist(tmpDir(), processAmbient());
 		expect(a.addAdmission(signAdmission(hostAdmission(), owner.sign.priv, owner.sign.pub))).toBe(false);
 	});
 
 	it("admits a Gateway and resolves it by id and by key", () => {
-		const a = new Allowlist(tmpDir());
+		const a = new Allowlist(tmpDir(), processAmbient());
 		a.setOwner(owner.sign.pub);
 		expect(a.addAdmission(signAdmission(hostAdmission(), owner.sign.priv, owner.sign.pub))).toBe(true);
 		expect(a.resolveGateway("laptop")).toEqual({ signPub: host.sign.pub, boxPub: host.box.pub });
@@ -46,7 +47,7 @@ describe("Allowlist", () => {
 	});
 
 	it("rejects an admission forged by a non-owner", () => {
-		const a = new Allowlist(tmpDir());
+		const a = new Allowlist(tmpDir(), processAmbient());
 		a.setOwner(owner.sign.pub);
 		const attacker = generateIdentity();
 		expect(a.addAdmission(signAdmission(hostAdmission(), attacker.sign.priv, attacker.sign.pub))).toBe(false);
@@ -54,14 +55,14 @@ describe("Allowlist", () => {
 	});
 
 	it("refuses to re-root at a different owner", () => {
-		const a = new Allowlist(tmpDir());
+		const a = new Allowlist(tmpDir(), processAmbient());
 		a.setOwner(owner.sign.pub);
 		const other = generateIdentity();
 		expect(() => a.setOwner(other.sign.pub)).toThrow(/different owner/);
 	});
 
 	it("a revocation removes the Gateway from resolution", () => {
-		const a = new Allowlist(tmpDir());
+		const a = new Allowlist(tmpDir(), processAmbient());
 		a.setOwner(owner.sign.pub);
 		a.addAdmission(signAdmission(hostAdmission({ issuedAt: 1000 }), owner.sign.priv, owner.sign.pub));
 		a.addRevocation(
@@ -73,17 +74,17 @@ describe("Allowlist", () => {
 
 	it("persists across reloads", () => {
 		const dir = tmpDir();
-		const a = new Allowlist(dir);
+		const a = new Allowlist(dir, processAmbient());
 		a.setOwner(owner.sign.pub);
 		a.addAdmission(signAdmission(hostAdmission(), owner.sign.priv, owner.sign.pub));
 		// A fresh instance reads the same file.
-		const b = new Allowlist(dir);
+		const b = new Allowlist(dir, processAmbient());
 		expect(b.ownerSignPub).toBe(owner.sign.pub);
 		expect(b.resolveGateway("laptop")?.boxPub).toBe(host.box.pub);
 	});
 
 	it("mirrors a Domain snapshot and surfaces the gateway's own admission", () => {
-		const a = new Allowlist(tmpDir());
+		const a = new Allowlist(tmpDir(), processAmbient());
 		const applied = a.applySnapshot({
 			ownerSignPub: owner.sign.pub,
 			admissions: [signAdmission(hostAdmission(), owner.sign.priv, owner.sign.pub)],
@@ -96,7 +97,7 @@ describe("Allowlist", () => {
 	});
 
 	it("applySnapshot is idempotent and drops non-owner entries", () => {
-		const a = new Allowlist(tmpDir());
+		const a = new Allowlist(tmpDir(), processAmbient());
 		const attacker = generateIdentity();
 		const snapshot = {
 			ownerSignPub: owner.sign.pub,
@@ -115,7 +116,7 @@ describe("Allowlist", () => {
 	});
 
 	it("ignores a snapshot rooted at a different owner", () => {
-		const a = new Allowlist(tmpDir());
+		const a = new Allowlist(tmpDir(), processAmbient());
 		a.setOwner(owner.sign.pub);
 		const other = generateIdentity();
 		expect(a.applySnapshot({ ownerSignPub: other.sign.pub, admissions: [], revocations: [] })).toBe(false);

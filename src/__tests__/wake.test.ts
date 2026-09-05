@@ -1,28 +1,29 @@
 import { describe, expect, it, vi } from "vitest";
 import { decideWakeCreate, WakeCoordinator } from "../gateway/wake.js";
+import { processAmbient } from "../shared/ambient.js";
 
 describe("WakeCoordinator", () => {
 	it("resolves a waiter true when its team is notified online", async () => {
-		const coord = new WakeCoordinator();
+		const coord = new WakeCoordinator(processAmbient());
 		const p = coord.waitFor("alpha", 10_000);
 		coord.notify("alpha", true);
 		await expect(p).resolves.toEqual({ ok: true });
 	});
 
 	it("resolves a definitive failure when notified of a failed wake (no errorKind)", async () => {
-		const coord = new WakeCoordinator();
+		const coord = new WakeCoordinator(processAmbient());
 		const p = coord.waitFor("alpha", 10_000);
 		coord.notify("alpha", false);
 		await expect(p).resolves.toEqual({ ok: false });
 	});
 
 	it("resolves an ambiguous timeout rather than hanging", async () => {
-		const coord = new WakeCoordinator();
+		const coord = new WakeCoordinator(processAmbient());
 		await expect(coord.waitFor("slow", 10)).resolves.toEqual({ ok: false, errorKind: "timeout" });
 	});
 
 	it("notify resolves every waiter for that team and leaves other teams pending", async () => {
-		const coord = new WakeCoordinator();
+		const coord = new WakeCoordinator(processAmbient());
 		const a1 = coord.waitFor("a", 10_000);
 		const a2 = coord.waitFor("a", 10_000);
 		coord.notify("a", true);
@@ -34,7 +35,7 @@ describe("WakeCoordinator", () => {
 	});
 
 	it("failAll resolves every in-flight wake as ambiguous (disconnected) across all teams", async () => {
-		const coord = new WakeCoordinator();
+		const coord = new WakeCoordinator(processAmbient());
 		const a = coord.waitFor("a", 10_000);
 		const b = coord.waitFor("b", 10_000);
 		coord.failAll();
@@ -43,7 +44,7 @@ describe("WakeCoordinator", () => {
 	});
 
 	it("ackReceived shortens an in-flight wait so a started-but-unregistered team fails fast, still ambiguous", async () => {
-		const coord = new WakeCoordinator();
+		const coord = new WakeCoordinator(processAmbient());
 		// 10s base wait; if ackReceived did not shorten it, this would exceed the test timeout.
 		const p = coord.waitFor("alpha", 10_000);
 		coord.ackReceived("alpha", 10);
@@ -51,7 +52,7 @@ describe("WakeCoordinator", () => {
 	});
 
 	it("ackReceived still resolves true when the team registers within the window", async () => {
-		const coord = new WakeCoordinator();
+		const coord = new WakeCoordinator(processAmbient());
 		const p = coord.waitFor("alpha", 10_000);
 		coord.ackReceived("alpha", 10_000);
 		coord.notify("alpha", true);
@@ -59,7 +60,7 @@ describe("WakeCoordinator", () => {
 	});
 
 	it("ackReceived shortens every concurrent waiter for a team; a register then resolves them all true", async () => {
-		const coord = new WakeCoordinator();
+		const coord = new WakeCoordinator(processAmbient());
 		const a1 = coord.waitFor("alpha", 10_000);
 		const a2 = coord.waitFor("alpha", 10_000);
 		coord.ackReceived("alpha", 10_000);
@@ -69,7 +70,7 @@ describe("WakeCoordinator", () => {
 	});
 
 	it("ackReceived fails every concurrent waiter fast when none registers, still ambiguous", async () => {
-		const coord = new WakeCoordinator();
+		const coord = new WakeCoordinator(processAmbient());
 		const a1 = coord.waitFor("alpha", 10_000);
 		const a2 = coord.waitFor("alpha", 10_000);
 		coord.ackReceived("alpha", 10);
@@ -82,7 +83,7 @@ describe("WakeCoordinator", () => {
 		// same timeout result, so only the clock tells them apart.
 		vi.useFakeTimers();
 		try {
-			const coord = new WakeCoordinator();
+			const coord = new WakeCoordinator(processAmbient());
 			// A window wider than what the wait has left. Re-arming to it hands the team another 10s past
 			// a deadline 5s away, which is the opposite of this method's purpose.
 			const p = coord.waitFor("alpha", 5_000);

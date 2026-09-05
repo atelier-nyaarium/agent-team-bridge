@@ -1,3 +1,4 @@
+import type { Ambient } from "../shared/ambient.js";
 import type { BoardReply } from "../shared/board-structure.js";
 import type { HostSpawnState } from "../shared/host-spawn.js";
 import type { PendingJobStore } from "../shared/pending-job-store.js";
@@ -22,8 +23,7 @@ import type { ConversationRegistry, HandshakeRepushOutcome, TeamRegistry } from 
 
 export interface RoutesDeps {
 	dataDir: string;
-	now?: () => number;
-	newId?: () => string;
+	ambient: Ambient;
 	registry: TeamRegistry;
 	conversationRegistry: ConversationRegistry;
 	store: PendingJobStore<ResponsePayload>;
@@ -112,7 +112,8 @@ export function createRoutesCarryOver(): RoutesCarryOver {
 }
 
 export function createRoutes(deps: RoutesDeps) {
-	const { config, store, auth, carryOver = createRoutesCarryOver(), now = () => Date.now() } = deps;
+	const { config, store, auth, carryOver = createRoutesCarryOver(), ambient } = deps;
+	const now = () => ambient.now();
 
 	const { localDomain, localAddress, consoleSelfAddress, tryLocalAddress, resolveLocalTarget } = createAddressing({
 		config,
@@ -130,14 +131,14 @@ export function createRoutes(deps: RoutesDeps) {
 		blobUploader: deps.blobUploader,
 		crossDomainPeers: deps.crossDomainPeers,
 		resolvesLocalGateway: deps.resolvesLocalGateway,
+		ambient,
 	});
 
 	// Before send and respond: both push through its mirrorPeer and deliverToOwner.
 	const consolePush = createHumanNotifyRoutes({
 		dataDir: deps.dataDir,
 		config,
-		now,
-		newId: deps.newId,
+		ambient,
 		ownerId: deps.ownerId,
 		ownerSignPub: deps.ownerSignPub,
 		producerSignPriv: deps.producerSignPriv,
@@ -151,6 +152,7 @@ export function createRoutes(deps: RoutesDeps) {
 
 	const { fetchBlobFromGateway } = createBlobRoutes({
 		config,
+		ambient,
 		blobStore: deps.blobStore,
 		crossDomainPeers: deps.crossDomainPeers,
 		contentKeyStore: deps.contentKeyStore,
@@ -190,6 +192,7 @@ export function createRoutes(deps: RoutesDeps) {
 		capabilityStore: deps.capabilityStore,
 		daemonCapabilityStore: deps.daemonCapabilityStore,
 		routerClient: deps.routerClient,
+		ambient,
 	});
 	const { localSpawnPoints, discoverFull, discover } = createPresenceRoutes({
 		config,
@@ -201,7 +204,7 @@ export function createRoutes(deps: RoutesDeps) {
 	const { send } = createSendRoutes({
 		config,
 		localDomain,
-		now,
+		ambient,
 		registry: deps.registry,
 		conversationRegistry: deps.conversationRegistry,
 		store,
@@ -224,6 +227,7 @@ export function createRoutes(deps: RoutesDeps) {
 	});
 	const { respond, poll } = createRespondRoutes({
 		config,
+		ambient,
 		localDomain,
 		registry: deps.registry,
 		conversationRegistry: deps.conversationRegistry,

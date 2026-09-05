@@ -1,3 +1,4 @@
+import type { Clock } from "./ambient.js";
 import { DurableOutbox } from "./durable-outbox.js";
 import { fenced, MIGRATING } from "./migration-fence.js";
 import type { ChannelFile, RidingAwareness } from "./types.js";
@@ -40,11 +41,11 @@ export class PendingDeliveryStore {
 	private readonly outbox: DurableOutbox<PendingDelivery>;
 
 	constructor(
-		durable?: DeliverySnapshotSink,
+		durable: DeliverySnapshotSink | undefined,
+		private readonly ambient: Clock,
 		private readonly ttlMs: number = PENDING_DELIVERY_TTL_MS,
 		private readonly maxPerTeam: number = MAX_PENDING_DELIVERIES_PER_TEAM,
 		maxTotal: number = MAX_PENDING_DELIVERIES,
-		private readonly now: () => number = Date.now,
 	) {
 		this.outbox = new DurableOutbox({
 			durable,
@@ -92,7 +93,7 @@ export class PendingDeliveryStore {
 
 	sweep(): PendingDelivery[] | typeof MIGRATING {
 		if (fenced()) return MIGRATING;
-		const cutoff = this.now() - this.ttlMs;
+		const cutoff = this.ambient.now() - this.ttlMs;
 		return this.outbox.retireWhere((delivery) => delivery.enqueuedAt <= cutoff);
 	}
 

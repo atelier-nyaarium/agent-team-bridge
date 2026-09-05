@@ -1,5 +1,6 @@
 // Cross-Domain presence: per-destination outbound push coalescing and retry.
 
+import type { Ambient, TimerHandle } from "../../shared/ambient.js";
 import type { PresenceForDomain } from "./crossDomainPresenceSource.js";
 
 type PendingPush = { sessions: PresenceForDomain; token: number };
@@ -27,9 +28,10 @@ export interface CoalescedPusher {
  * rather than re-invented. */
 export function createCoalescedPresencePusher(
 	sendOnce: (domainId: string, sessions: PresenceForDomain) => Promise<{ ok: boolean; error?: string }>,
+	deps: { ambient: Pick<Ambient, "setTimer" | "clearTimer"> },
 ): CoalescedPusher {
 	const pending = new Map<string, PendingPush>();
-	const retries = new Set<ReturnType<typeof setTimeout>>();
+	const retries = new Set<TimerHandle>();
 	let nextToken = 0;
 
 	// `token` identifies which `pending` GENERATION this specific attempt() call belongs to - not
@@ -69,7 +71,7 @@ export function createCoalescedPresencePusher(
 					pending.delete(domainId);
 					return;
 				}
-				const retry = setTimeout(
+				const retry = deps.ambient.setTimer(
 					() => {
 						retries.delete(retry);
 						attempt(domainId, attemptNum + 1, token);
@@ -82,7 +84,7 @@ export function createCoalescedPresencePusher(
 
 	return {
 		stop: () => {
-			for (const retry of retries) clearTimeout(retry);
+			for (const retry of retries) deps.ambient.clearTimer(retry);
 			retries.clear();
 			pending.clear();
 		},

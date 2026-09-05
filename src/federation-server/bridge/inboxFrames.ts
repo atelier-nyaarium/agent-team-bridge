@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { DomainSnapshot } from "../../shared/admission.js";
+import type { Ambient, TimerHandle } from "../../shared/ambient.js";
 import { parseBlobReference } from "../../shared/blob-reference.js";
 import {
 	BlobBeginParamsSchema,
@@ -50,6 +51,7 @@ type WSLike = ReturnType<GatewayTransport["getConnection"]>;
 
 export interface InboxFramesDeps {
 	inbox: InboxService | null;
+	ambient: Pick<Ambient, "setTimer" | "clearTimer">;
 	hasLinkEdge: (srcDomainId: string, dstDomainId: string) => boolean;
 	getDomain: (domainId: string) => DomainSnapshot | null;
 	blobCache: RouterBlobCache | null;
@@ -69,7 +71,7 @@ export class InboxFrames {
 	private ownerRowPush: ((domainId: string, row: InboxRow) => void) | null = null;
 	private pendingValues = new Map<
 		string,
-		{ resolve: (result: unknown) => void; timer: ReturnType<typeof setTimeout>; connId: ConnectionId }[]
+		{ resolve: (result: unknown) => void; timer: TimerHandle; connId: ConnectionId }[]
 	>();
 
 	constructor(private readonly deps: InboxFramesDeps) {}
@@ -327,7 +329,7 @@ export class InboxFrames {
 		if (!connId || !reg || reg.incarnation === null || !ws) return Promise.resolve({ outcome: "unreachable" });
 		const key = `${domainId}/${params.gatewayId}/${params.conversationId}/${params.opId}`;
 		return new Promise((resolve) => {
-			const timer = setTimeout(() => {
+			const timer = this.deps.ambient.setTimer(() => {
 				const waiters = this.pendingValues.get(key) ?? [];
 				const remaining = waiters.filter((waiter) => waiter.resolve !== resolve);
 				if (remaining.length) this.pendingValues.set(key, remaining);
@@ -338,7 +340,7 @@ export class InboxFrames {
 			try {
 				ws.send(JSON.stringify({ type: "value_op", ...params, incarnation: reg.incarnation }));
 			} catch {
-				clearTimeout(timer);
+				this.deps.ambient.clearTimer(timer);
 				const waiters = this.pendingValues.get(key) ?? [];
 				const remaining = waiters.filter((waiter) => waiter.resolve !== resolve);
 				if (remaining.length) this.pendingValues.set(key, remaining);
@@ -358,7 +360,7 @@ export class InboxFrames {
 		const pending = this.pendingValues.get(key);
 		if (!pending || pending.every((waiter) => waiter.connId !== connId))
 			return { settled: false, reason: GATEWAY_REASON_NO_WAITER };
-		for (const waiter of pending) clearTimeout(waiter.timer);
+		for (const waiter of pending) this.deps.ambient.clearTimer(waiter.timer);
 		this.pendingValues.delete(key);
 		for (const waiter of pending) waiter.resolve(parsed.data.result);
 		return { settled: true };
@@ -371,7 +373,7 @@ export class InboxFrames {
 			if (remaining.length === pending.length) continue;
 			for (const waiter of pending) {
 				if (waiter.connId !== connId) continue;
-				clearTimeout(waiter.timer);
+				this.deps.ambient.clearTimer(waiter.timer);
 				waiter.resolve({ outcome: "unreachable" });
 			}
 			if (remaining.length) this.pendingValues.set(key, remaining);
@@ -382,7 +384,7 @@ export class InboxFrames {
 	stop(): void {
 		for (const pending of this.pendingValues.values()) {
 			for (const waiter of pending) {
-				clearTimeout(waiter.timer);
+				this.deps.ambient.clearTimer(waiter.timer);
 				waiter.resolve({ outcome: "timeout" });
 			}
 		}

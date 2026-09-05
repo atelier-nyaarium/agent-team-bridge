@@ -1,3 +1,4 @@
+import type { Clock } from "../../shared/ambient.js";
 import { capFifo } from "../../shared/cap-fifo.js";
 
 ////////////////////////////////
@@ -16,10 +17,14 @@ export class ReplayGuard {
 	private readonly seen = new Map<string, number>();
 
 	public constructor(
+		private readonly ambient: Clock,
 		private readonly ttlMs: number = 300_000,
 		private readonly maxEntries: number = 50_000,
-		private readonly now: () => number = Date.now,
 	) {}
+
+	private now(): number {
+		return this.ambient.now();
+	}
 
 	/** Record (scope, nonce) and return true if it is fresh, or false if it was
 	 * seen within the window (a replay). */

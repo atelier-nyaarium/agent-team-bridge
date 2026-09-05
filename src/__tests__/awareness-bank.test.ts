@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { createAwarenessBank, isNoAckSessionId } from "../gateway/awarenessBank.js";
+import { processAmbient } from "../shared/ambient.js";
 import type { ChannelPushPayload } from "../shared/types.js";
+import { fakeAmbient } from "../testing/fakeAmbient.js";
 
 describe("awareness bank", () => {
 	it("keeps the first pre and last post, and drains once", () => {
 		const seen: { pre?: string; post?: string }[] = [];
-		const bank = createAwarenessBank({ liveness: () => "live", deliver: () => true });
+		const bank = createAwarenessBank({ liveness: () => "live", deliver: () => true, ambient: processAmbient() });
 		const observe = bank.register<string>({
 			source: "fake",
 			act: () => "no_act",
@@ -28,7 +30,7 @@ describe("awareness bank", () => {
 		let now = 1000;
 		const bank = createAwarenessBank({
 			liveness: () => "live",
-			now: () => now,
+			ambient: fakeAmbient({ now: () => now }),
 			deliver: (_s, payload) => {
 				sent.push(payload);
 				return true;
@@ -55,7 +57,7 @@ describe("awareness bank", () => {
 		let now = 0;
 		const sent: ChannelPushPayload[] = [];
 		const bank = createAwarenessBank({
-			now: () => now,
+			ambient: fakeAmbient({ now: () => now }),
 			liveness: () => "live",
 			deliver: (_s, p) => {
 				sent.push(p);
@@ -79,7 +81,7 @@ describe("awareness bank", () => {
 		let now = 0;
 		const sent: ChannelPushPayload[] = [];
 		const bank = createAwarenessBank({
-			now: () => now,
+			ambient: fakeAmbient({ now: () => now }),
 			liveness: () => "live",
 			deliver: (_s, p) => {
 				sent.push(p);
@@ -100,7 +102,7 @@ describe("awareness bank", () => {
 		let now = 0;
 		const sent: ChannelPushPayload[] = [];
 		const bank = createAwarenessBank({
-			now: () => now,
+			ambient: fakeAmbient({ now: () => now }),
 			liveness: () => "live",
 			deliver: (_s, p) => {
 				sent.push(p);
@@ -126,7 +128,7 @@ describe("awareness bank", () => {
 		let now = 0;
 		const sent: ChannelPushPayload[] = [];
 		const bank = createAwarenessBank({
-			now: () => now,
+			ambient: fakeAmbient({ now: () => now }),
 			liveness: () => "live",
 			deliver: (_s, p) => {
 				sent.push(p);
@@ -151,7 +153,7 @@ describe("awareness bank", () => {
 		let now = 0;
 		const sent: ChannelPushPayload[] = [];
 		const bank = createAwarenessBank({
-			now: () => now,
+			ambient: fakeAmbient({ now: () => now }),
 			liveness: () => "waking",
 			deliver: (_s, p) => {
 				sent.push(p);
@@ -171,7 +173,7 @@ describe("awareness bank", () => {
 		let live = false;
 		const sent: ChannelPushPayload[] = [];
 		const bank = createAwarenessBank({
-			now: () => now,
+			ambient: fakeAmbient({ now: () => now }),
 			liveness: () => (live ? "live" : "waking"),
 			deliver: (_s, p) => {
 				sent.push(p);
@@ -197,7 +199,7 @@ describe("awareness bank", () => {
 		let now = 0;
 		let attempts = 0;
 		const bank = createAwarenessBank({
-			now: () => now,
+			ambient: fakeAmbient({ now: () => now }),
 			liveness: () => "live",
 			deliver: () => {
 				attempts++;
@@ -218,7 +220,7 @@ describe("awareness bank", () => {
 		let now = 0;
 		const deliveredTo: string[] = [];
 		const bank = createAwarenessBank({
-			now: () => now,
+			ambient: fakeAmbient({ now: () => now }),
 			liveness: () => "live",
 			deliver: (sessionKey) => {
 				deliveredTo.push(sessionKey);
@@ -246,6 +248,7 @@ describe("awareness bank", () => {
 				sent.push(p);
 				return true;
 			},
+			ambient: processAmbient(),
 		});
 		const observe = bank.register<string>({ source: "fake", act: () => "no_act", render: () => "body" });
 		// No deadline is needed for awareness that can ride a later message.
@@ -255,7 +258,7 @@ describe("awareness bank", () => {
 	});
 
 	it("combines sources and omits empty subscribers", () => {
-		const bank = createAwarenessBank({ liveness: () => "live", deliver: () => true });
+		const bank = createAwarenessBank({ liveness: () => "live", deliver: () => true, ambient: processAmbient() });
 		const first = bank.register<string>({ source: "one", act: () => "no_act", render: () => "one" });
 		const second = bank.register<string>({ source: "two", act: () => "no_act", render: () => "two" });
 		const empty = bank.register<string>({ source: "empty", act: () => "no_act", render: () => "" });
@@ -271,7 +274,7 @@ describe("awareness bank", () => {
 		const sent: ChannelPushPayload[] = [];
 		const bank = createAwarenessBank({
 			liveness: () => (live ? "live" : "waking"),
-			now: () => 0,
+			ambient: fakeAmbient({ now: () => 0 }),
 			deliver: (_s, p) => {
 				sent.push(p);
 				return true;
@@ -290,7 +293,7 @@ describe("awareness bank", () => {
 		const sent: ChannelPushPayload[] = [];
 		const bank = createAwarenessBank({
 			liveness: () => (live ? "live" : "gone"),
-			now: () => 0,
+			ambient: fakeAmbient({ now: () => 0 }),
 			deliver: (_s, p) => {
 				sent.push(p);
 				return true;

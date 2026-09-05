@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createInboxClaims } from "../gateway/router/inboxClaims.js";
 import { createInboxDeliveryPump } from "../gateway/router/inboxDeliveryPump.js";
+import { processAmbient } from "../shared/ambient.js";
 import { inboxBodyAadKind, opPayloadAadKind } from "../shared/content-envelope.js";
 import { generateIdentity } from "../shared/crypto.js";
 import type { PendingDelivery } from "../shared/pending-delivery-store.js";
@@ -31,7 +32,7 @@ const row = (
 const setup = (root = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-pump-"))) => {
 	if (!roots.includes(root)) roots.push(root);
 	const calls: Array<{ action: string; params: Record<string, unknown> }> = [];
-	const claims = createInboxClaims(root);
+	const claims = createInboxClaims(root, processAmbient());
 	const coordinator = {
 		accepted: [] as PendingDelivery[],
 		accept(value: PendingDelivery) {

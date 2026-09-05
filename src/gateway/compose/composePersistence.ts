@@ -1,5 +1,6 @@
 // Stage 4: the flush every writer takes part in, and the periodic tick that runs it.
 
+import type { Ambient, IntervalHandle } from "../../shared/ambient.js";
 import { createPersistRunner } from "../../shared/durable-store.js";
 import { fenced, MIGRATION_SETTLE_MS } from "../../shared/migration-fence.js";
 import { resolveLiveIncarnation } from "../websocket.js";
@@ -11,7 +12,7 @@ const SESSION_RESUME_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const MAX_SESSION_RESUME_ENTRIES = 2_000;
 
 export interface PersistenceStageDeps {
-	now: () => number;
+	ambient: Pick<Ambient, "now" | "setInterval">;
 	stores: StoresStage;
 	sessions: SessionsStage;
 	context: FederationContext;
@@ -20,10 +21,10 @@ export interface PersistenceStageDeps {
 export interface PersistenceStage {
 	/** Runs every writer's step in order. A clean shutdown writes checked snapshots. */
 	persistDelivery: (cleanShutdown: boolean) => void;
-	persistTimer: ReturnType<typeof setInterval>;
+	persistTimer: IntervalHandle;
 }
 
-export function composePersistence({ now, stores, sessions, context }: PersistenceStageDeps): PersistenceStage {
+export function composePersistence({ ambient, stores, sessions, context }: PersistenceStageDeps): PersistenceStage {
 	const runPersistSteps = createPersistRunner();
 	const persistDelivery = (cleanShutdown: boolean) =>
 		runPersistSteps([
@@ -70,20 +71,19 @@ export function composePersistence({ now, stores, sessions, context }: Persisten
 	// Shutdown flush persists under the fence. Shut down before cutting.
 	let fencedSince: number | null = null;
 	let settled = false;
-	const persistTimer = setInterval(() => {
+	const persistTimer = ambient.setInterval(() => {
 		if (!fenced()) {
 			fencedSince = null;
 			settled = false;
 			persistDelivery(false);
 			return;
 		}
-		fencedSince ??= now();
-		if (settled || now() - fencedSince < MIGRATION_SETTLE_MS) return;
+		fencedSince ??= ambient.now();
+		if (settled || ambient.now() - fencedSince < MIGRATION_SETTLE_MS) return;
 		settled = true;
 		const dropped = stores.durableOpStore.failInFlight(true);
 		console.log(`[migration] settled: ${dropped} in-flight op(s) dropped for the client to re-run`);
 	}, 3_000);
-	persistTimer.unref?.();
 
 	return { persistDelivery, persistTimer };
 }

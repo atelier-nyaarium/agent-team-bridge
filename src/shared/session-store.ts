@@ -1,3 +1,4 @@
+import type { Clock } from "./ambient.js";
 import {
 	type CodexAgentCatalog,
 	CodexAgentCatalogSchema,
@@ -86,7 +87,7 @@ export interface SweepCap {
 
 export interface SessionStoreOptions {
 	clash?: ClashPredicate;
-	now?: () => number;
+	ambient: Clock;
 	idGen?: () => string;
 	tokenGen?: () => string;
 	codexCatalogPersistence?: {
@@ -211,9 +212,9 @@ export class SessionStore {
 	private readonly idGen: () => string;
 	private readonly tokenGen: () => string;
 
-	constructor(opts: SessionStoreOptions = {}) {
+	constructor(opts: SessionStoreOptions) {
 		this.clash = opts.clash ?? (() => false);
-		this.now = opts.now ?? (() => Date.now());
+		this.now = () => opts.ambient.now();
 		this.idGen = opts.idGen ?? randomId;
 		this.tokenGen = opts.tokenGen ?? randomBindToken;
 		if (opts.codexCatalogPersistence) {

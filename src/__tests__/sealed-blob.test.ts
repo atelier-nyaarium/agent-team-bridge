@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createBlobFetcher } from "../gateway/blobFetch.js";
+import { processAmbient } from "../shared/ambient.js";
 import { BlobStore, blobIdFor } from "../shared/blob-store.js";
 import { contentAad } from "../shared/content-envelope.js";
 import { BLOB_CHUNK_BYTES } from "../shared/router-protocol.js";
@@ -104,6 +105,7 @@ describe("sealed blob framing", () => {
 		const frame = sealBlobChunk(wrong, key, { ...base, blobId: claimed }, 0, true);
 		const fetcher = createBlobFetcher({
 			blobStore: store,
+			ambient: processAmbient(),
 			localGatewayId: "reader",
 			relayToGateway: async () => ({ ok: false }),
 			inFlight: new Map(),

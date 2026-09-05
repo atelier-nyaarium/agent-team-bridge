@@ -1,5 +1,6 @@
 // Stage 12b: the cross-Domain presence pipeline, and the teardown an unlink or untrust runs.
 
+import type { Ambient, IntervalHandle } from "../../shared/ambient.js";
 import type { CrossDomainUnlinkResult } from "../../shared/console-protocol.js";
 import type { FederationSlice, RouterPresenceHandlers } from "../boot.js";
 import { createCoalescedPresencePusher } from "../federation/crossDomainPresencePusher.js";
@@ -12,6 +13,7 @@ import type { StoresStage } from "./composeStores.js";
 import type { FederationContext } from "./federationContext.js";
 
 export interface RouterPresenceStageDeps {
+	ambient: Ambient;
 	context: FederationContext;
 	stores: StoresStage;
 	sessions: SessionsStage;
@@ -30,12 +32,13 @@ export interface RouterPresenceStage {
 }
 
 export function composeRouterPresence(deps: RouterPresenceStageDeps): RouterPresenceStage {
-	const { context, stores, sessions, routes } = deps;
-	let reconcilerTimer: ReturnType<typeof setInterval> | null = null;
+	const { ambient, context, stores, sessions, routes } = deps;
+	let reconcilerTimer: IntervalHandle | null = null;
 
 	function build(slice: FederationSlice): RouterPresenceBuild {
-		const presencePusher = createCoalescedPresencePusher((domainId, sessionRows) =>
-			routes().pushPresenceToDomain(domainId, sessionRows),
+		const presencePusher = createCoalescedPresencePusher(
+			(domainId, sessionRows) => routes().pushPresenceToDomain(domainId, sessionRows),
+			{ ambient },
 		);
 		const presenceSource = createCrossDomainPresenceSource({
 			planeRegistry: sessions.planeRegistry,
@@ -60,8 +63,7 @@ export function composeRouterPresence(deps: RouterPresenceStageDeps): RouterPres
 			pull: (domainId) => routes().pullPresenceFromDomain(domainId),
 			land: (domainId, sessionRows) => sessions.crossDomainPresenceConsumer.land(domainId, sessionRows),
 		});
-		reconcilerTimer = setInterval(() => reconciler.tick(), 10_000);
-		reconcilerTimer.unref?.();
+		reconcilerTimer = ambient.setInterval(() => reconciler.tick(), 10_000);
 
 		const forgetDomain = (domainId: string): void => {
 			presenceSource.teardown(domainId);
@@ -102,7 +104,7 @@ export function composeRouterPresence(deps: RouterPresenceStageDeps): RouterPres
 	return {
 		build,
 		stop: () => {
-			if (reconcilerTimer) clearInterval(reconcilerTimer);
+			if (reconcilerTimer) ambient.clearInterval(reconcilerTimer);
 		},
 	};
 }

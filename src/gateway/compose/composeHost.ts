@@ -1,6 +1,7 @@
 // Stage 5: the host daemon socket and everything routed over it.
 
 import type { ServerWebSocket } from "bun";
+import type { Ambient, IntervalHandle } from "../../shared/ambient.js";
 import type { HostOp, HostOpResult } from "../../shared/host-op.js";
 import { HostOpCoordinator } from "../hostOpCoordinator.js";
 import { WakeCoordinator } from "../wake.js";
@@ -13,7 +14,7 @@ const HOST_OP_TIMEOUT_MS = 20_000;
 export interface HostStageDeps {
 	sessions: SessionsStage;
 	wakeTimeoutMs: number;
-	randomBytes: (size: number) => Buffer;
+	ambient: Ambient;
 }
 
 export interface HostStage {
@@ -24,12 +25,12 @@ export interface HostStage {
 	relayToHost: (op: HostOp) => Promise<HostOpResult>;
 	/** Re-sends the watch list; `force` re-sends an unchanged one. */
 	pushPresenceWatch: (force?: boolean) => void;
-	presenceWatchTimer: ReturnType<typeof setInterval>;
+	presenceWatchTimer: IntervalHandle;
 }
 
-export function composeHost({ sessions, wakeTimeoutMs, randomBytes }: HostStageDeps): HostStage {
-	const wakeCoordinator = new WakeCoordinator();
-	const hostOpCoordinator = new HostOpCoordinator();
+export function composeHost({ sessions, wakeTimeoutMs, ambient }: HostStageDeps): HostStage {
+	const wakeCoordinator = new WakeCoordinator(ambient);
+	const hostOpCoordinator = new HostOpCoordinator(ambient);
 
 	function liveHostSocket(): ServerWebSocket<WsData> | undefined {
 		const hostSubs = sessions.registry.get("host");
@@ -51,7 +52,7 @@ export function composeHost({ sessions, wakeTimeoutMs, randomBytes }: HostStageD
 	async function relayToHost(op: HostOp): Promise<HostOpResult> {
 		const hostWs = liveHostSocket();
 		if (!hostWs) return { ok: false, error: "host daemon offline - terminal unavailable" };
-		const reqId = randomBytes(8).toString("hex");
+		const reqId = ambient.randomBytes(8).toString("hex");
 		hostWs.send(JSON.stringify({ type: "host_op", reqId, op }));
 		return hostOpCoordinator.wait(reqId, HOST_OP_TIMEOUT_MS);
 	}
@@ -70,8 +71,7 @@ export function composeHost({ sessions, wakeTimeoutMs, randomBytes }: HostStageD
 		lastPushedWatch = serialized;
 		hostWs.send(JSON.stringify({ type: "presence_watch", watch }));
 	}
-	const presenceWatchTimer = setInterval(() => pushPresenceWatch(), 2_000);
-	presenceWatchTimer.unref?.();
+	const presenceWatchTimer = ambient.setInterval(() => pushPresenceWatch(), 2_000);
 
 	return {
 		liveHostSocket,

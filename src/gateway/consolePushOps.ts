@@ -1,5 +1,5 @@
-import crypto from "node:crypto";
 import { z } from "zod";
+import type { Ambient } from "../shared/ambient.js";
 import { canonicalJson, sha256Hex } from "../shared/canonical-json.js";
 import { inboxBodyAadKind } from "../shared/content-envelope.js";
 import { DurableOutbox } from "../shared/durable-outbox.js";
@@ -47,8 +47,7 @@ export interface ConsolePushOpsDeps {
 	localAddress: (name: string) => Address;
 	cacheBlobs?: ((blobIds: readonly string[]) => void) | null;
 	refuseImpersonation: (req: Request, claimed: string, scope: CallerScope) => Response | null;
-	now?: () => number;
-	newId?: () => string;
+	ambient: Pick<Ambient, "now" | "newId" | "setInterval" | "clearInterval">;
 }
 
 type OwnerRowOutboxItem = {
@@ -79,9 +78,10 @@ export function createConsolePushOps({
 	localAddress,
 	cacheBlobs,
 	refuseImpersonation,
-	now = Date.now,
-	newId = crypto.randomUUID,
+	ambient,
 }: ConsolePushOpsDeps) {
+	const now = () => ambient.now();
+	const newId = () => ambient.newId();
 	const outboxStore = new DurableStore(dataDir, "owner-row-outbox");
 	const opKeyOf = (item: OwnerRowOutboxItem) => JSON.stringify([sha256Hex(item.entry.session_id ?? ""), item.opId]);
 	const OutboxItemsSchema = z.array(
@@ -206,9 +206,8 @@ export function createConsolePushOps({
 		});
 	}
 
-	const drainTimer = setInterval(() => void drainOutbox(), 1000);
-	drainTimer.unref?.();
-	const stop = (): void => clearInterval(drainTimer);
+	const drainTimer = ambient.setInterval(() => void drainOutbox(), 1000);
+	const stop = (): void => ambient.clearInterval(drainTimer);
 
 	function deliverToOwner({ entry, dedupeKey, label = "deliver" }: DeliverToOwnerOptions): DeliverToOwnerResult {
 		if (fenced()) {

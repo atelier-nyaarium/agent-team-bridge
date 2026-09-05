@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import type { Ambient } from "../../shared/ambient.js";
 import type { BlobStore } from "../../shared/blob-store.js";
 import { BLOB_CHUNK_BYTES, BLOB_CIPHERTEXT_CHUNK_BYTES, BLOB_NONCE_BYTES } from "../../shared/router-protocol.js";
 import { sealBlobChunk, sealedBlobChunkCount, sealedBlobSize } from "../../shared/sealed-blob.js";
@@ -11,6 +12,7 @@ export interface BlobUploaderDeps {
 	incarnation: () => number | null;
 	domainId: string;
 	ownerSignPub: () => string | null;
+	ambient: Pick<Ambient, "randomBytes">;
 	keys: {
 		epochs(): number[];
 		keyFor(epoch: number): Buffer | null;
@@ -47,7 +49,7 @@ export function createBlobUploader(deps: BlobUploaderDeps) {
 		for (let index = 0; index < sealedBlobChunkCount(size); index++) {
 			const offset = index * BLOB_CHUNK_BYTES;
 			const length = Math.min(BLOB_CHUNK_BYTES, size - offset);
-			const nonce = crypto.randomBytes(BLOB_NONCE_BYTES);
+			const nonce = deps.ambient.randomBytes(BLOB_NONCE_BYTES);
 			nonces.push(nonce);
 			const read = length === 0 ? { bytes: Buffer.alloc(0) } : deps.blobs.read(blobId, offset, length);
 			hash.update(

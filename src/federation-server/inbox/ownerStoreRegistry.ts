@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import type { Clock } from "../../shared/ambient.js";
 import type { DomainQuota } from "../owner/domainQuota.js";
 import { type OwnerKey, OwnerStateStore } from "../owner/ownerStateStore.js";
 
@@ -18,16 +19,16 @@ export class OwnerStoreRegistry {
 		dataDir: string;
 		ownerOf: (domainId: string) => string | null;
 		quotaFor: (domainId: string) => DomainQuota;
-		now: () => number;
+		ambient: Clock;
 	};
 
 	constructor(opts: {
 		dataDir: string;
 		ownerOf: (domainId: string) => string | null;
 		quotaFor: (domainId: string) => DomainQuota;
-		now?: () => number;
+		ambient: Clock;
 	}) {
-		this.opts = { ...opts, now: opts.now ?? Date.now };
+		this.opts = opts;
 	}
 
 	ownerKey(domainId: string): OwnerKey {
@@ -37,7 +38,7 @@ export class OwnerStoreRegistry {
 	}
 
 	now(): number {
-		return this.opts.now();
+		return this.opts.ambient.now();
 	}
 
 	domains(): string[] {
@@ -70,7 +71,7 @@ export class OwnerStoreRegistry {
 			dataDir: this.opts.dataDir,
 			key,
 			quota: this.opts.quotaFor(domainId),
-			now: this.opts.now,
+			ambient: this.opts.ambient,
 		});
 		this.stores.set(domainId, store);
 		return store;

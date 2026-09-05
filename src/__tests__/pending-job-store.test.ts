@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { processAmbient } from "../shared/ambient.js";
 import { PendingJobStore, type WaitResult } from "../shared/pending-job-store.js";
 import { Address, storeKey } from "../shared/session-id.js";
 
@@ -37,7 +38,7 @@ function sessionTarget(spawn: string, session = "dev"): string {
 describe("PendingJobStore.expireByDomain", () => {
 	it("notifies only for cross-Domain job lifecycle changes", () => {
 		let changes = 0;
-		const store = new PendingJobStore<string>(600_000, () => changes++);
+		const store = new PendingJobStore<string>(600_000, processAmbient(), () => changes++);
 		const route = { srcGateway: "alice-gw", srcConversationId: "c1", srcSession: "s1" };
 
 		store.create("local", "a", "b", { persistent: true });
@@ -52,7 +53,7 @@ describe("PendingJobStore.expireByDomain", () => {
 	});
 
 	it("settles only matching-dstDomainId jobs and returns the count", () => {
-		const store = new PendingJobStore<string>();
+		const store = new PendingJobStore<string>(600_000, processAmbient());
 		const carol1 = convKey("c1", "lib");
 		const carol2 = convKey("c2", "docs");
 		const dave1 = convKey("c3", "app"); // a DIFFERENT Domain
@@ -72,7 +73,7 @@ describe("PendingJobStore.expireByDomain", () => {
 	});
 
 	it("settles the waiting promise with a clear expiry error", async () => {
-		const store = new PendingJobStore<string>();
+		const store = new PendingJobStore<string>(600_000, processAmbient());
 		const carol = convKey("c1", "lib");
 		store.create(carol, "a", "b", { dstDomainId: "carol" });
 
@@ -90,7 +91,7 @@ describe("PendingJobStore.expireByDomain", () => {
 	});
 
 	it("uses a caller-supplied error message when given", async () => {
-		const store = new PendingJobStore<string>();
+		const store = new PendingJobStore<string>(600_000, processAmbient());
 		const carol = convKey("c1", "lib");
 		store.create(carol, "a", "b", { dstDomainId: "carol" });
 
@@ -106,7 +107,7 @@ describe("PendingJobStore.expireByDomain", () => {
 	});
 
 	it("leaves a same-Domain job's waiter untouched", async () => {
-		const store = new PendingJobStore<string>();
+		const store = new PendingJobStore<string>(600_000, processAmbient());
 		const carol = convKey("c1", "lib");
 		const dave = convKey("c2", "docs");
 		store.create(carol, "a", "b", { dstDomainId: "carol" });
@@ -129,7 +130,7 @@ describe("PendingJobStore.expireByDomain", () => {
 	});
 
 	it("returns 0 when no job is bound to the Domain", () => {
-		const store = new PendingJobStore<string>();
+		const store = new PendingJobStore<string>(600_000, processAmbient());
 		const local1 = convKey("c1", "lib");
 		const dave = convKey("c2", "docs");
 		store.create(local1, "a", "b"); // local
@@ -140,7 +141,7 @@ describe("PendingJobStore.expireByDomain", () => {
 	});
 
 	it("expires a stored (not-yet-polled) cross-Domain job too", () => {
-		const store = new PendingJobStore<string>();
+		const store = new PendingJobStore<string>(600_000, processAmbient());
 		// A persistent cross-Domain job that already received and stored a reply.
 		const carolConv = convKey("c1", "lib");
 		store.create(carolConv, "a", "b", { dstDomainId: "carol", persistent: true });
@@ -171,7 +172,7 @@ describe("PendingJobStore.expireBySession", () => {
 	}
 
 	it("expires ONLY the matching (session, friend) jobs; other sessions and friends survive", () => {
-		const store = new PendingJobStore<string>();
+		const store = new PendingJobStore<string>(600_000, processAmbient());
 		const libForAlice = destJob(store, "c1", "lib", "alice"); // the un-shared pair
 		const docsForAlice = destJob(store, "c2", "docs", "alice"); // same friend, OTHER session
 		const libForCarol = destJob(store, "c3", "lib", "carol"); // same session, OTHER friend
@@ -185,7 +186,7 @@ describe("PendingJobStore.expireBySession", () => {
 	});
 
 	it("settles a waiting reply for the un-shared session with a clear reason", async () => {
-		const store = new PendingJobStore<string>();
+		const store = new PendingJobStore<string>(600_000, processAmbient());
 		const id = destJob(store, "c1", "lib", "alice");
 
 		let settled: WaitResult<string> | null = null;
@@ -201,7 +202,7 @@ describe("PendingJobStore.expireBySession", () => {
 	});
 
 	it("does NOT match a job for the same session bound to a DIFFERENT friend Domain", async () => {
-		const store = new PendingJobStore<string>();
+		const store = new PendingJobStore<string>(600_000, processAmbient());
 		const id = destJob(store, "c1", "lib", "carol"); // lib<->carol still shared
 
 		let settled = false;
@@ -218,7 +219,7 @@ describe("PendingJobStore.expireBySession", () => {
 	});
 
 	it("ignores a local / same-Domain job (dstDomainId null) for the same session name", () => {
-		const store = new PendingJobStore<string>();
+		const store = new PendingJobStore<string>(600_000, processAmbient());
 		// A local channel anchor for the same canonical session, no Domain binding.
 		const local = convKey("c1", "lib");
 		store.create(local, "x", "lib");
@@ -227,7 +228,7 @@ describe("PendingJobStore.expireBySession", () => {
 	});
 
 	it("returns 0 when no job matches", () => {
-		const store = new PendingJobStore<string>();
+		const store = new PendingJobStore<string>(600_000, processAmbient());
 		destJob(store, "c1", "lib", "alice");
 		expect(store.expireBySession(sessionTarget("ghost"), "alice")).toBe(0);
 		expect(store.expireBySession(sessionTarget("lib"), "dave")).toBe(0);

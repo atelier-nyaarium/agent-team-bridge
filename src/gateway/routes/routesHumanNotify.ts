@@ -1,3 +1,4 @@
+import type { Ambient } from "../../shared/ambient.js";
 import type { Address } from "../../shared/session-id.js";
 import type { GatewayConfig } from "../../shared/types.js";
 import { createConsolePushOps } from "../consolePushOps.js";
@@ -6,8 +7,7 @@ import type { CallerScope } from "./callerGuards.js";
 export interface HumanNotifyRoutesDeps {
 	dataDir: string;
 	config: GatewayConfig;
-	now: () => number;
-	newId?: () => string;
+	ambient: Pick<Ambient, "now" | "newId" | "setInterval" | "clearInterval">;
 	// This Gateway's own Domain owner id (a hash of the owner's signing key), used to key the.
 	ownerId?: (() => string | null) | null;
 	ownerSignPub?: (() => string | null) | null;
@@ -22,8 +22,7 @@ export interface HumanNotifyRoutesDeps {
 export function createHumanNotifyRoutes({
 	dataDir,
 	config,
-	now,
-	newId,
+	ambient,
 	ownerId,
 	ownerSignPub,
 	producerSignPriv,
@@ -44,8 +43,7 @@ export function createHumanNotifyRoutes({
 		contentKeyStore,
 		localGatewayId: config.localGatewayId,
 		localAddress,
-		now,
-		newId,
+		ambient,
 		// Caught here, or a failed copy surfaces as a bare unhandledRejection instead of the uploader's.
 		cacheBlobs: blobUploader
 			? (blobIds) => {

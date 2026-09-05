@@ -1,3 +1,4 @@
+import type { Clock } from "../../shared/ambient.js";
 import type { Capability, CapabilitySnapshot } from "../../shared/capabilities.js";
 import type { CapabilityFoldRecord } from "../../shared/capability-fold.js";
 import { admit, foldCapabilitySnapshot } from "../../shared/capability-fold.js";
@@ -57,10 +58,14 @@ export class CapabilityStore {
 
 	constructor(
 		private readonly durable: DurableStore,
+		private readonly ambient: Clock,
 		private readonly ttlMs: number = DEFAULT_TTL_MS,
-		private readonly now: () => number = () => Date.now(),
 	) {
 		this.restore();
+	}
+
+	private now(): number {
+		return this.ambient.now();
 	}
 
 	/** Record what a device reports at register. Absent (rather than empty) means the device said

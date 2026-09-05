@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import type { Ambient, TimerHandle } from "../../shared/ambient.js";
 import { signKeyReceipt, signKeyRequest } from "../../shared/content-envelope.js";
 import type { KeyReceipt, KeyRequest } from "../../shared/schemasContentKey.js";
 import { WIRE_NONCE_BYTES } from "../../shared/wire-vocabulary.js";
@@ -14,20 +14,17 @@ export interface KeyRequesterDeps {
 	gatewaySignPriv: string;
 	send: (action: string, params: Record<string, unknown>) => Promise<unknown>;
 	onError: (message: string) => void;
-	now?: () => number;
-	randomBytes?: (size: number) => Buffer;
-	setTimeout?: (handler: () => void, timeout: number) => ReturnType<typeof setTimeout> | number;
-	clearTimeout?: (timer: ReturnType<typeof setTimeout> | number) => void;
+	ambient: Pick<Ambient, "now" | "randomBytes" | "setTimer" | "clearTimer">;
 }
 
 export function createKeyRequester(deps: KeyRequesterDeps) {
-	const now = deps.now ?? Date.now;
-	const random = deps.randomBytes ?? randomBytes;
-	const setTimer = deps.setTimeout ?? setTimeout;
-	const clearTimer = deps.clearTimeout ?? clearTimeout;
+	const now = () => deps.ambient.now();
+	const random = (size: number) => deps.ambient.randomBytes(size);
+	const setTimer = (handler: () => void, delay: number) => deps.ambient.setTimer(handler, delay);
+	const clearTimer = (handle: TimerHandle) => deps.ambient.clearTimer(handle);
 	const pending = new Map<number, number>();
 	const reported = new Set<number>();
-	let timer: ReturnType<typeof setTimeout> | number | null = null;
+	let timer: TimerHandle | null = null;
 	let timerDelay: number | null = null;
 	let sending = false;
 	let dirty = false;
@@ -41,7 +38,6 @@ export function createKeyRequester(deps: KeyRequesterDeps) {
 		}, delay);
 		timer = scheduled;
 		timerDelay = delay;
-		if (typeof scheduled !== "number") scheduled.unref?.();
 	}
 
 	function armImmediate(): void {

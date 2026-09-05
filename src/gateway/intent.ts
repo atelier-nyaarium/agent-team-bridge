@@ -1,3 +1,4 @@
+import type { Clock } from "../shared/ambient.js";
 import { MAX_POLL_HOLD_MS } from "../shared/schemas.js";
 
 ////////////////////////////////
@@ -52,8 +53,8 @@ export class IntentTracker {
 	private readonly now: () => number;
 	private readonly ttlMs: number;
 
-	constructor(opts: { now?: () => number; ttlMs?: number } = {}) {
-		this.now = opts.now ?? (() => Date.now());
+	constructor(opts: { ambient: Clock; ttlMs?: number }) {
+		this.now = () => opts.ambient.now();
 		this.ttlMs = opts.ttlMs ?? INTENT_TTL_MS;
 	}
 

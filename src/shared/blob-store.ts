@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { type Ambient, processAmbient } from "./ambient.js";
 
 export interface BlobStat {
 	/** Contiguous bytes from offset zero. */
@@ -43,7 +44,11 @@ export function isBlobId(value: string): boolean {
 
 /** Content-addressed, bounded chunk store. */
 export class BlobStore {
-	constructor(private readonly root: string) {}
+	// The MCP process builds one without a graph, so its ambient is the process one.
+	constructor(
+		private readonly root: string,
+		private readonly ambient: Pick<Ambient, "now" | "newId"> = processAmbient(),
+	) {}
 
 	stat(blobId: string): BlobStat {
 		this.assertId(blobId);
@@ -115,7 +120,7 @@ export class BlobStore {
 	/** Stream and hash a local file. */
 	ingestFile(source: string): string {
 		const hash = crypto.createHash("sha256");
-		const tmp = path.join(this.root, `.ingest-${process.pid}-${crypto.randomUUID()}`);
+		const tmp = path.join(this.root, `.ingest-${process.pid}-${this.ambient.newId()}`);
 		fs.mkdirSync(path.dirname(tmp), { recursive: true });
 		const input = fs.openSync(source, "r");
 		const out = fs.openSync(tmp, "w");
@@ -147,7 +152,7 @@ export class BlobStore {
 	}
 
 	/** Reclaim space under the byte ceiling. */
-	sweep({ maxBytes, partMaxAgeMs = 3_600_000, now = Date.now() }: BlobSweepOptions): number {
+	sweep({ maxBytes, partMaxAgeMs = 3_600_000, now = this.ambient.now() }: BlobSweepOptions): number {
 		const entries = this.entries();
 		let freed = 0;
 		const live: typeof entries = [];

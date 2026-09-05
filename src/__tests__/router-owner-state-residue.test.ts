@@ -10,6 +10,7 @@ import { DomainQuota } from "../federation-server/owner/domainQuota.js";
 import { createScheduledService } from "../federation-server/scheduled/scheduledService.js";
 import { createShareService } from "../federation-server/share/shareService.js";
 import { signAdmission, signRegister } from "../shared/admission.js";
+import { processAmbient } from "../shared/ambient.js";
 import { generateIdentity } from "../shared/crypto.js";
 import { type InboxRow, signRowEnvelope } from "../shared/schemasInbox.js";
 
@@ -68,7 +69,7 @@ describe("Router owner state residue", () => {
 			ownerOf: (domainId) => owners.get(domainId)?.sign.pub ?? null,
 			quotaFor: () =>
 				new DomainQuota({ dir: dataDir, limitBytes: 100_000_000, statfs: () => ({ available: 100_000_000 }) }),
-			now: () => 100,
+			ambient: { now: () => 100 },
 		});
 		const router = generateIdentity();
 		const inbox = new InboxService(registry, { signPub: router.sign.pub, signPriv: router.sign.priv });
@@ -96,6 +97,7 @@ describe("Router owner state residue", () => {
 			(owners.get("friend") as ReturnType<typeof generateIdentity>).sign.pub,
 		);
 		const bridge = new GatewayBridge({
+			ambient: processAmbient(),
 			port: 0,
 			authToken: "token",
 			getDomain: (domainId) => ({
@@ -178,7 +180,7 @@ describe("Router owner state residue", () => {
 			ownerOf: () => owner.sign.pub,
 			quotaFor: () =>
 				new DomainQuota({ dir: dataDir, limitBytes: 100_000_000, statfs: () => ({ available: 100_000_000 }) }),
-			now: () => 100,
+			ambient: { now: () => 100 },
 		});
 		const router = generateIdentity();
 		const inbox = new InboxService(registry, { signPub: router.sign.pub, signPriv: router.sign.priv });

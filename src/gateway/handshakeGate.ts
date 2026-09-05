@@ -1,3 +1,4 @@
+import type { Ambient } from "../shared/ambient.js";
 import type { SessionBinding } from "./sessionAuthority.js";
 import { HANDSHAKE_PENDING_TTL_MS, HANDSHAKE_REPUSH_DEDUPE_MS, HANDSHAKE_REPUSH_MAX_ATTEMPTS } from "./wsTypes.js";
 
@@ -56,7 +57,11 @@ export class HandshakeGate {
 	// reconnect. Held OPAQUELY: only sessionAuthority may read a binding's fields.
 	private confirmedLeadTeams = new Map<string, SessionBinding>();
 
-	constructor(private now: () => number = Date.now) {}
+	constructor(private readonly ambient: Pick<Ambient, "now" | "newId">) {}
+
+	private now(): number {
+		return this.ambient.now();
+	}
 
 	/** The exact wire push for a handshake id, byte-identical whether this is the first send or a
 	 * re-push. The MCP's confirm guard (receivedIds, keyed off from==="gateway" && replyJsonSchema)
@@ -85,7 +90,7 @@ export class HandshakeGate {
 	 * re-register can never leave two independently-resolvable entries for the same coordinates. */
 	mint(team: string, subId: string): { hsId: string; push: string } {
 		this.forget(team, subId);
-		const hsId = `hs-${crypto.randomUUID().slice(0, 8)}`;
+		const hsId = `hs-${this.ambient.newId().slice(0, 8)}`;
 		this.pending.set(hsId, { team, subId, sentAt: this.now(), repushCount: 0 });
 		return { hsId, push: HandshakeGate.buildPush(hsId) };
 	}

@@ -1,4 +1,5 @@
 import { publishedActivities } from "../shared/agent-record.js";
+import type { Clock } from "../shared/ambient.js";
 import {
 	COPILOT_WAIT_BUDGET_MS,
 	type CopilotAgentResult,
@@ -22,7 +23,7 @@ import { presentedByRequest } from "./sessionAuthority.js";
 export interface CopilotRouteDeps {
 	service: CopilotAgentService;
 	relay: CopilotRelay;
-	now?(): number;
+	ambient: Clock;
 	waitBudgetMs?: number;
 }
 
@@ -364,6 +365,6 @@ export class CopilotRoute {
 	}
 
 	private now(): number {
-		return this.deps.now?.() ?? Date.now();
+		return this.deps.ambient.now();
 	}
 }

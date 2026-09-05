@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { processAmbient } from "../shared/ambient.js";
 import { PlaneRegistry, stableHash } from "../shared/plane-registry.js";
 
 describe("stableHash", () => {
@@ -17,7 +18,7 @@ describe("stableHash", () => {
 
 describe("PlaneRegistry", () => {
 	it("starts at counter 0 with a fresh epoch when nothing is restored", () => {
-		const reg = new PlaneRegistry();
+		const reg = new PlaneRegistry(processAmbient());
 		reg.registerPlane({ name: "presence", snapshot: () => ({ x: 1 }), identityOf: stableHash });
 		const v = reg.version("presence");
 		expect(v?.counter).toBe(0);
@@ -26,7 +27,7 @@ describe("PlaneRegistry", () => {
 
 	it("markDirty bumps the counter only when content actually changed", () => {
 		let content = { x: 1 };
-		const reg = new PlaneRegistry();
+		const reg = new PlaneRegistry(processAmbient());
 		reg.registerPlane({ name: "presence", snapshot: () => content, identityOf: stableHash });
 		const before = reg.version("presence");
 
@@ -40,7 +41,7 @@ describe("PlaneRegistry", () => {
 
 	it("ambient fields excluded from identityOf never cause a bump", () => {
 		let churny = 0;
-		const reg = new PlaneRegistry();
+		const reg = new PlaneRegistry(processAmbient());
 		reg.registerPlane({
 			name: "presence",
 			// identityOf deliberately ignores `churny` - the ambient-field exclusion, so ambient
@@ -56,7 +57,7 @@ describe("PlaneRegistry", () => {
 	});
 
 	it("changedSince reports behind, ahead, and unknown-epoch alike as changed", () => {
-		const reg = new PlaneRegistry();
+		const reg = new PlaneRegistry(processAmbient());
 		reg.registerPlane({ name: "presence", snapshot: () => ({ x: 1 }), identityOf: stableHash });
 		const cur = reg.version("presence")!;
 
@@ -74,7 +75,7 @@ describe("PlaneRegistry", () => {
 	});
 
 	it("waitForBump resolves immediately (true) when already behind", async () => {
-		const reg = new PlaneRegistry();
+		const reg = new PlaneRegistry(processAmbient());
 		reg.registerPlane({ name: "presence", snapshot: () => ({ x: 1 }), identityOf: stableHash });
 		const woke = await reg.waitForBump(new Map(), 5_000);
 		expect(woke).toBe(true);
@@ -82,7 +83,7 @@ describe("PlaneRegistry", () => {
 
 	it("waitForBump resolves (true) when a later markDirty bumps the plane", async () => {
 		let content = { x: 1 };
-		const reg = new PlaneRegistry();
+		const reg = new PlaneRegistry(processAmbient());
 		reg.registerPlane({ name: "presence", snapshot: () => content, identityOf: stableHash });
 		const presented = new Map([["presence", reg.version("presence")!]]);
 
@@ -111,7 +112,7 @@ describe("PlaneRegistry", () => {
 		// async (or deferred the push via any microtask/macrotask), the waiter would not yet be
 		// registered when markDirty runs here, and this test would fail.
 		let content = { x: 1 };
-		const reg = new PlaneRegistry();
+		const reg = new PlaneRegistry(processAmbient());
 		reg.registerPlane({ name: "presence", snapshot: () => content, identityOf: stableHash });
 		const presented = new Map([["presence", reg.version("presence")!]]);
 
@@ -122,7 +123,7 @@ describe("PlaneRegistry", () => {
 	});
 
 	it("waitForBump resolves (false) on timeout when nothing changes", async () => {
-		const reg = new PlaneRegistry();
+		const reg = new PlaneRegistry(processAmbient());
 		reg.registerPlane({ name: "presence", snapshot: () => ({ x: 1 }), identityOf: stableHash });
 		const presented = new Map([["presence", reg.version("presence")!]]);
 		const start = Date.now();
@@ -134,7 +135,7 @@ describe("PlaneRegistry", () => {
 	it("a multi-plane waiter holds only when caught up on every tracked plane, and wakes when any one changes", async () => {
 		let presenceContent = { x: 1 };
 		const domainContent = { y: 1 };
-		const reg = new PlaneRegistry();
+		const reg = new PlaneRegistry(processAmbient());
 		reg.registerPlane({ name: "presence", snapshot: () => presenceContent, identityOf: stableHash });
 		reg.registerPlane({ name: "domain", snapshot: () => domainContent, identityOf: stableHash });
 
@@ -167,7 +168,7 @@ describe("PlaneRegistry", () => {
 		// presented), on a registry that ALSO has "presence" registered, still gets "presence"
 		// reported as changed - the bulk check has no way to tell "not tracked" apart from "unknown,
 		// ship it" without a scope to say which planes it is even asking about.
-		const reg = new PlaneRegistry();
+		const reg = new PlaneRegistry(processAmbient());
 		reg.registerPlane({ name: "presence", snapshot: () => ({ x: 1 }), identityOf: stableHash });
 		reg.registerPlane({ name: "domain", snapshot: () => ({ y: 1 }), identityOf: stableHash });
 		const changed = reg.changedSince(new Map([["domain", reg.version("domain")!]]));
@@ -180,7 +181,7 @@ describe("PlaneRegistry", () => {
 		// has no key for it - the exact false-positive a naive multi-plane poll handler hits once a
 		// second plane joins a shared registry (see consoleHandler.ts's own presence+linked-peers split).
 		let linkedPeersContent = { peers: ["alice"] };
-		const reg = new PlaneRegistry();
+		const reg = new PlaneRegistry(processAmbient());
 		reg.registerPlane({ name: "presence", snapshot: () => ({ x: 1 }), identityOf: stableHash });
 		reg.registerPlane({ name: "linked-peers", snapshot: () => linkedPeersContent, identityOf: stableHash });
 
@@ -212,7 +213,7 @@ describe("PlaneRegistry", () => {
 		// "behind" - any difference means "send current truth." A console can present a version
 		// ahead of what its new route gateway currently holds after a federation failover.
 		let content = { x: 1 };
-		const reg = new PlaneRegistry();
+		const reg = new PlaneRegistry(processAmbient());
 		reg.registerPlane({ name: "presence", snapshot: () => content, identityOf: stableHash });
 		const cur = reg.version("presence")!;
 		const ahead = { epoch: cur.epoch, counter: cur.counter + 5 };
@@ -225,7 +226,7 @@ describe("PlaneRegistry", () => {
 
 	it("tripwireTick catches and self-heals a mutation that never called markDirty", () => {
 		let content = { x: 1 };
-		const reg = new PlaneRegistry();
+		const reg = new PlaneRegistry(processAmbient());
 		reg.registerPlane({ name: "presence", snapshot: () => content, identityOf: stableHash });
 		const before = reg.version("presence")!;
 
@@ -240,7 +241,7 @@ describe("PlaneRegistry", () => {
 	});
 
 	it("tripwireTick isolates a throwing plane - it never aborts the tick or escapes to the caller", () => {
-		const reg = new PlaneRegistry();
+		const reg = new PlaneRegistry(processAmbient());
 		// Registration itself calls snapshotFn() once (to seed the initial hash), so it must succeed
 		// there - only the LATER tripwire recompute should hit the throw, isolating this test to the
 		// tripwire's own exception handling rather than construction's.
@@ -269,13 +270,13 @@ describe("PlaneRegistry", () => {
 	});
 
 	it("persistedState + restore: a clean shutdown preserves epoch and counter", () => {
-		const regA = new PlaneRegistry();
+		const regA = new PlaneRegistry(processAmbient());
 		regA.registerPlane({ name: "presence", snapshot: () => ({ x: 1 }), identityOf: stableHash });
 		regA.markDirty("presence");
 		const persisted = regA.persistedState(true);
 		expect(persisted.presence.cleanShutdown).toBe(true);
 
-		const regB = new PlaneRegistry();
+		const regB = new PlaneRegistry(processAmbient());
 		regB.registerPlane(
 			{ name: "presence", snapshot: () => ({ x: 1 }), identityOf: stableHash },
 			persisted.presence,
@@ -284,12 +285,12 @@ describe("PlaneRegistry", () => {
 	});
 
 	it("restore from a non-clean shutdown mints a fresh epoch, never trusting the counter lineage", () => {
-		const regA = new PlaneRegistry();
+		const regA = new PlaneRegistry(processAmbient());
 		regA.registerPlane({ name: "presence", snapshot: () => ({ x: 1 }), identityOf: stableHash });
 		const dirtyPersisted = regA.persistedState(false); // e.g. a regular 3s tick, not SIGTERM
 		expect(dirtyPersisted.presence.cleanShutdown).toBe(false);
 
-		const regB = new PlaneRegistry();
+		const regB = new PlaneRegistry(processAmbient());
 		regB.registerPlane(
 			{ name: "presence", snapshot: () => ({ x: 1 }), identityOf: stableHash },
 			dirtyPersisted.presence,
@@ -302,7 +303,7 @@ describe("PlaneRegistry", () => {
 		// Simulates a session that was "online" at a clean SIGTERM (no socket survives the exit) and
 		// reads "available" the instant the fresh process boots - a real content change, not a bug.
 		let statusAtBoot = "online";
-		const regBeforeExit = new PlaneRegistry();
+		const regBeforeExit = new PlaneRegistry(processAmbient());
 		regBeforeExit.registerPlane({
 			name: "presence",
 			snapshot: () => ({ status: statusAtBoot }),
@@ -311,7 +312,7 @@ describe("PlaneRegistry", () => {
 		const persisted = regBeforeExit.persistedState(true);
 
 		statusAtBoot = "available"; // the fresh process's live-derived truth differs
-		const regAfterBoot = new PlaneRegistry();
+		const regAfterBoot = new PlaneRegistry(processAmbient());
 		regAfterBoot.registerPlane(
 			{ name: "presence", snapshot: () => ({ status: statusAtBoot }), identityOf: stableHash },
 			persisted.presence,
@@ -328,11 +329,11 @@ describe("PlaneRegistry", () => {
 
 	it("reconcileOnBoot is a true no-op for a clean shutdown with nothing live (the cheap path stays free)", () => {
 		const content = { status: "idle" };
-		const regBeforeExit = new PlaneRegistry();
+		const regBeforeExit = new PlaneRegistry(processAmbient());
 		regBeforeExit.registerPlane({ name: "presence", snapshot: () => content, identityOf: stableHash });
 		const persisted = regBeforeExit.persistedState(true);
 
-		const regAfterBoot = new PlaneRegistry();
+		const regAfterBoot = new PlaneRegistry(processAmbient());
 		regAfterBoot.registerPlane(
 			{ name: "presence", snapshot: () => content, identityOf: stableHash },
 			persisted.presence,
@@ -343,7 +344,7 @@ describe("PlaneRegistry", () => {
 	});
 
 	it("throws on a duplicate plane name", () => {
-		const reg = new PlaneRegistry();
+		const reg = new PlaneRegistry(processAmbient());
 		reg.registerPlane({ name: "presence", snapshot: () => ({}), identityOf: stableHash });
 		expect(() => reg.registerPlane({ name: "presence", snapshot: () => ({}), identityOf: stableHash })).toThrow();
 	});
@@ -351,7 +352,7 @@ describe("PlaneRegistry", () => {
 	it("onBump fires with the new version exactly when markDirty actually bumps, never on a no-op mark", () => {
 		let content = { x: 1 };
 		const bumps: Array<{ epoch: number; counter: number }> = [];
-		const reg = new PlaneRegistry();
+		const reg = new PlaneRegistry(processAmbient());
 		reg.registerPlane({
 			name: "presence",
 			snapshot: () => content,
@@ -370,7 +371,7 @@ describe("PlaneRegistry", () => {
 	it("onBump also fires from the tripwire's self-heal, not just markDirty", () => {
 		let content = { x: 1 };
 		const bumps: unknown[] = [];
-		const reg = new PlaneRegistry();
+		const reg = new PlaneRegistry(processAmbient());
 		reg.registerPlane({
 			name: "presence",
 			snapshot: () => content,
@@ -385,7 +386,7 @@ describe("PlaneRegistry", () => {
 	});
 
 	it("unregisterPlane drops the plane so a later operation on its name is a safe no-op", () => {
-		const reg = new PlaneRegistry();
+		const reg = new PlaneRegistry(processAmbient());
 		reg.registerPlane({ name: "friend-a", snapshot: () => ({ x: 1 }), identityOf: stableHash });
 		reg.unregisterPlane("friend-a");
 		expect(reg.version("friend-a")).toBeUndefined();
@@ -395,7 +396,7 @@ describe("PlaneRegistry", () => {
 	});
 
 	it("unregisterPlane lets the SAME name be registered again afterward (a re-link)", () => {
-		const reg = new PlaneRegistry();
+		const reg = new PlaneRegistry(processAmbient());
 		reg.registerPlane({ name: "friend-a", snapshot: () => ({ gen: 1 }), identityOf: stableHash });
 		reg.unregisterPlane("friend-a");
 		expect(() =>
@@ -405,7 +406,7 @@ describe("PlaneRegistry", () => {
 	});
 
 	it("unregisterPlane settles an in-flight waitForBump waiter tracking the removed plane, as woken", async () => {
-		const reg = new PlaneRegistry();
+		const reg = new PlaneRegistry(processAmbient());
 		reg.registerPlane({ name: "friend-a", snapshot: () => ({ x: 1 }), identityOf: stableHash });
 		const presented = new Map([["friend-a", reg.version("friend-a")!]]);
 
@@ -422,7 +423,7 @@ describe("PlaneRegistry", () => {
 	});
 
 	it("unregisterPlane on an unrelated name never disturbs a waiter tracking a DIFFERENT, still-registered plane", async () => {
-		const reg = new PlaneRegistry();
+		const reg = new PlaneRegistry(processAmbient());
 		reg.registerPlane({ name: "friend-a", snapshot: () => ({ x: 1 }), identityOf: stableHash });
 		reg.registerPlane({ name: "friend-b", snapshot: () => ({ y: 1 }), identityOf: stableHash });
 		const presented = new Map([["friend-b", reg.version("friend-b")!]]);

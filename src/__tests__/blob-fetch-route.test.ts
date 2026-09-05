@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { RouterBlobCache } from "../federation-server/blobs/routerBlobCache.js";
 import { BlobFetchRoute } from "../federation-server/inbox/blobFetchRoute.js";
+import { processAmbient } from "../shared/ambient.js";
 import { blobIdFor } from "../shared/blob-store.js";
 import { BLOB_CHUNK_BYTES } from "../shared/router-protocol.js";
 import { sealBlobChunk, sealedBlobChunkCount } from "../shared/sealed-blob.js";
@@ -17,7 +18,7 @@ afterEach(() => {
 function setup() {
 	const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "blob-route-"));
 	roots.push(dataDir);
-	return new RouterBlobCache({ dataDir, quotaBytesPerDomain: 4_000_000 });
+	return new RouterBlobCache({ dataDir, quotaBytesPerDomain: 4_000_000, ambient: processAmbient() });
 }
 
 function fill(cache: RouterBlobCache, bytes: Buffer) {
@@ -55,7 +56,7 @@ describe("BlobFetchRoute", () => {
 		const cache = setup();
 		const bytes = Buffer.alloc(BLOB_CHUNK_BYTES + 20, 5);
 		const { blobId, frames } = fill(cache, bytes);
-		const route = new BlobFetchRoute(cache, () => null);
+		const route = new BlobFetchRoute(cache, processAmbient(), () => null);
 		await expect(
 			route.fetch("domain", {
 				opId: "op",
@@ -77,7 +78,7 @@ describe("BlobFetchRoute", () => {
 	it("declares origin fallback bytes as clear", async () => {
 		const cache = setup();
 		const send = vi.fn();
-		const route = new BlobFetchRoute(cache, () => ({ connId: "c1", send }));
+		const route = new BlobFetchRoute(cache, processAmbient(), () => ({ connId: "c1", send }));
 		const blobId = blobIdFor(Buffer.from("origin"));
 		const pending = route.fetch("domain", {
 			opId: "op",
@@ -102,7 +103,7 @@ describe("BlobFetchRoute", () => {
 	it("forwards misses and settles only the connected origin reply", async () => {
 		const cache = setup();
 		const send = vi.fn();
-		const route = new BlobFetchRoute(cache, () => ({ connId: "c1", send }));
+		const route = new BlobFetchRoute(cache, processAmbient(), () => ({ connId: "c1", send }));
 		const blobId = blobIdFor(Buffer.from("origin"));
 		const pending = route.fetch("domain", {
 			opId: "op",
@@ -145,12 +146,12 @@ describe("BlobFetchRoute", () => {
 
 	it("answers unreachable and timeout without retaining a pending request", async () => {
 		const cache = setup();
-		const absent = new BlobFetchRoute(cache, () => null);
+		const absent = new BlobFetchRoute(cache, processAmbient(), () => null);
 		const blobId = blobIdFor(Buffer.from("missing"));
 		await expect(absent.fetch("domain", { opId: "absent", blobId, incarnation: 1 })).resolves.toEqual({
 			outcome: "absent",
 		});
-		const route = new BlobFetchRoute(cache, () => ({ connId: "c1", send: () => undefined }), 5);
+		const route = new BlobFetchRoute(cache, processAmbient(), () => ({ connId: "c1", send: () => undefined }), 5);
 		await expect(
 			route.fetch("domain", {
 				opId: "timeout",
@@ -163,7 +164,7 @@ describe("BlobFetchRoute", () => {
 
 	it("answers unreachable when the origin connection disconnects", async () => {
 		const cache = setup();
-		const route = new BlobFetchRoute(cache, () => ({ connId: "origin", send: () => undefined }));
+		const route = new BlobFetchRoute(cache, processAmbient(), () => ({ connId: "origin", send: () => undefined }));
 		const pending = route.fetch("domain", {
 			opId: "disconnect",
 			blobId: blobIdFor(Buffer.from("disconnect")),

@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { createSessionRegistryReporter } from "../gateway/router/sessionRegistryReporter.js";
+import { processAmbient } from "../shared/ambient.js";
 import { SessionStore } from "../shared/session-store.js";
 
 const flush = () => new Promise((resolve) => queueMicrotask(resolve));
 
 describe("session registry reporter", () => {
 	it("reports a minted session once", async () => {
-		const store = new SessionStore({ idGen: () => "one" });
+		const store = new SessionStore({ ambient: processAmbient(), idGen: () => "one" });
 		const sent: Array<{ action: string; params: Record<string, unknown> }> = [];
 		const reporter = createSessionRegistryReporter({
 			sessionStore: store,
@@ -24,7 +25,7 @@ describe("session registry reporter", () => {
 
 	it("reports a swept session by its spawn id", async () => {
 		let now = 100;
-		const store = new SessionStore({ now: () => now, idGen: () => "one" });
+		const store = new SessionStore({ ambient: { now: () => now }, idGen: () => "one" });
 		const sent: Array<{ action: string; params: Record<string, unknown> }> = [];
 		const reporter = createSessionRegistryReporter({
 			sessionStore: store,
@@ -42,7 +43,7 @@ describe("session registry reporter", () => {
 	});
 
 	it("reports a forgotten session after reconnecting", async () => {
-		const store = new SessionStore({ idGen: () => "one" });
+		const store = new SessionStore({ ambient: processAmbient(), idGen: () => "one" });
 		const sent: Array<{ action: string; params: Record<string, unknown> }> = [];
 		let incarnation: number | null = 3;
 		const reporter = createSessionRegistryReporter({
@@ -64,7 +65,7 @@ describe("session registry reporter", () => {
 	});
 
 	it("retries a rejected tombstone", async () => {
-		const store = new SessionStore({ idGen: () => "one" });
+		const store = new SessionStore({ ambient: processAmbient(), idGen: () => "one" });
 		const sent: string[] = [];
 		let incarnation: number | null = 3;
 		const reporter = createSessionRegistryReporter({
@@ -90,7 +91,7 @@ describe("session registry reporter", () => {
 	});
 
 	it("cancels a pending tombstone when the session is recreated", async () => {
-		const store = new SessionStore({ idGen: () => "one" });
+		const store = new SessionStore({ ambient: processAmbient(), idGen: () => "one" });
 		const sent: Array<{ action: string; params: Record<string, unknown> }> = [];
 		let incarnation: number | null = 3;
 		const reporter = createSessionRegistryReporter({
@@ -116,7 +117,7 @@ describe("session registry reporter", () => {
 	});
 
 	it("reconcile reports records that vanished", async () => {
-		const store = new SessionStore({ idGen: () => "one" });
+		const store = new SessionStore({ ambient: processAmbient(), idGen: () => "one" });
 		const sent: Array<{ action: string; params: Record<string, unknown> }> = [];
 		const reporter = createSessionRegistryReporter({
 			sessionStore: store,
@@ -134,7 +135,7 @@ describe("session registry reporter", () => {
 	});
 
 	it("defers the baseline until an incarnation exists", async () => {
-		const store = new SessionStore({ idGen: () => "one" });
+		const store = new SessionStore({ ambient: processAmbient(), idGen: () => "one" });
 		const sent: Array<{ action: string; params: Record<string, unknown> }> = [];
 		let incarnation: number | null = null;
 		const reporter = createSessionRegistryReporter({

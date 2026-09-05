@@ -1,7 +1,8 @@
-import { createHash, randomBytes as nodeRandomBytes } from "node:crypto";
+import { createHash } from "node:crypto";
 import { GatewayBootstrap } from "../gateway/boot.js";
 import { ContentKeyStore } from "../gateway/federation/contentKeyStore.js";
 import { type DomainSnapshot, verifyAdmission } from "../shared/admission.js";
+import { type Ambient, processAmbient } from "../shared/ambient.js";
 import { deriveContentKey } from "../shared/content-envelope.js";
 import type { Identity } from "../shared/crypto.js";
 import { type IdentitySet, type RouterTransportSeed, seedGateway } from "./identitySet.js";
@@ -82,16 +83,21 @@ export class FixtureWorld {
 		return new FixtureWorld(set);
 	}
 
-	contentKeys(dir: string, randomBytes: (size: number) => Buffer = nodeRandomBytes): ContentKeyStore {
-		return new ContentKeyStore(dir, this.set.gateway.identity.box.priv, randomBytes);
+	contentKeys(dir: string, ambient: Ambient = processAmbient()): ContentKeyStore {
+		return new ContentKeyStore(dir, this.set.gateway.identity.box.priv, ambient);
 	}
 
-	gatewayBootstrap(federationDir: string, transport: RouterTransportSeed, contentKeys?: ContentKeyStore) {
+	gatewayBootstrap(
+		federationDir: string,
+		transport: RouterTransportSeed,
+		contentKeys?: ContentKeyStore,
+		ambient: Ambient = processAmbient(),
+	) {
 		seedGateway(federationDir, this.set, transport);
 		return GatewayBootstrap.resolve(
 			{ federationDir },
 			{ enrollNonce: null, allowFixtureIdentity: true },
-			{ identity: () => this.set.gateway.identity, contentKeys },
+			{ ambient, identity: () => this.set.gateway.identity, contentKeys },
 		);
 	}
 }

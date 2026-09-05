@@ -22,7 +22,7 @@ const make = () => {
 		ownerOf: (domainId) => (domainId === "a" ? "owner-a" : domainId === "b" ? "owner-b" : null),
 		quotaFor: () =>
 			new DomainQuota({ dir: dataDir, limitBytes: 100_000_000, statfs: () => ({ available: 100_000_000 }) }),
-		now: () => now,
+		ambient: { now: () => now },
 	});
 	return { registry, setNow: (value: number) => (now = value) };
 };

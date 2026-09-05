@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { CopilotAgentService, CopilotApplication } from "../gateway/copilotAgentService.js";
 import { CopilotRelay } from "../gateway/copilotRelay.js";
+import { processAmbient } from "../shared/ambient.js";
 import {
 	CopilotDaemonCommandSchema,
 	type CopilotDaemonEvent,
@@ -180,6 +181,7 @@ function setup(options: SetupOptions = {}) {
 	const relay = new CopilotRelay({
 		service,
 		sessionStore,
+		ambient: processAmbient(),
 		sendToHost: (message) => {
 			if (!attached) return false;
 			sent.push(message);

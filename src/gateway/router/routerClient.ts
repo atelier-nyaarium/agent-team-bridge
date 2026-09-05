@@ -1,4 +1,5 @@
 import type WebSocket from "ws";
+import type { Ambient, IntervalHandle, TimerHandle } from "../../shared/ambient.js";
 import { createReconnector } from "../../shared/reconnect.js";
 import { RouterInboundFrameSchema, type ToolCallFrame } from "../../shared/router-protocol.js";
 import {
@@ -33,6 +34,7 @@ export interface RouterClientConfig {
 	headers: Record<string, string>;
 	// TLS trusts the pinned Router leaf fingerprint.
 	tls?: { certFp: string };
+	ambient: Ambient;
 	// Gateway id used for relay routing.
 	gatewayId: string;
 	// Domain id used with the Gateway id as the Router connection key.
@@ -111,19 +113,18 @@ export function startRouterClient(config: RouterClientConfig): RouterClient {
 		const ring = reachCandidates(reach, config.url, DEFAULT_ROUTER_PORT);
 		return ring.length ? ring : [config.url];
 	};
+	const { ambient } = config;
 	const reconnector = createReconnector(connect, {
 		initialDelayMs: config.reconnectInitialDelayMs ?? 5_000,
 		maxDelayMs: 30_000,
+		ambient,
 	});
-	let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
-	let pendingRetryTimer: ReturnType<typeof setTimeout> | null = null;
+	let heartbeatTimer: IntervalHandle | null = null;
+	let pendingRetryTimer: TimerHandle | null = null;
 	let pendingRetryAttempts = 0;
 	let missedPongs = 0;
 	let droppedFrames = 0;
-	const pendingCalls = new Map<
-		string,
-		{ resolve: (result: RouterToolCallResult) => void; timer: ReturnType<typeof setTimeout> }
-	>();
+	const pendingCalls = new Map<string, { resolve: (result: RouterToolCallResult) => void; timer: TimerHandle }>();
 
 	function connect(): void {
 		if (stopped) return;
@@ -147,7 +148,7 @@ export function startRouterClient(config: RouterClientConfig): RouterClient {
 
 		// Route timeouts through the close handler so the ring advances uniformly.
 		const budget = isPrivateHost(reachHost(target)) ? LAN_CONNECT_TIMEOUT_MS : CONNECT_TIMEOUT_MS;
-		const connectTimer = setTimeout(() => {
+		const connectTimer = ambient.setTimer(() => {
 			if (opened) return;
 			console.error(`[router-client] ${target} did not answer in ${budget}ms, trying the next address`);
 			ws?.terminate();
@@ -163,7 +164,7 @@ export function startRouterClient(config: RouterClientConfig): RouterClient {
 			console.log(`[router-client] connected`);
 			missedPongs = 0;
 			opened = true;
-			clearTimeout(connectTimer);
+			ambient.clearTimer(connectTimer);
 			// Resume from the working candidate.
 			candidateIndex = Math.max(0, ring.indexOf(target));
 			reconnector.reset();
@@ -247,7 +248,7 @@ export function startRouterClient(config: RouterClientConfig): RouterClient {
 				case "tool_result": {
 					const pending = pendingCalls.get(frame.callId);
 					if (pending) {
-						clearTimeout(pending.timer);
+						ambient.clearTimer(pending.timer);
 						pendingCalls.delete(frame.callId);
 						pending.resolve({ callId: frame.callId, result: frame.result });
 					}
@@ -261,7 +262,7 @@ export function startRouterClient(config: RouterClientConfig): RouterClient {
 					}
 					const pending = pendingCalls.get(frame.callId);
 					if (pending) {
-						clearTimeout(pending.timer);
+						ambient.clearTimer(pending.timer);
 						pendingCalls.delete(frame.callId);
 						pending.resolve({ callId: frame.callId, error: frame.error ?? "unknown error" });
 					}
@@ -278,7 +279,7 @@ export function startRouterClient(config: RouterClientConfig): RouterClient {
 		ws.on("close", () => {
 			if (ws !== socket) return;
 			ws = null;
-			clearTimeout(connectTimer);
+			ambient.clearTimer(connectTimer);
 			stopHeartbeat();
 			registered = false;
 			gatewayIncarnation = null;
@@ -289,7 +290,7 @@ export function startRouterClient(config: RouterClientConfig): RouterClient {
 			clearPendingRetry();
 			// Fail in-flight calls so callers can retry promptly.
 			for (const [callId, pending] of pendingCalls) {
-				clearTimeout(pending.timer);
+				ambient.clearTimer(pending.timer);
 				pending.resolve({ callId, error: `Disconnected from the federation Router` });
 			}
 			pendingCalls.clear();
@@ -391,16 +392,15 @@ export function startRouterClient(config: RouterClientConfig): RouterClient {
 		console.warn(
 			`[router-client] Domain not yet rooted (${reason ?? "pending"}); re-registering in ${delayMs / 1000}s (attempt ${pendingRetryAttempts}/${PENDING_REREGISTER_MAX_ATTEMPTS})`,
 		);
-		pendingRetryTimer = setTimeout(() => {
+		pendingRetryTimer = ambient.setTimer(() => {
 			pendingRetryTimer = null;
 			registerGateway();
 		}, delayMs);
-		pendingRetryTimer.unref?.();
 	}
 
 	function clearPendingRetry(): void {
 		if (pendingRetryTimer) {
-			clearTimeout(pendingRetryTimer);
+			ambient.clearTimer(pendingRetryTimer);
 			pendingRetryTimer = null;
 		}
 		pendingRetryAttempts = 0;
@@ -408,7 +408,7 @@ export function startRouterClient(config: RouterClientConfig): RouterClient {
 
 	function startHeartbeat(): void {
 		stopHeartbeat();
-		heartbeatTimer = setInterval(() => {
+		heartbeatTimer = ambient.setInterval(() => {
 			if (!ws || ws.readyState !== RealWebSocket.OPEN) return;
 			// Two unanswered pings terminate the socket.
 			missedPongs++;
@@ -421,12 +421,11 @@ export function startRouterClient(config: RouterClientConfig): RouterClient {
 				ws.ping();
 			} catch {}
 		}, HEARTBEAT_INTERVAL_MS);
-		heartbeatTimer.unref?.();
 	}
 
 	function stopHeartbeat(): void {
 		if (heartbeatTimer) {
-			clearInterval(heartbeatTimer);
+			ambient.clearInterval(heartbeatTimer);
 			heartbeatTimer = null;
 		}
 	}
@@ -436,10 +435,10 @@ export function startRouterClient(config: RouterClientConfig): RouterClient {
 			return { callId: "", error: `Not connected to the federation Router` };
 		}
 
-		const callId = crypto.randomUUID();
+		const callId = ambient.newId();
 
 		return new Promise<RouterToolCallResult>((resolve) => {
-			const timer = setTimeout(() => {
+			const timer = ambient.setTimer(() => {
 				pendingCalls.delete(callId);
 				resolve({ callId, error: `Tool call timed out after ${TOOL_CALL_TIMEOUT_MS / 1000}s` });
 			}, TOOL_CALL_TIMEOUT_MS);
@@ -467,7 +466,7 @@ export function startRouterClient(config: RouterClientConfig): RouterClient {
 		clearPendingRetry();
 		reconnector.cancel();
 		for (const [, pending] of pendingCalls) {
-			clearTimeout(pending.timer);
+			ambient.clearTimer(pending.timer);
 			pending.resolve({ callId: "", error: `Client stopped` });
 		}
 		pendingCalls.clear();
