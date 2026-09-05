@@ -27,6 +27,11 @@ export interface CrossDomainOpsDeps {
 ////////////////////////////////
 //  Functions & Helpers
 
+function sameTarget(a: CrossDomainShareTarget, b: CrossDomainShareTarget): boolean {
+	if (a.kind !== b.kind) return false;
+	return a.kind !== "domain" || b.kind !== "domain" || a.domainId === b.domainId;
+}
+
 export function createCrossDomainHandlers({
 	routes,
 	targets,
@@ -97,14 +102,19 @@ export function createCrossDomainHandlers({
 			return { cancelled: crossDomain.cancel({ listeningToken: op.listeningToken, pin: op.pin }) };
 		},
 
-		// The Router record lands before the mirror; a fenced mirror withdraws it.
+		// The mirror lands first, so a Router record never outlives it; a refused record removes a new mirror.
 		async share(op: Extract<ConsoleOp, { kind: "cross_domain_share" }>) {
 			if (!crossDomainShare) throw new Error("cross-Domain sharing is not available on this Gateway");
 			const canonicalTarget = await assertShareable(op.sessionTarget, op.target);
-			await crossDomainShare.postRecord("cross_domain_share", canonicalTarget, op.target);
-			if (!crossDomainShare.share(canonicalTarget, op.target)) {
-				await crossDomainShare.postRecord("cross_domain_unshare", canonicalTarget, op.target);
-				throw new Error(MIGRATING);
+			const held = crossDomainShare
+				.listShares()
+				.some((share) => share.sessionTarget === canonicalTarget && sameTarget(share.target, op.target));
+			if (!crossDomainShare.share(canonicalTarget, op.target)) throw new Error(MIGRATING);
+			try {
+				await crossDomainShare.postRecord("cross_domain_share", canonicalTarget, op.target);
+			} catch (error) {
+				if (!held) crossDomainShare.unshare(canonicalTarget, op.target);
+				throw error;
 			}
 			return { ok: true as const };
 		},

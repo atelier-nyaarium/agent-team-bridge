@@ -352,7 +352,8 @@ export function createShareService(deps: ShareServiceDeps): ShareService {
 			);
 			hooks.ownerOp("cross_domain_unlink", (op, value) => this.unlink(op.domainId, value.domainId));
 			hooks.ownerOp("cross_domain_list_shares", (op) => this.listShares(op.domainId));
-			hooks.gatewayFrame("share_job_live", "delivery", (reg, params) => this.attest(reg, params));
+			// An attestation lives in memory, so nothing waits for the window.
+			hooks.gatewayFrame("share_job_live", "read", (reg, params) => this.attest(reg, params));
 			hooks.gatewayFrame("cross_domain_share", "value", (reg, params) => {
 				const value = CrossDomainShareValueSchema.parse(params);
 				return this.share(reg.domainId, ownSession(reg, value.sessionTarget), value.target);

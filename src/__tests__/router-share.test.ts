@@ -30,6 +30,7 @@ const make = () => {
 	const pushed: Array<{ domainId: string; gatewayId: string; frame: Record<string, unknown> }> = [];
 	const ownerOps = new Map<string, ErasedOwnerOpHandler>();
 	const gatewayFrames = new Map<string, GatewayFrameHandler>();
+	const classes = new Map<string, string>();
 	let gatewayDropped: ((reg: GatewayRegistration) => void) | undefined;
 	const gateways = new Map([
 		["a", ["a-gateway"]],
@@ -60,6 +61,7 @@ const make = () => {
 		registry,
 		ownerOps,
 		gatewayFrames,
+		classes,
 		links,
 		edgeIds,
 		retired,
@@ -70,8 +72,10 @@ const make = () => {
 			ownerOp: <Kind extends OwnerOpKind>(kind: Kind, handler: OwnerOpHandler<Kind>) => {
 				ownerOps.set(kind, handler as ErasedOwnerOpHandler);
 			},
-			gatewayFrame: (name: string, _mutation: OwnerOpMutation, handler: GatewayFrameHandler) =>
-				gatewayFrames.set(name, handler),
+			gatewayFrame: (name: string, mutation: OwnerOpMutation, handler: GatewayFrameHandler) => {
+				classes.set(name, mutation);
+				gatewayFrames.set(name, handler);
+			},
 			onGatewayRegistered: () => undefined,
 			onGatewayDropped: (listener: (reg: GatewayRegistration) => void) => {
 				gatewayDropped = listener;
@@ -373,6 +377,18 @@ describe("ShareService", () => {
 		const ctx = make();
 		ctx.links.add("a|b");
 		ctx.service.register(ctx.hooks);
+		expect([...ctx.ownerOps.keys()]).toEqual([
+			"cross_domain_share",
+			"cross_domain_unshare",
+			"cross_domain_unlink",
+			"cross_domain_list_shares",
+		]);
+		expect([...ctx.gatewayFrames.keys()]).toEqual(["share_job_live", "cross_domain_share", "cross_domain_unshare"]);
+		expect([...ctx.classes]).toEqual([
+			["share_job_live", "read"],
+			["cross_domain_share", "value"],
+			["cross_domain_unshare", "value"],
+		]);
 		const op = { domainId: "a" } as Parameters<ErasedOwnerOpHandler>[0];
 		const target = { kind: "domain" as const, domainId: "b" };
 

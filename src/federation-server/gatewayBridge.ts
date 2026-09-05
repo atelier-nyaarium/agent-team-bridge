@@ -386,7 +386,7 @@ export class GatewayBridge implements ToolProvider {
 			}
 			if (
 				readRouterMigrationWindow().fenced &&
-				this.frameTable.mutation(name) === "value" &&
+				this.frameTable.mutation(name) !== "read" &&
 				this.migrationReady &&
 				!this.migrationReady(reg.domainId)
 			)

@@ -99,7 +99,7 @@ export class FederationContext {
 		this.deps.onActivate(slice);
 	}
 
-	/** Writes the Router's share record. A refusal throws, so no mirror follows it. */
+	/** Writes the Router's share record. A refusal throws. */
 	async postShareRecord(
 		action: ShareRecordAction,
 		sessionTarget: string,

@@ -35,15 +35,19 @@ const make = () => {
 const makeHooks = () => {
 	const ownerOps = new Map<string, ErasedOwnerOpHandler>();
 	const gatewayFrames = new Map<string, GatewayFrameHandler>();
+	const classes = new Map<string, string>();
 	return {
 		ownerOps,
 		gatewayFrames,
+		classes,
 		hooks: {
 			ownerOp: <Kind extends OwnerOpKind>(name: Kind, handler: OwnerOpHandler<Kind>) => {
 				ownerOps.set(name, handler as ErasedOwnerOpHandler);
 			},
-			gatewayFrame: (name: string, _mutation: OwnerOpMutation, handler: GatewayFrameHandler) =>
-				gatewayFrames.set(name, handler),
+			gatewayFrame: (name: string, mutation: OwnerOpMutation, handler: GatewayFrameHandler) => {
+				classes.set(name, mutation);
+				gatewayFrames.set(name, handler);
+			},
 			onGatewayRegistered: () => {},
 			onGatewayDropped: () => {},
 			onSessionForgotten: () => {},
@@ -200,7 +204,7 @@ describe("Router tier 1 services", () => {
 		const { registry } = make();
 		const capabilities = createCapabilitiesService({ registry });
 		const anchors = createReadAnchorsService({ registry });
-		const { hooks, ownerOps, gatewayFrames } = makeHooks();
+		const { hooks, ownerOps, gatewayFrames, classes } = makeHooks();
 		capabilities.register(hooks);
 		anchors.register(hooks);
 		expect([...ownerOps.keys()]).toEqual([
@@ -210,6 +214,7 @@ describe("Router tier 1 services", () => {
 			"read_anchors_read",
 		]);
 		expect([...gatewayFrames.keys()]).toEqual(["capabilities_read"]);
+		expect([...classes]).toEqual([["capabilities_read", "read"]]);
 		const op = { domainId: "a", conversationId: "phone" } as Parameters<ErasedOwnerOpHandler>[0];
 		await ownerOps.get("capabilities_report")?.(op, { kind: "capabilities_report", capabilities: [] });
 		await ownerOps.get("report_read")?.(op, { kind: "report_read", team: "team", epoch: 1, seq: 1, at: 1 });

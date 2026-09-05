@@ -225,7 +225,7 @@ export interface CrossDomainConsoleHandlers {
  * so the handler stays mockable and never imports the store class. `sessionTarget` is the
  * canonical `domain.gateway.spawn.session` of a LOCAL session; `domainId` is a linked friend Domain. */
 export interface CrossDomainShareHandlers {
-	/** Writes the Router's own share record. A refusal throws, so no mirror follows it. */
+	/** Writes the Router's own share record. A refusal throws. */
 	postRecord: (
 		action: "cross_domain_share" | "cross_domain_unshare",
 		sessionTarget: string,

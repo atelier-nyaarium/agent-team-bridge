@@ -62,9 +62,13 @@ describe("router presence slice", () => {
 		const { registry } = make();
 		const service = createPresenceService({ registry, projection: projectionDeps });
 		const frames = new Map<string, GatewayFrameHandler>();
+		const classes = new Map<string, string>();
 		service.register({
 			ownerOp: () => undefined,
-			gatewayFrame: (name, _mutation, handler) => frames.set(name, handler),
+			gatewayFrame: (name, mutation, handler) => {
+				classes.set(name, mutation);
+				frames.set(name, handler);
+			},
 			onGatewayRegistered: () => undefined,
 			onGatewayDropped: () => undefined,
 			onSessionForgotten: () => undefined,
@@ -72,6 +76,11 @@ describe("router presence slice", () => {
 			gatewayIncarnation: () => 1,
 			connectedGateways: () => [],
 		});
+		expect([...classes]).toEqual([
+			["presence_baseline", "delivery"],
+			["presence_delta", "delivery"],
+			["presence_read", "read"],
+		]);
 		const store = registry.for("domain");
 		vi.spyOn(store, "get").mockImplementation(() => {
 			throw new OwnerQuarantined({ from: 1, to: 1 });

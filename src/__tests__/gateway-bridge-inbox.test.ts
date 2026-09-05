@@ -306,10 +306,11 @@ describe("GatewayBridge inbox", () => {
 		expect(answer).toMatchObject({ ok: false, error: "migrating" });
 	});
 
-	it("holds every value frame under the Router migration window and passes a read frame", async () => {
+	it("holds every frame but a read under the Router migration window", async () => {
 		const { bridge } = await registered(fakeInbox());
-		for (const name of ["board_op", "cross_domain_share", "cross_domain_unshare", "board_session_end"])
+		for (const name of ["board_op", "cross_domain_share", "cross_domain_unshare"])
 			bridge.registerGatewayFrame(name, "value", () => ({ ok: true }));
+		bridge.registerGatewayFrame("board_session_end", "delivery", () => ({ ok: true }));
 		bridge.registerGatewayFrame("board_read", "read", () => ({ ok: true }));
 		bridge.setMigrationReady(() => false);
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-fence-"));

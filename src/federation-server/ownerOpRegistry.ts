@@ -109,9 +109,9 @@ export const OWNER_OP_CATALOG = [
 		answer: OpResultEnvelopeSchema.extend({ result: PlanesReadResultSchema }),
 	},
 	{ kind: "report_read", value: ReportReadSchema, mutation: "value" },
-	{ kind: "key_request", value: KeyRequestOpSchema, mutation: "read" },
-	{ kind: "key_grant", value: KeyGrantOpSchema, mutation: "read" },
-	{ kind: "key_receipt", value: KeyReceiptOpSchema, mutation: "read" },
+	{ kind: "key_request", value: KeyRequestOpSchema, mutation: "value" },
+	{ kind: "key_grant", value: KeyGrantOpSchema, mutation: "value" },
+	{ kind: "key_receipt", value: KeyReceiptOpSchema, mutation: "value" },
 	{
 		kind: "key_receipts_read",
 		value: KeyReceiptsReadOpSchema,

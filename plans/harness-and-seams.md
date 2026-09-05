@@ -783,7 +783,7 @@ waiter, so the call held for the whole budget.
 
 ## Phase 5 - Split ✅
 
-### Slices, as shipped (`d76a9d37`, `cc54aa0a`, `7ba3cb65`) ✅
+### Slices, as shipped (`d76a9d37`, `cc54aa0a`, `7ba3cb65`, audits answered in `090a7ae1`) ✅
 
 **Routes and the HTTP router:** `routes.ts` is a 266-line composer over twelve modules under
 `src/gateway/routes/` (addressing, the caller guards, the relay, status, capabilities, presence,
@@ -805,10 +805,12 @@ handlers so the connector proxy's forgery gate needs no graph member. `Federatio
 publishes the boot, the Domain id, and the slice together on activation; every stage reads
 through it, which closed two staleness instances (the certificate fingerprint `buildRoutes` read
 off the boot-time decision and the Domain id the console dispatcher captured by value). The
-context owns the share record: the console's share and unshare value ops post the Router record
-through the new `cross_domain_share` and `cross_domain_unshare` gateway frames before writing
-the mirror, so a refusal leaves neither; a mirror the gateway's own fence refuses withdraws the
-record and answers `migrating`, which the harness proves. The phone's two posts and its
+context owns the share record: the console's share value op writes the mirror and then posts the
+Router record through the new `cross_domain_share` gateway frame, so the record, which is what
+admits the friend, never outlives the mirror. A fenced mirror answers `migrating` before any
+Router traffic and a refused record removes the mirror it was written for; unshare withdraws the
+record first. The re-audit found the first cut's compensating withdrawal could itself fail and
+strand an admitting record, which the order makes unreachable. The phone's two posts and its
 compensating unshare are gone. `startGateway` is 44 lines.
 
 **The Router:** `routerBody.ts` reads the body once for both surfaces with the cap and the
@@ -822,11 +824,13 @@ the phone cannot compose), with the typed union applied per kind at dispatch. Th
 kinds the list had missed and two raw `capabilities_report` literals on the phone. The bridge
 is 519 lines over `bridge/frameDispatch.ts`, `registrationHandler.ts`, `relayRouter.ts`, and
 `inboxFrames.ts`; the inbox service 426 over `inboxAppend.ts`, `inboxRetire.ts`, `inboxSweep.ts`,
-`inboxOpResult.ts`, and `inboxCore.ts`. A gateway frame registers with its mutation class and the
-migration fence holds the `value` ones, which is how `board_session_end` joined `board_op` and
-the two share frames; the hand list it replaced had missed it. The Router's construction fails
-closed when a catalogued kind has no handler, and a gateway's share frame is authorized by the
-target's Domain and gateway segments, not by a string prefix.
+`inboxOpResult.ts`, and `inboxCore.ts`. A gateway frame registers with its mutation class and both
+fences, the intake's and the bridge's, hold every class but `read`; the hand list the bridge had
+missed `board_session_end`, and the first class rule held only `value` while the intake held
+everything else, so `share_job_live` became `read` and the key ops `value` to give the three
+words one meaning. The Router's construction fails closed when a catalogued kind has no handler,
+and a gateway's share frame is authorized by the target's Domain and gateway segments, not by a
+string prefix.
 
 **Ambient context:** `src/shared/ambient.ts` declares `Ambient` (clock, entropy, ids, timers);
 `processAmbient()` is the sole reader of `Date.now`, the CSPRNG, and the global timers;
@@ -881,12 +885,9 @@ into the app; no wire field changes. Gateway first as usual.
   locals, each a redesign rather than a move.
 - A fake host that can refuse: every HostOp succeeds today, so tmux refusals and error
   classification have no scenario; the dedupe scenarios still settle on fixed sleeps.
-- One meaning per mutation class across both fences. The intake holds every owner op but `read`
-  during a migration window; the bridge holds only `value` frames. `key_request`, `key_grant`,
-  and `key_receipt` are catalogued `read` while their handlers append owner rows, and their frame
-  twins are `delivery`, so the phone's key request passes the window and the gateway's does too by
-  a different label. Decide per row family whether it must survive the cut, then label both sides
-  from that.
+- `inbox_advance` and `consumer_register` are catalogued `read` and move consumer cursors, so a
+  cursor advanced inside a migration window is lost to the cut and the phone re-reads those rows.
+  Decide whether cursor moves must survive the cut, then label from that.
 - A disposer per federation slice. `buildSlice` runs once per process today; a second activation
   (live re-enrollment, in-place Domain migration) would leak the first slice's timers and throw on
   the `linked-peers` plane. The disposer stops the Router client, the pusher, the reporter, the

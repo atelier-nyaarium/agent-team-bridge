@@ -24,8 +24,8 @@ that must keep working for one more console build goes into `TOLERATED_DELIVERY_
   or `timeout` outcomes.
 - Other OwnerOps are `consumer_register`, `inbox_read`, `inbox_advance`, `planes_read`, `report_read`,
   and `capabilities_report`. Sharing a session with a friend Domain is the Gateway's
-  `cross_domain_share` value op alone; the Gateway posts the Router record itself before writing its
-  mirror. Unsharing works the same way.
+  `cross_domain_share` value op alone; the Gateway writes its mirror and posts the Router record
+  itself. Unsharing works the same way, record first.
 - The phone socket uses `ConsoleSocketMode.INBOX`.
 - `PollDrain.drainTick` calls `inbox_read` and `planes_read`. It sends one `inbox_advance` after
   rows drain.

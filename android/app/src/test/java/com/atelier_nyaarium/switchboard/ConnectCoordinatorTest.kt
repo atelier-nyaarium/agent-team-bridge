@@ -10,7 +10,11 @@ import org.junit.Test
 
 class ConnectCoordinatorTest {
 	private class FakeReach(private val answer: () -> RouterReach?) : ConsoleReach {
-		override suspend fun apiReachable(): RouterReach? = answer()
+		var calls = 0
+		override suspend fun apiReachable(): RouterReach? {
+			calls++
+			return answer()
+		}
 	}
 
 	private class FakeHost : ConnectHost {
@@ -75,7 +79,8 @@ class ConnectCoordinatorTest {
 
 		val state = MutableStateFlow(ChatState())
 		val host = FakeHost()
-		coordinator(identity, host, state, FakeReach { RouterReach(domainId = "learned") }).connect()
+		val reach = FakeReach { RouterReach(domainId = "learned") }
+		coordinator(identity, host, state, reach).connect()
 
 		assertEquals("learned", identity.readyOrNull()?.domainId)
 		assertEquals("connected", state.value.status)
@@ -89,6 +94,7 @@ class ConnectCoordinatorTest {
 		assertTrue(host.displayNameRefreshed)
 		assertTrue(host.ingestAttached)
 		assertTrue(host.ingestFlushed)
+		assertEquals(1, reach.calls)
 	}
 
 	@Test
@@ -177,5 +183,6 @@ class ConnectCoordinatorTest {
 		assertEquals(ChatState(), state.value)
 		assertFalse(host.capabilitiesReported)
 		assertFalse(host.displayNameRefreshed)
+		assertEquals(0, reach.calls)
 	}
 }

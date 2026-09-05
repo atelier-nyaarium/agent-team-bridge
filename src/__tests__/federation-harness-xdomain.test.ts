@@ -104,7 +104,7 @@ describe("cross-Domain gateway admission and relay", () => {
 		expect(await bob.phone.send({ kind: "cross_domain_list_shares" })).toMatchObject({ shares: [] });
 	});
 
-	it("withdraws the Router record when the migration fence refuses the mirror", async () => {
+	it("refuses a share under the gateway's migration fence before any Router record", async () => {
 		const fenced = session(bob, "fixture-app.fenced");
 		await fenced.ready();
 		const target = { kind: "domain" as const, domainId: h.set.domain.id };
@@ -116,6 +116,7 @@ describe("cross-Domain gateway admission and relay", () => {
 			setMigrationEpoch(null);
 		}
 		expect(await bob.phone.send({ kind: "cross_domain_list_shares" })).toMatchObject({ shares: [] });
+		expect(await bob.phone.value({ kind: "cross_domain_list_shares" })).toMatchObject({ result: { shares: [] } });
 		await share(bob, fenced.team, h.set.domain.id);
 		expect(await bob.phone.send({ kind: "cross_domain_list_shares" })).toMatchObject({
 			shares: [{ sessionTarget: remote(bob, fenced.team), target }],

@@ -75,6 +75,7 @@ function make() {
 	});
 	const ownerOps = new Map<string, ErasedOwnerOpHandler>();
 	const frames = new Map<string, (reg: GatewayRegistration, value: Record<string, unknown>) => unknown>();
+	const classes = new Map<string, string>();
 	createKeyDeliveryService({
 		registry,
 		inbox,
@@ -87,7 +88,10 @@ function make() {
 			intake.register(kind, handler);
 			ownerOps.set(kind, handler as ErasedOwnerOpHandler);
 		},
-		gatewayFrame: (name, _mutation, handler) => frames.set(name, handler),
+		gatewayFrame: (name, mutation, handler) => {
+			classes.set(name, mutation);
+			frames.set(name, handler);
+		},
 		onGatewayRegistered: () => undefined,
 		onGatewayDropped: () => undefined,
 		onSessionForgotten: () => undefined,
@@ -159,6 +163,7 @@ function make() {
 		intake,
 		ownerOps,
 		frames,
+		classes,
 		ownerAddress,
 		gatewayAddress,
 		registration,
@@ -175,6 +180,15 @@ afterEach(() => {
 });
 
 describe("key delivery", () => {
+	it("registers gateway frame routes with their mutation classes", () => {
+		const ctx = make();
+		expect([...ctx.classes]).toEqual([
+			["key_request", "delivery"],
+			["key_receipt", "delivery"],
+		]);
+		ctx.registry.close();
+	});
+
 	it("appends one request row and replays a frame nonce", () => {
 		const ctx = make();
 		const value = { request: ctx.request() };
