@@ -16,8 +16,8 @@ export const helperTarget = (tokenId: string): string => `helper.${tokenId}`;
 export const isHelperTarget = (target: string): boolean => target.startsWith("helper.");
 
 export type VaultRequestInput =
-	| { kind: "entry"; entryId: string; operation: string; sessionTarget: string }
-	| { kind: "typed"; operation: string; sessionTarget: string };
+	| { kind: "entry"; entryId: string; operation: string; sessionTarget: string; asker?: string }
+	| { kind: "typed"; operation: string; sessionTarget: string; asker?: string };
 
 export type VaultRequestAnswer =
 	| { kind: "approved"; decision: VaultApprovedDecision; typedValue?: string }
@@ -82,6 +82,7 @@ export function createVaultRequests(deps: VaultRequestsDeps) {
 			shape,
 			sessionTarget: input.sessionTarget,
 			deadlineAt: deps.ambient.now() + deadlineMs,
+			...(input.asker === undefined ? {} : { asker: input.asker }),
 		};
 		const request: VaultRequest =
 			input.kind === "entry"

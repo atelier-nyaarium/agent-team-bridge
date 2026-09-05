@@ -1472,6 +1472,7 @@ sealed class VaultRequest {
 		val shape: String,
 		val sessionTarget: String,
 		val deadlineAt: Long,
+		val asker: String? = null,
 	) : VaultRequest()
 
 	@Serializable
@@ -1483,6 +1484,7 @@ sealed class VaultRequest {
 		val shape: String,
 		val sessionTarget: String,
 		val deadlineAt: Long,
+		val asker: String? = null,
 	) : VaultRequest()
 }
 

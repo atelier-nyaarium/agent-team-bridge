@@ -5,6 +5,7 @@ import https from "node:https";
 import os from "node:os";
 import path from "node:path";
 import {
+	askerOf,
 	askpassBrief,
 	closedGateway,
 	createGatewayPort,
@@ -35,6 +36,15 @@ function readCmdline(prompt: string): string {
 		if (parsed) return parsed;
 	} catch {}
 	return prompt.trim() || "askpass";
+}
+
+/** The parent's run, so a second ask from the same sudo reads as a rejected value. */
+function readAsker(): string | undefined {
+	try {
+		return askerOf(process.ppid, fs.readFileSync(`/proc/${process.ppid}/stat`, "utf8")) ?? undefined;
+	} catch {
+		return undefined;
+	}
 }
 
 /** A no-echo read in an sh child, so it never blocks the phone. */
@@ -116,10 +126,15 @@ async function main(): Promise<number> {
 	// A caller's abort withdraws the phone's request before exit.
 	const cancel = new AbortController();
 	for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.on(signal, () => cancel.abort());
+	// sudo hands the helper the caller's environment, so a session's own sudo asks as that session.
+	const sessionToken = process.env.SWITCHBOARD_SESSION_TOKEN || undefined;
 	const outcome = await runAskpass(
-		{ cmdline: readCmdline(prompt), prompt, signal: cancel.signal },
+		{ cmdline: readCmdline(prompt), prompt, asker: readAsker(), signal: cancel.signal },
 		{
-			gateway: token && forSecret ? createGatewayPort({ baseUrl, token, fetch: loopbackPost }) : closedGateway,
+			gateway:
+				token && forSecret
+					? createGatewayPort({ baseUrl, token, sessionToken, fetch: loopbackPost })
+					: closedGateway,
 			tty: openTty(),
 			now: () => Date.now(),
 		},

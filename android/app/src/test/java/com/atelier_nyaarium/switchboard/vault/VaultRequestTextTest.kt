@@ -9,8 +9,19 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class VaultRequestTextTest {
-	private fun typed(operation: String, team: String = "dom.sakura.owner.claude", attempt: Int = 1, since: Long? = null) =
-		VaultPendingRequest(team, VaultRequest.Typed(1L, "r", operation, "sudo apt", "helper.abc", 10L), 0L, attempt, since)
+	private fun typed(
+		operation: String,
+		team: String = "dom.sakura.owner.claude",
+		attempt: Int = 1,
+		since: Long? = null,
+		asker: String? = null,
+	) = VaultPendingRequest(
+		team,
+		VaultRequest.Typed(1L, "r", operation, "sudo apt", "helper.abc", 10L, asker),
+		0L,
+		attempt,
+		since,
+	)
 
 	private fun entry(team: String = "dom.hoshi.evie-bot.0713b7") =
 		VaultPendingRequest(team, VaultRequest.Entry("e1", 1L, "r", "gh auth login", "gh auth", "evie-bot.0713b7", 10L), 0L)
@@ -52,5 +63,12 @@ class VaultRequestTextTest {
 		)
 		assertEquals("Asked again 5 s after your answer.", repeatNotice(typed("ssh deploy@prod", attempt = 2, since = 5_000L)))
 		assertTrue(repeatNotice(typed("sudo -k apt upgrade", attempt = 3, since = 1_000L))!!.endsWith("3 of 3."))
+	}
+
+	@Test
+	fun anAskerMakesTheRepeatDefinitive() {
+		assertNull(repeatNotice(typed("sudo apt upgrade", asker = "1:2")))
+		assertEquals("Wrong password. 2 of 3.", repeatNotice(typed("sudo apt upgrade", attempt = 2, asker = "1:2")))
+		assertEquals("Not accepted. Try 3.", repeatNotice(typed("ssh deploy@prod", attempt = 3, asker = "1:2")))
 	}
 }

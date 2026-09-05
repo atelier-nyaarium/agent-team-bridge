@@ -566,8 +566,17 @@ each second there. The manager stamps `attempt` and `sinceAnswerMs` on a request
 answered command on the same team inside `REPEAT_WINDOW_MS`, chained through the latest answer, and
 the sheet shows the red repeat line, with `n of 3` when the program is sudo. The typed field is
 `Password`, the checkbox `Save this for next time`, the buttons `Send`, `Once`, `30 min`, `This
-session`. No wire change. The notification title is the dialog title and its text the requester
-and the command.
+session`. The notification title is the dialog title and its text the requester and the command.
+
+The owner then asked for a definitive retry signal and the session name on a sudo run. Probing
+showed sudo hands the helper the caller's environment and its own pid. The helper now sends
+`asker`, its parent's pid and start ticks, and the session token beside the helper token when it
+has one. `principal` takes the route's kinds in order, so `/vault/askpass` names a verified session
+as the asker and falls back to the helper; the request lands in the session's thread, and its
+grants apply. `asker` is an optional field on both request arms and the askpass body. The phone
+counts a repeat under the same asker as the same run, window or not, and says `Wrong password. 2 of
+3.` for sudo and `Not accepted. Try 2.` otherwise; without an asker the command-and-window guess
+stays for an older helper.
 
 ### Deferred by the owner: the shape stops at the first metacharacter
 

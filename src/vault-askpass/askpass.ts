@@ -13,7 +13,7 @@ const SUDO_VALUED_FLAGS = new Set(["-C", "-D", "-g", "-h", "-p", "-r", "-t", "-T
 
 export interface GatewayPort {
 	/** Null when the gateway cannot be reached or refuses the token. */
-	askpass(cmdline: string, waitMs: number, signal: AbortSignal): Promise<VaultValueAnswer | null>;
+	askpass(cmdline: string, waitMs: number, signal: AbortSignal, asker?: string): Promise<VaultValueAnswer | null>;
 	collect(requestId: string, waitMs: number, signal: AbortSignal): Promise<VaultValueAnswer | null>;
 	/** Bounded; a gateway that stalls does not hold the helper. */
 	withdraw(requestId: string): Promise<void>;
@@ -44,6 +44,17 @@ export function parseProcCmdline(raw: Uint8Array | string): string {
 		.filter((part) => part.length > 0)
 		.join(" ")
 		.trim();
+}
+
+/** One run of the caller: its pid and `/proc/<pid>/stat` start ticks, read past the parenthesised comm. */
+export function askerOf(pid: number, stat: string): string | null {
+	const close = stat.lastIndexOf(")");
+	if (close === -1) return null;
+	const start = stat
+		.slice(close + 1)
+		.trim()
+		.split(/\s+/)[19];
+	return start && /^\d+$/.test(start) ? `${pid}:${start}` : null;
 }
 
 /** Only a password or passphrase prompt reaches the phone; a confirmation or a username stays at the tty. */
@@ -79,13 +90,14 @@ export function askpassBrief(cmdline: string, exe?: string): string {
 async function askPhone(
 	gateway: GatewayPort,
 	cmdline: string,
+	asker: string | undefined,
 	collectMs: number,
 	deadlineAt: number,
 	now: () => number,
 	signal: AbortSignal,
 ): Promise<AskpassOutcome> {
 	let pendingId: string | null = null;
-	let answer = await gateway.askpass(cmdline, 0, signal);
+	let answer = await gateway.askpass(cmdline, 0, signal, asker);
 	for (;;) {
 		if (signal.aborted) {
 			if (pendingId) await gateway.withdraw(pendingId);
@@ -112,7 +124,7 @@ async function askTty(tty: TtyPort, prompt: string, signal: AbortSignal): Promis
 
 /** The first value wins; only the caller's abort ends both roads. */
 export async function runAskpass(
-	input: { cmdline: string; prompt: string; deadlineMs?: number; signal?: AbortSignal },
+	input: { cmdline: string; prompt: string; asker?: string; deadlineMs?: number; signal?: AbortSignal },
 	ports: AskpassPorts,
 ): Promise<AskpassOutcome> {
 	if (input.signal?.aborted) return { kind: "no-answer" };
@@ -130,6 +142,7 @@ export async function runAskpass(
 	const phone = askPhone(
 		ports.gateway,
 		input.cmdline,
+		input.asker,
 		ports.tty ? RACE_WAIT_MS : HOLD_WAIT_MS,
 		deadlineAt,
 		ports.now,
@@ -156,12 +169,18 @@ export async function runAskpass(
 	return first.outcome;
 }
 
-/** The helper's HTTP door to the gateway's loopback routes. */
+/** The helper's HTTP door to the gateway's loopback routes. A session token beside the helper's names the session as the asker. */
 export function createGatewayPort(deps: {
 	baseUrl: string;
 	token: string;
+	sessionToken?: string;
 	fetch: (url: string, init: RequestInit) => Promise<Response>;
 }): GatewayPort {
+	const headers = {
+		"content-type": "application/json",
+		"x-vault-helper-token": deps.token,
+		...(deps.sessionToken ? { "x-session-token": deps.sessionToken } : {}),
+	};
 	/** An abort answers null at once, whether or not the transport notices it. */
 	const send = (path: string, body: Record<string, unknown>, signal?: AbortSignal): Promise<Response | null> =>
 		new Promise((resolve) => {
@@ -169,7 +188,7 @@ export function createGatewayPort(deps: {
 			signal?.addEventListener("abort", onAbort, { once: true });
 			deps.fetch(`${deps.baseUrl}${path}`, {
 				method: "POST",
-				headers: { "content-type": "application/json", "x-vault-helper-token": deps.token },
+				headers,
 				body: JSON.stringify(body),
 				signal,
 			})
@@ -188,7 +207,8 @@ export function createGatewayPort(deps: {
 		return parsed.success ? parsed.data : null;
 	};
 	return {
-		askpass: (cmdline, waitMs, signal) => ask("/vault/askpass", { cmdline, waitMs }, signal),
+		askpass: (cmdline, waitMs, signal, asker) =>
+			ask("/vault/askpass", { cmdline, waitMs, ...(asker ? { asker } : {}) }, signal),
 		collect: (requestId, waitMs, signal) => ask("/vault/collect", { requestId, waitMs }, signal),
 		withdraw: async (requestId) => {
 			const bound = new AbortController();

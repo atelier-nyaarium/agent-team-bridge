@@ -317,6 +317,25 @@ describe("federation harness: vault requests", () => {
 		expect(planted.status).toBe(200);
 		expect(await askpassFresh("ssh deploy@prod uptime", 200)).toMatchObject({ outcome: "pending" });
 		expect((await nextRequest(seen + 2)).kind).toBe("typed");
+
+		// sudo inside a session hands the helper that session's token: the ask is the session's, in its
+		// thread, and the asker rides along. The helper's own collect under both credentials matches it.
+		const both = { "x-vault-helper-token": fresh, "x-session-token": alice.sessionToken ?? "" };
+		const inSession = await gatewayPost("/vault/askpass", both, {
+			cmdline: "sudo apt install baz",
+			waitMs: 200,
+			asker: "4242:100",
+		});
+		expect(await inSession.json()).toMatchObject({ outcome: "pending" });
+		const owned = await nextRequest(seen + 3);
+		expect(owned).toMatchObject({ kind: "typed", sessionTarget: alice.team, asker: "4242:100" });
+		const ownedRow = h.phone
+			.entries(await h.phone.inboxRead())
+			.find((entry) => entry.kind === "plugin_action" && entry.payload?.requestId === owned.requestId);
+		expect(ownedRow?.session_id?.endsWith(`.${alice.team}`)).toBe(true);
+		expect(await (await gatewayPost("/vault/withdraw", both, { requestId: owned.requestId })).json()).toEqual({
+			withdrawn: true,
+		});
 	});
 
 	it("the session's tools run a command with the value injected after the phone approves, and capture an entry", async () => {

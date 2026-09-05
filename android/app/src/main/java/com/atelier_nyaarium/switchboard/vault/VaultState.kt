@@ -62,6 +62,13 @@ val VaultRequest.sessionTarget: String
 		is VaultRequest.Typed -> sessionTarget
 	}
 
+/** One run of the program asking; a second ask under it followed a rejected value. */
+val VaultRequest.asker: String?
+	get() = when (this) {
+		is VaultRequest.Entry -> asker
+		is VaultRequest.Typed -> asker
+	}
+
 /** An approval the same command may come back from. */
 @Serializable
 data class VaultAnswered(
@@ -69,6 +76,7 @@ data class VaultAnswered(
 	val operation: String,
 	val answeredAt: Long,
 	val attempt: Int = 1,
+	val asker: String? = null,
 )
 
 @Serializable

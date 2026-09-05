@@ -84,8 +84,10 @@ and the delta list are in `docs/federation.md` under Owner state.
   from the phone then reads as expired and records no grant.
 - `/vault/capture` (session): creates an entry from a value a session captured, trimming one
   trailing newline, and notifies the owner.
-- `/vault/askpass` (helper): an askpass command line. A lone entry whose public title equals the
-  shape goes through the grant road. Anything else opens a typed request.
+- `/vault/askpass` (helper, or a session presented beside it): an askpass command line and an
+  optional `asker`. A lone entry whose public title equals the shape goes through the grant road.
+  Anything else opens a typed request. A verified session token beside the helper token makes the
+  session the asker, so the request lands in its thread and its grants apply.
 - `/vault/helper-token`: gated by the host token. Mints a helper token, hashed at rest in
   `DATA_DIR/vault-helper.json`.
 - The answer is `VaultValueAnswer`: `approved` with the decision and the value, `refused` with a
@@ -103,6 +105,12 @@ and git run it with the prompt as its one argument and read the value from stdou
   command is dropped, so `sudo -A apt install foo` briefs as `/usr/bin/sudo apt install foo` and
   shapes as `sudo apt`. Without `/proc`, the prompt is the brief. The brief names the operation. It
   does not authenticate the caller: a process may claim any command line.
+- **A session's own sudo asks as that session:** sudo hands the helper the caller's environment, so
+  the helper sends `SWITCHBOARD_SESSION_TOKEN` beside its own token when it has one, and the gateway
+  names the verified session as the requester. A terminal without one is the helper. The helper
+  also sends `asker`, its parent's pid and start ticks from `/proc/<ppid>/stat`, which names one run
+  of sudo, ssh, or git; a second ask under the same asker only follows a rejected value, and the
+  phone says so.
 - **Only a secret prompt reaches the phone:** one naming a password, passphrase, secret, token, or
   PIN, or an empty one. ssh's host-key confirmation and git's username prompt are served at the tty
   alone, so a grant never answers a yes/no.

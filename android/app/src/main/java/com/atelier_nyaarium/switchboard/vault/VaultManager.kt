@@ -157,13 +157,15 @@ class VaultManager(private val store: VaultStore) : ClearsOnReprovision {
 	fun openValue(entry: VaultStoredEntry, sealing: VaultSealing): String? =
 		entry.sealed.value?.let { sealing.open(it, VAULT_VALUE_KIND, entry.clear.id) }
 
-	/** A duplicate dispatch or an expired request is dropped; a repeat inside the window counts its attempt. */
+	/** A duplicate dispatch or an expired request is dropped; a repeat under the same asker, or of the same command inside the window, counts its attempt. */
 	fun addRequest(team: String, request: VaultRequest, now: Long = System.currentTimeMillis()): Boolean {
 		synchronized(stateLock) {
 			if (request.deadlineAt <= now) return false
 			if (blob.requests.any { it.requestId == request.requestId }) return false
+			val asker = request.asker
 			val recent = blob.answered.filter {
-				it.team == team && it.operation == request.operation && now - it.answeredAt <= REPEAT_WINDOW_MS
+				if (asker != null) it.asker == asker
+				else it.asker == null && it.team == team && it.operation == request.operation && now - it.answeredAt <= REPEAT_WINDOW_MS
 			}
 			val pending = VaultPendingRequest(
 				team,
@@ -181,7 +183,9 @@ class VaultManager(private val store: VaultStore) : ClearsOnReprovision {
 	fun recordAnswer(pending: VaultPendingRequest, now: Long = System.currentTimeMillis()) {
 		mutate { current ->
 			val kept = current.answered.filter { now - it.answeredAt <= REPEAT_WINDOW_MS }
-			current.copy(answered = kept + VaultAnswered(pending.team, pending.operation, now, pending.attempt))
+			current.copy(
+				answered = kept + VaultAnswered(pending.team, pending.operation, now, pending.attempt, pending.request.asker),
+			)
 		}
 	}
 

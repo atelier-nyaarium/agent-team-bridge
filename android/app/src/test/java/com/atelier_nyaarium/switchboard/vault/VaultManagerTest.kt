@@ -51,8 +51,8 @@ class VaultManagerTest {
 	private fun entryRequest(id: String, deadlineAt: Long, entryId: String = "e1"): VaultRequest =
 		VaultRequest.Entry(entryId, 1L, id, "ssh deploy@prod", "ssh deploy@prod", "host.alice", deadlineAt)
 
-	private fun typedRequest(id: String, deadlineAt: Long): VaultRequest =
-		VaultRequest.Typed(1L, id, "sudo apt install foo", "sudo apt", "helper.abc", deadlineAt)
+	private fun typedRequest(id: String, deadlineAt: Long, asker: String? = null): VaultRequest =
+		VaultRequest.Typed(1L, id, "sudo apt install foo", "sudo apt", "helper.abc", deadlineAt, asker)
 
 	@Test
 	fun aFullListReplacesAndADeltaMergesWhileTombstonesHide() {
@@ -195,6 +195,25 @@ class VaultManagerTest {
 		vault.addRequest(team, typedRequest("r5", 600_000L), now = 7_000L + REPEAT_WINDOW_MS)
 		assertEquals(1, vault.request("r5")!!.attempt)
 		assertNull(vault.request("r5")!!.sinceAnswerMs)
+	}
+
+	@Test
+	fun anAskerNamesTheRunSoOnlyItsOwnRepeatCountsAndTheWindowDoesNotApply() {
+		val vault = VaultManager(FakeStore())
+		val team = "dom.gw.host.alice"
+		vault.addRequest(team, typedRequest("a1", 900_000L, asker = "4242:100"), now = 1_000L)
+		vault.recordAnswer(vault.request("a1")!!, now = 2_000L)
+		vault.settleRequest("a1")
+
+		// Another run of the same command is a first ask, however soon.
+		vault.addRequest(team, typedRequest("b1", 900_000L, asker = "4300:200"), now = 3_000L)
+		assertEquals(1, vault.request("b1")!!.attempt)
+		// The same run asking again is a rejected value, even past the window.
+		vault.addRequest(team, typedRequest("a2", 900_000L, asker = "4242:100"), now = 3_000L + REPEAT_WINDOW_MS)
+		assertEquals(2, vault.request("a2")!!.attempt)
+		// An askerless repeat never borrows an asker's answer.
+		vault.addRequest(team, typedRequest("c1", 900_000L), now = 3_000L)
+		assertEquals(1, vault.request("c1")!!.attempt)
 	}
 
 	@Test

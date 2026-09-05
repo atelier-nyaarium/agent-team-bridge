@@ -108,6 +108,9 @@ export const VaultDecisionSchema = z
 
 const operation = z.string().trim().min(1).max(512);
 
+/** One run of the program asking: the helper's parent pid and start ticks. A second ask under the same asker is a rejected value. */
+const asker = z.string().min(1).max(128).optional();
+
 const requestFields = {
 	v: z.literal(1),
 	requestId,
@@ -115,6 +118,7 @@ const requestFields = {
 	shape: z.string().min(1).max(256),
 	sessionTarget: z.string().min(1).max(128),
 	deadlineAt: z.number().int().nonnegative(),
+	asker,
 };
 
 /** The `vault:request` payload a phone renders; `typed` asks the owner for a value. */
@@ -175,7 +179,7 @@ export const VaultCaptureRequestSchema = z.object({
 	publicDescription: z.string().max(2048).optional(),
 	value: z.string().min(1).max(MAX_VAULT_CAPTURE_CHARS),
 });
-export const VaultAskpassRequestSchema = z.object({ cmdline: operation, waitMs });
+export const VaultAskpassRequestSchema = z.object({ cmdline: operation, waitMs, asker });
 export const VaultApprovedDecisionSchema = z.enum(["once", "window", "session"]);
 /** What use, collect, and askpass answer: pending hands back the request; deny and timeout both refuse. */
 export const VaultValueAnswerSchema = z.discriminatedUnion("outcome", [

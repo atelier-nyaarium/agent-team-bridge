@@ -68,17 +68,19 @@ const publicView = (entry: VaultEntryView): VaultPublicEntry => ({
 export function createVaultRoutes(deps: VaultRoutesDeps): Map<string, Handler> {
 	const waitFor = (requested: number | undefined) => Math.min(requested ?? DEFAULT_WAIT_MS, VAULT_ROUTE_WAIT_CAP_MS);
 
-	/** One credential per caller; each route names the kinds it serves. An unknown token answers not found, as the agent routes do. */
+	/**
+	 * Each route names the kinds it serves, first preferred: a helper run inside a session carries both
+	 * credentials, and the verified session is the asker. An unknown token answers not found, as the agent routes do.
+	 */
 	const principal = (req: Request, accepts: ReadonlyArray<Principal["kind"]>): Principal | Response => {
 		const helperToken = req.headers.get(HELPER_TOKEN_HEADER);
-		if (helperToken) {
-			const tokenId = deps.helperTokens.verify(helperToken);
-			if (tokenId && accepts.includes("helper")) return { kind: "helper", target: helperTarget(tokenId) };
-			return json({ error: "not found" }, 404);
-		}
+		const tokenId = helperToken ? deps.helperTokens.verify(helperToken) : null;
 		const team = deps.resolveCaller(req);
-		if (team && accepts.includes("session")) return { kind: "session", target: team };
-		return team || presentedByRequest(req).token
+		for (const kind of accepts) {
+			if (kind === "session" && team) return { kind: "session", target: team };
+			if (kind === "helper" && tokenId) return { kind: "helper", target: helperTarget(tokenId) };
+		}
+		return helperToken || team || presentedByRequest(req).token
 			? json({ error: "not found" }, 404)
 			: json({ error: "this session is not bound to the gateway" }, 401);
 	};
@@ -129,10 +131,17 @@ export function createVaultRoutes(deps: VaultRoutesDeps): Map<string, Handler> {
 		operation: string,
 		value: () => string | null,
 		waitMs: number,
+		asker?: string,
 	): Promise<Response> {
 		const covering = deps.decisions.covers(scope, deps.ambient.now());
 		if (covering) return approved(covering.tier, value());
-		const input = { kind: "entry" as const, entryId: scope.entryId, operation, sessionTarget: scope.sessionTarget };
+		const input = {
+			kind: "entry" as const,
+			entryId: scope.entryId,
+			operation,
+			sessionTarget: scope.sessionTarget,
+			asker,
+		};
 		const existing = deps.requests.find(input);
 		const opened = existing ? { kind: "opened" as const, ...existing } : deps.requests.open(input);
 		if (opened.kind !== "opened") return unopened(opened.reason);
@@ -250,9 +259,9 @@ export function createVaultRoutes(deps: VaultRoutesDeps): Map<string, Handler> {
 		return json({ id });
 	};
 
-	/** Unique title match selects an entry; otherwise input is typed. */
+	/** Unique title match selects an entry; otherwise input is typed. A helper inside a session asks as that session. */
 	const askpass: Handler = async (req, body) => {
-		const who = principal(req, ["helper"]);
+		const who = principal(req, ["session", "helper"]);
 		if (who instanceof Response) return who;
 		const parsed = VaultAskpassRequestSchema.safeParse(body);
 		if (!parsed.success) return json({ error: "invalid askpass request" }, 400);
@@ -260,6 +269,7 @@ export function createVaultRoutes(deps: VaultRoutesDeps): Map<string, Handler> {
 		if (client instanceof Response) return client;
 		const shape = operationShape(parsed.data.cmdline);
 		const sessionTarget = who.target;
+		const { asker } = parsed.data;
 		const waitMs = waitFor(parsed.data.waitMs);
 		// Duplicate titles require typed input.
 		const matches = client
@@ -274,9 +284,9 @@ export function createVaultRoutes(deps: VaultRoutesDeps): Map<string, Handler> {
 		const match = matches.length === 1 ? matches[0] : undefined;
 		if (match) {
 			const scope = { entryId: match.entry.id, shape, sessionTarget };
-			return decide(req, scope, parsed.data.cmdline, () => client.openValue(match.stored), waitMs);
+			return decide(req, scope, parsed.data.cmdline, () => client.openValue(match.stored), waitMs, asker);
 		}
-		const opened = deps.requests.open({ kind: "typed", operation: parsed.data.cmdline, sessionTarget });
+		const opened = deps.requests.open({ kind: "typed", operation: parsed.data.cmdline, sessionTarget, asker });
 		if (opened.kind !== "opened") return unopened(opened.reason);
 		return settle(await waitAnswer(opened.answer, waitMs, req.signal), opened.request, () => null);
 	};

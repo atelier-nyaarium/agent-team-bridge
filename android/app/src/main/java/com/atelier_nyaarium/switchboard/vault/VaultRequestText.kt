@@ -43,12 +43,15 @@ internal fun expiresIn(deadlineAt: Long, now: Long = System.currentTimeMillis())
 	}
 }
 
-/** The same command asked again soon after an answer; sudo's try count when it is sudo. */
+/** A second ask under the same asker is a rejected value; without one, the same command soon after an answer is a guess. */
 internal fun repeatNotice(request: VaultPendingRequest): String? {
-	val since = request.sinceAnswerMs ?: return null
 	if (request.attempt <= 1) return null
-	val seconds = (since + 500) / 1000
 	val sudo = programOf(request.operation) == "sudo"
+	if (request.request.asker != null) {
+		return if (sudo) "Wrong password. ${request.attempt} of $SUDO_TRIES." else "Not accepted. Try ${request.attempt}."
+	}
+	val since = request.sinceAnswerMs ?: return null
+	val seconds = (since + 500) / 1000
 	val tail = if (sudo) " Likely wrong password. ${request.attempt} of $SUDO_TRIES." else ""
 	return "Asked again $seconds s after your answer.$tail"
 }

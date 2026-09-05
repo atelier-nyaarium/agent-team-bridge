@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { VaultValueAnswer } from "../shared/schemasVault.js";
 import {
+	askerOf,
 	askpassBrief,
 	createGatewayPort,
 	type GatewayPort,
@@ -206,6 +207,18 @@ describe("the askpass brief", () => {
 		expect(askpassBrief("sudo -A apt", "/usr/bin/sudo")).toBe("/usr/bin/sudo apt");
 	});
 
+	it("the asker is the parent's pid and start ticks, read past a comm that holds spaces and parens", () => {
+		expect(
+			askerOf(
+				2584370,
+				"2584370 (sudo) S 2584367 2584367 2584367 0 -1 4194560 0 0 0 0 0 0 0 0 20 0 1 0 14831454 1 2 3",
+			),
+		).toBe("2584370:14831454");
+		expect(askerOf(7, "7 (a b) c) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 99 0")).toBe("7:99");
+		expect(askerOf(7, "7 (short) S 1 2")).toBeNull();
+		expect(askerOf(7, "garbage")).toBeNull();
+	});
+
 	it("only a password or passphrase prompt goes to the phone", () => {
 		for (const prompt of ["[sudo] password for me:", "Enter passphrase for key '/x':", "Password:", "", "PIN:"])
 			expect(secretPrompt(prompt)).toBe(true);
@@ -232,6 +245,7 @@ describe("the gateway port", () => {
 		const port = createGatewayPort({
 			baseUrl: "http://gw",
 			token: "tok",
+			sessionToken: "sess",
 			fetch: async (url, init) => {
 				seen.push({
 					url,
@@ -242,15 +256,15 @@ describe("the gateway port", () => {
 			},
 		});
 		const signal = new AbortController().signal;
-		expect(await port.askpass("sudo apt", 10, signal)).toEqual({
+		expect(await port.askpass("sudo apt", 10, signal, "42:7")).toEqual({
 			outcome: "pending",
 			requestId: "r",
 			deadlineAt: 5,
 		});
 		expect(seen[0]).toMatchObject({
 			url: "http://gw/vault/askpass",
-			headers: { "x-vault-helper-token": "tok" },
-			body: { cmdline: "sudo apt", waitMs: 10 },
+			headers: { "x-vault-helper-token": "tok", "x-session-token": "sess" },
+			body: { cmdline: "sudo apt", waitMs: 10, asker: "42:7" },
 		});
 		expect(await port.collect("r", 10, signal)).toBeNull();
 		expect(await port.collect("r", 10, signal)).toBeNull();
