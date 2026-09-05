@@ -56,7 +56,7 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
 - `src/gateway/copilotAgentPersistence.ts` - Copilot catalog reads, replay, and commits
 - `src/gateway/copilotAgentTypes.ts` - Copilot service deps, transition results, and the application union
 - `src/gateway/router/` - Router WS client; `pinnedSocket.ts` owns certificate pinning
-- `src/gateway/router/inboxDeliveryPump.ts` / `inboxClaims.ts` / `sessionRegistryReporter.ts` - inbox drain with durable claims, and session registry reporting
+- `src/gateway/router/inboxDeliveryPump.ts` / `inboxClaims.ts` / `sessionRegistryReporter.ts` - inbox drain with durable claims, and session registry reporting that keeps a refused write pending and retries it
 - `src/gateway/router/presenceReporter.ts` / `presenceProtocol.ts` - presence pump and pure protocol; `applyAnswer` cannot reach the sender, so answers do not start frames
 - `src/gateway/router/shareAttestor.ts` - share liveness attestation, coalesced
 - `src/gateway/router/boardClient.ts` - sole sealer of board text and sole local-key mapper; CAS writes

@@ -783,7 +783,7 @@ waiter, so the call held for the whole budget.
 
 ## Phase 5 - Split ✅
 
-### Slices, as shipped (`d76a9d37`, `cc54aa0a`, `7ba3cb65`; audits answered in `090a7ae1`, `86a08de6`, `63d3d741`) ✅
+### Slices, as shipped (`d76a9d37`, `cc54aa0a`, `7ba3cb65`; audits answered in `090a7ae1`, `86a08de6`, `63d3d741`, `b9d32c29`) ✅
 
 **Routes and the HTTP router:** `routes.ts` is a 266-line composer over twelve modules under
 `src/gateway/routes/` (addressing, the caller guards, the relay, status, capabilities, presence,
@@ -1054,6 +1054,10 @@ into the app; no wire field changes. Gateway first as usual.
   Router record after a refused mirror; the re-audit showed the withdrawal could itself fail and
   strand a record that admits the friend. Ordering the writes so the dangerous state is
   unreachable beat retrying the compensation.
+- **A Router write with no retry policy.** The presence reporter waits for a cue on a refusal and
+  the inbox pump leaves its durable claim unacked, but the session registry reporter voided every
+  answer, so the first fence it met lost a forget for the life of the process. Every path that
+  writes to the Router names what it does with a refusal, or it is not a path.
 - **A port callback is not bookkeeping.** One audit removed `expect(ctx.retired)` from the unlink
   test as a fake's call log; the next audit wanted it back, since `retireRevokedPeerRows` is the
   service's outbound effect on the inbox. A dep the service calls to change a peer is the peer's
