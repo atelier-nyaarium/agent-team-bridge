@@ -46,8 +46,8 @@ and the delta list are in `docs/federation.md` under Owner state.
 - A request carries an id, the operation text, its shape, the session target, and a deadline nine
   minutes out. It names an entry, or it is `typed` and asks the owner for a value.
 - **It reaches the phone as a `plugin_action` row:** `pluginId` `vault`, `actionType` `request`,
-  delivered through `deliverToOwner` into the session's conversation thread, or the gateway's own
-  vault thread for the helper. The row is volatile: a restart drops it, because the waiting answer
+  delivered through `deliverToOwner` into the session's conversation thread, or the console's own
+  conversation for the helper. The row is volatile: a restart drops it, because the waiting answer
   lived in the process that died.
 - The `vault_answer` value op carries the decision and, for a typed request, the value sealed to the
   request id. Deny and the deadline refuse alike. An unknown or settled request answers

@@ -77,7 +77,8 @@ fun VaultRequestSheet(
 		busy = true
 		scope.launch {
 			val approving = decision != VAULT_DECISION_DENY
-			if (approving && !repo.vaultOps.ownerPresent(activity)) {
+			// A typed value never prompts: typing it is the owner's act.
+			if (approving && !typedRequest && !repo.vaultOps.ownerPresent(activity)) {
 				busy = false
 				return@launch
 			}
@@ -116,7 +117,7 @@ fun VaultRequestSheet(
 				)
 				if (typedRequest) {
 					Text(
-						"No entry matches. Type the value to hand over once.",
+						"No entry is titled ${request.shape}. Type the value to hand over once.",
 						style = MaterialTheme.typography.bodySmall,
 						color = MaterialTheme.colorScheme.onSurfaceVariant,
 					)

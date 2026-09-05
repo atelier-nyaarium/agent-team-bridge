@@ -35,6 +35,17 @@ class NotificationReceiver : BroadcastReceiver() {
 				ACTION_VAULT_DENY -> com.atelier_nyaarium.switchboard.vault.VAULT_DECISION_DENY
 				else -> return
 			}
+			// A gate set after the notification was posted sends the tap into the sheet.
+			val gated = decision != com.atelier_nyaarium.switchboard.vault.VAULT_DECISION_DENY &&
+				repo.store.vaultUnlock != com.atelier_nyaarium.switchboard.vault.VAULT_UNLOCK_OFF
+			if (gated) {
+				context.startActivity(
+					Intent(context, MainActivity::class.java)
+						.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+						.putExtra(SwitchboardService.EXTRA_VAULT_REQUEST, requestId),
+				)
+				return
+			}
 			return repo.command { vaultOps.answerById(requestId, decision) }
 		}
 		val team = intent.getStringExtra(SwitchboardService.EXTRA_OPEN_TEAM) ?: return

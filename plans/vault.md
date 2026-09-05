@@ -456,7 +456,13 @@ load, on refresh, and when the deadline passes on the gateway's side. Notificati
 the sheet. Grants are read per admitted gateway when the tab opens and after an approval, not on
 every plane bump. The whole-session chip reads YOLO; a window reads vault. The 49 MB list bullet is
 deferred: the caps hold, and a real vault stays far under them. Kotlin fixtures gained `vault_put`
-and `vault_list`, replayed through the Router by `wire-fixtures-kotlin.test.ts`.
+and `vault_list`, replayed through the Router by `wire-fixtures-kotlin.test.ts`. The gate covers an
+entry approval, a reveal, and a save that changes or clears a stored value; a typed value never
+prompts (Q5). A notification button taken after the gate was set opens the sheet instead of
+answering. The phone's manager and ops read the system clock and mint UUIDs like the board's; R9
+binds the gateway and Router. The vault's store key writes with `apply`, since the Router holds the
+truth and a request lost to a crash expires on the gateway. A request that arrives while the plugin
+is off is dropped like any unclaimed action, and pending ones keep their notifications.
 
 ## Phase 4 - Askpass helper
 

@@ -181,7 +181,13 @@ fun VaultEntryDialog(
 							onClick = hapticClick {
 								busy = true
 								val keepSealed = existing?.gatewaysUnreadable == true && gateways == null
+								// Changing or clearing a stored value passes the gate, as a reveal does.
+								val touchesValue = existing?.hasValue == true && value != null
 								scope.launch {
+									if (touchesValue && !repo.vaultOps.ownerPresent(activity)) {
+										busy = false
+										return@launch
+									}
 									finish(
 										repo.vaultOps.save(
 											VaultDraft(
