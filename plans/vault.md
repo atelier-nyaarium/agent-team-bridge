@@ -355,7 +355,7 @@ From the questionaire, refreshed against `7a865872`. Deploy order per AGENTS.md:
 answers new frames), then gateway, then phone, then plugin. Every wire addition optional and
 tolerated by both peers. Each phase ends with its harness scenarios green under both timer drives.
 
-## Phase 1 - Wire truth and the Router vault service
+## Phase 1 - Wire truth and the Router vault service ✅
 
 - `src/shared/schemasVault.ts`: `VaultEntry` clear envelope (id, revision, tombstone, `createdBy`
   phone or gateway), sealed field envelopes, request and answer payloads. `.meta({id})` for the
@@ -451,3 +451,27 @@ evicts a revoked signer through the one drop path, and names its frame refusals 
 - Residue tests: vault door, `DATA_DIR_ENTRIES`, AAD vectors, no tool answers a value. The
   ambient fence covers the new directories by construction.
 - Luna audit of each phase before its push.
+
+## Painpoints
+
+Collected after Phase 1. Nothing here is fixed; each names the mechanism.
+
+- Every value OwnerOp commits before `OwnerOpIntake.settle` records the nonce, so a crash between
+  the two replays the signed op against changed state on repost: a `vault_delete` answers
+  `entry_missing` with the tombstone, a put conflicts. Pre-existing and shared by board,
+  scheduled, and capabilities. Close once by persisting the op identity in the same store batch.
+- Ten tests build their own fake `OwnerServiceHooks` object. Adding `onSweep` cost ten edits, and
+  the next hook member costs ten more. One `fakeHooks()` in `src/testing/` ends that.
+- `gateway-bridge-inbox.test.ts` rebuilds a bridge and a registration by hand for every revocation
+  and removal scenario because its `registered()` helper fixes `getDomain`. A builder taking a
+  mutable Domain would halve those tests.
+- `PlaybackOpsTest.enqueueOrderSurvivesPause` is timing-flaky under `Dispatchers.Unconfined`: one
+  failure in the Kotlin gate, three clean reruns.
+- `authorityReady` treats no leases as ready, so a harness scenario that wants a held Domain must
+  register under the window first. A scenario that inherited the lease from its predecessor passed
+  for the wrong reason until the red team caught it.
+- `dropConnection` skips the listeners for a removed Domain, which is right for the presence
+  writer and leaves `shareService`'s in-memory attestations for that Domain until the process
+  ends. Small, and nothing else revisits a Domain that left the registry.
+- `TerminalView.kt` still carries the multi-line comment blocks the crunch never reached, since
+  no plan touched it.
