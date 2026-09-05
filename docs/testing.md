@@ -94,6 +94,7 @@ bookkeeping:
 | `federation-harness-xdomain.test.ts` | The share gate, the gateway's own share frames, a share under the migration fence, a cross-Domain wake, return-route authentication, a relay retried across a Router restart, unlink of in-flight work, share auto-forget |
 | `federation-harness-router.test.ts` | Router-only: tenant provision, first root, rename and its refusals, removal, deletion, replay across a restart, device approval, the trust rendezvous |
 | `federation-harness-codex.test.ts` | Codex through the gateway and the daemon: start, message, list, stop, replayed frames, gateway and daemon restarts |
+| `federation-harness-vault.test.ts` | A phone's sealed put read back by the gateway, the AAD binding, delta lists, the CAS conflict carrying the winner, delete and revive through the tombstone, the gateway's create-only road, the fence refusing a create, and the Router's sweep held under the fence |
 
 `startRouterOnly` composes the Router without a gateway, so a scenario can add an arming or active
 gateway itself. `restartRouter` replaces the Router on its port over a store reopened from disk.
@@ -104,8 +105,8 @@ The coordinators and services behind the scenarios keep pure-rule suites beside 
 `cross-domain-handshake` (limits, cancellation, mismatch refusals), `router-coordinators`
 (rendezvous, approval, and tenant limits), `owner-op-intake` (in-flight duplicates, caps,
 admission refusals, quarantine), `cross-domain-presence` (consumer, pusher, reconciler, source),
-`share-rules`, and `console-cross-domain-share` (the mirror before the record, a refused record,
-the fence). The host daemon's Codex service has its own bench in
+`share-rules`, `console-cross-domain-share` (the mirror before the record, a refused record,
+the fence), and `vault-service` (caps, tombstones, the delta floor, quarantine). The host daemon's Codex service has its own bench in
 `codex-daemon-service.test.ts`: the real `ThreadLifecycle`, tracker, and JSONL transport over a
 scripted App Server child, with only the launcher as a double.
 
@@ -142,7 +143,7 @@ manifest entry on both sides. The n-th random draw of a case is the first N byte
 ## Wire vocabulary
 
 `src/shared/wire-vocabulary.ts` declares the Router paths, the console header and Bearer prefix,
-the signing tags, the outcome and reason constants, and the nonce lengths. The owner-op kinds
+the signing tags, the outcome and reason constants, the bridge's refusals, and the nonce lengths. The owner-op kinds
 come from `src/federation-server/ownerOpRegistry.ts`, the catalog every kind registers through.
 `scripts/codegen-kotlin.ts` emits both as `Protocol.Wire`, with the console op kinds, socket
 frame types, and key op kinds from the Zod literals. `wire-vocabulary-residue.test.ts` rejects

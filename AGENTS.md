@@ -132,7 +132,7 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
 - `src/federation-server/inbox/` - inbox service, op ledger, consumer and session registries, gateway incarnation, OwnerOp intake, blob fetch route
 - `src/federation-server/inbox/inboxAppend.ts` / `inboxRetire.ts` / `inboxSweep.ts` / `inboxOpResult.ts` / `inboxCore.ts` - row append and admission, row retirement, the expiry sweep, router-authored result rows, and shared primitives (`recordId`, `guarded`, `ledgerTransaction`, `ownerAddress`, `floorOf`) behind `InboxService`
 - `src/federation-server/blobs/` - Router blob cache with leases and the reference-held store
-- `src/federation-server/ownerServices.ts` / `ownerServiceHooks.ts` - the owner-state services behind one hook surface: OwnerOp kinds, gateway frames, register and drop listeners
+- `src/federation-server/ownerServices.ts` / `ownerServiceHooks.ts` - the owner-state services behind one hook surface: OwnerOp kinds, gateway frames, register and drop listeners, and the sweepers the fence holds
 - `src/federation-server/presence/` - presence rows per gateway incarnation, resync, roster, owner and friend projections
 - `src/federation-server/share/` - share records, generations, attestations, sweep, unlink; the peer-row gate
 - `src/federation-server/board/` - board records with sealed text, authority and cascade on the clear envelope, observation rows
@@ -170,7 +170,7 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
 - `src/shared/host-spawn.ts` - sole host-shell spawn-segment and command owner
 - `src/shared/crypto.ts` / `admission.ts` / `router-protocol.ts` / `federation-lifecycle.ts` - federation trust wire vocabulary
 - `src/shared/notice.ts` - shared notice tiers
-- `src/shared/wire-vocabulary.ts` - sole TS declaration of Router paths, the console header, signing tags, nonce lengths; generated into `Protocol.Wire` beside the owner-op kinds the registry catalogues; residue-fenced on both runtimes
+- `src/shared/wire-vocabulary.ts` - sole TS declaration of Router paths, the console header, signing tags, the bridge's refusals, nonce lengths; generated into `Protocol.Wire` beside the owner-op kinds the registry catalogues; residue-fenced on both runtimes
 - `src/shared/fixture-identity.ts` - the committed test signing keys; shipping entry points refuse them without `ALLOW_FIXTURE_IDENTITY=1`
 - `src/shared/ambient.ts` - the clock, entropy, ids, and timers as one injected record; `processAmbient` is the sole reader of the globals and unrefs every timer it hands back. `composeGateway` and `RouterServerParams` take one and thread it everywhere; `ambient-residue.test.ts` fences the three directories and names the reason for each allowed file. Vocabulary shared with the phone's `PhoneAmbient`, not a type
 - `src/shared/atomic-write.ts` - sole write-then-rename and temp-suffix owner; residue-tested
