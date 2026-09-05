@@ -106,7 +106,8 @@ and git run it with the prompt as its one argument and read the value from stdou
   place of its first word, so a renamed binary shows where it lives. sudo's `-A` ahead of the
   command is dropped, so `sudo -A apt install foo` briefs as `/usr/bin/sudo apt install foo` and
   shapes as `sudo apt`. Without `/proc`, the prompt is the brief. The brief names the operation. It
-  does not authenticate the caller: a process may claim any command line.
+  does not authenticate the caller: a process may claim any command line, and any `asker`, so the
+  retry line is guidance, never authorization.
 - **A session's own sudo asks as that session:** sudo hands the helper the caller's environment, so
   the helper sends `SWITCHBOARD_SESSION_TOKEN` beside its own token when it has one, and the gateway
   names the verified session as the requester. A terminal without one is the helper. The helper
@@ -204,8 +205,8 @@ session holds a binding token. `vaultRun.ts` is the child run.
 - **One notification per pending request:** swipe denies; tap opens the sheet, where every answer
   lives. The sheet answers with `vault_answer` through the gateway value op. The footer is Deny as
   text and a split button: `Approve` answers once, and the arrow holds 30 min and This session; for
-  a typed value, `Send`, with Send and save for next time behind the arrow, which stores the value
-  under the shape as its title. Deny opens a `Steer` field whose note rides the refusal.
+  a typed value, `Send`, with Send and save behind the arrow, which stores the value under the
+  shape as its title. Deny opens a `Steer` field whose note rides the refusal.
 - Vault approvals, under Settings and Security: Off, Every approval, 30-minute unlock.
   `ApprovalGate` is the one gate: it runs before an entry approval, a reveal, and a save that
   changes a stored value; a typed value never prompts. Tightening the policy is free, loosening it

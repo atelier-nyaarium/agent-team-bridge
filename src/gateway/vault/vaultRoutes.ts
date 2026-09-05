@@ -68,10 +68,7 @@ const publicView = (entry: VaultEntryView): VaultPublicEntry => ({
 export function createVaultRoutes(deps: VaultRoutesDeps): Map<string, Handler> {
 	const waitFor = (requested: number | undefined) => Math.min(requested ?? DEFAULT_WAIT_MS, VAULT_ROUTE_WAIT_CAP_MS);
 
-	/**
-	 * Each route names the kinds it serves, first preferred: a helper run inside a session carries both
-	 * credentials, and the verified session is the asker. An unknown token answers not found, as the agent routes do.
-	 */
+	/** Kinds in preference order; a helper inside a session is that session. An unknown token answers not found. */
 	const principal = (req: Request, accepts: ReadonlyArray<Principal["kind"]>): Principal | Response => {
 		const helperToken = req.headers.get(HELPER_TOKEN_HEADER);
 		const tokenId = helperToken ? deps.helperTokens.verify(helperToken) : null;
@@ -259,7 +256,7 @@ export function createVaultRoutes(deps: VaultRoutesDeps): Map<string, Handler> {
 		return json({ id });
 	};
 
-	/** Unique title match selects an entry; otherwise input is typed. A helper inside a session asks as that session. */
+	/** A unique title picks the entry; otherwise the owner types. */
 	const askpass: Handler = async (req, body) => {
 		const who = principal(req, ["session", "helper"]);
 		if (who instanceof Response) return who;

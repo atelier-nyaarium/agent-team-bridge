@@ -584,7 +584,7 @@ the refused answer, so it reaches the session in the `vault_run` result it was w
 helper prints it to stderr. The notification lost its Once, 30 min, and Deny buttons: a tap opens
 the sheet, where every answer lives, and a swipe still denies. The four wrapping pills became one
 row: Deny as a text button, then a split button whose main half is `Approve` (once) or `Send`, and
-whose arrow holds 30 min and This session, or Send and save for next time. The save checkbox and
+whose arrow holds 30 min and This session, or Send and save. The save checkbox and
 its title field went with it; a saved typed value takes the shape as its title, which is what the
 helper matches.
 
@@ -614,13 +614,26 @@ matches on entry, shape, and session together, so narrowing the shape can never 
   where one would do; a single "collect, scrub, then bound" pass with the capture reading the same
   buffer is the shape to reach for.
 
-## Phase 6 - Docs, residue, audit
+## Phase 6 - Docs, residue, audit ✅
 
 - `docs/vault.md` (written with Phase 2; each phase extends it); AGENTS.md map entries;
   `docs/console.md` OwnerOps; `docs/environment.md`.
 - Residue tests: vault door, `DATA_DIR_ENTRIES`, AAD vectors, no tool answers a value. The
   ambient fence covers the new directories by construction.
 - Luna audit of each phase before its push.
+
+Shipped: the vault door and the Router fences and the AAD vectors were already in place from the
+earlier phases. `data-dir-inventory.test.ts`, which the inventory's own comment named, did not
+exist; it now pins every `openDurable` stem to `DATA_DIR_ENTRIES` and every entry to an opener.
+`vault-tools-residue.test.ts` fences the value's roads: the tool hands it only to the child, the
+run result has no value field, and the helper writes it to stdout alone. Three Luna audits ran over
+the dialog, asker, and steering work: prose (one multi-line comment shortened, three doc comments
+cut, one UI string trimmed to `Send and save`), tests (one redundant assertion dropped), and an
+adversarial security read, which found no authorization change: a helper alone still resolves to
+its own target, a session token still maps server-side to one team, the note is owner-signed and
+bounded to 2048 both ways. Two low notes stand: `asker` is the helper's claim, like the brief, so
+the retry line is guidance and the doc says so; `find` joins by caller, not by asker, which keeps
+two concurrent runs of one command on one approval.
 
 ## Painpoints
 

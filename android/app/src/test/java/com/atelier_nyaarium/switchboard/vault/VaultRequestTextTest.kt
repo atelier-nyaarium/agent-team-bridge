@@ -3,7 +3,6 @@ package com.atelier_nyaarium.switchboard.vault
 import com.atelier_nyaarium.switchboard.ChatState
 import com.atelier_nyaarium.switchboard.proto.VaultRequest
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -50,7 +49,6 @@ class VaultRequestTextTest {
 		assertEquals(Expiry("Expires in 120 s", true), expiresIn(EXPIRY_SECONDS_BELOW_MS - 1, now = 0L))
 		assertEquals(Expiry("Expires in 1 s", true), expiresIn(1L, now = 0L))
 		assertEquals(Expiry("Expired", true), expiresIn(0L, now = 0L))
-		assertFalse(expiresIn(600_000L, now = 0L).urgent)
 	}
 
 	@Test

@@ -180,7 +180,7 @@ fun VaultRequestSheet(
 							label = "Send",
 							enabled = !busy && !expired && typed.isNotEmpty(),
 							onMain = { answer(VAULT_DECISION_ONCE) },
-							more = listOf("Send and save for next time" to { answer(VAULT_DECISION_ONCE, save = true) }),
+							more = listOf("Send and save" to { answer(VAULT_DECISION_ONCE, save = true) }),
 						)
 					} else {
 						SplitAnswer(

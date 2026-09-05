@@ -157,7 +157,7 @@ class VaultManager(private val store: VaultStore) : ClearsOnReprovision {
 	fun openValue(entry: VaultStoredEntry, sealing: VaultSealing): String? =
 		entry.sealed.value?.let { sealing.open(it, VAULT_VALUE_KIND, entry.clear.id) }
 
-	/** A duplicate dispatch or an expired request is dropped; a repeat under the same asker, or of the same command inside the window, counts its attempt. */
+	/** Drops duplicates and expired; counts a repeat's attempt. */
 	fun addRequest(team: String, request: VaultRequest, now: Long = System.currentTimeMillis()): Boolean {
 		synchronized(stateLock) {
 			if (request.deadlineAt <= now) return false

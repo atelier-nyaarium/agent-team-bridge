@@ -99,7 +99,7 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
 - `android/.../RendererPoolBindings.kt` / `AppOverlays.kt` / `LinkMenu.kt` - WebView pool, overlays, and link actions
 - `android/.../SettingsSections.kt` / `SettingsSystem.kt` / `SettingsVoice.kt` - settings leaf screens
 - `android/.../MainTabsScreen.kt` / `SessionsHeaders.kt` / `SessionCard.kt` / `SessionCardPreview.kt` / `SessionsEmptyState.kt` - sessions tab shell, cards, rules, and empty-state machine
-- `android/.../vault/` - `VaultSealing.kt` / `VaultManager.kt` / `VaultRouterWriter.kt` / `VaultDraft.kt` / `ApprovalGate.kt` / `VaultScreen.kt` / `VaultEntryDialog.kt` / `VaultRequestSheet.kt` - the sealing door, the held entry set with pending requests, the owner-op writer, the draft-to-sealed rule, the one owner-presence gate, the tab, the editor, the request sheet
+- `android/.../vault/` - `VaultSealing.kt` / `VaultManager.kt` / `VaultRouterWriter.kt` / `VaultDraft.kt` / `ApprovalGate.kt` / `VaultScreen.kt` / `VaultEntryDialog.kt` / `VaultRequestSheet.kt` / `VaultRequestText.kt` / `VaultState.kt` - the sealing door, the held entry set with pending requests and the retry count, the owner-op writer, the draft-to-sealed rule, the one owner-presence gate, the tab, the editor, the request sheet, its pure text rules (title, requester, countdown, repeat line), and the held request shapes
 - `android/.../crypto/ContentSealing.kt` - the one sealing door the board and the vault subclass; only the AAD builder differs
 - `android/.../plugins/vault/VaultPlugin.kt` - claims `vault:request`, forget, and wipe
 - `android/.../board/` - board reducers and durable `BoardManager`

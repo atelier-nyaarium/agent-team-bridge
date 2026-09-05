@@ -118,7 +118,7 @@ export function createVaultRequests(deps: VaultRequestsDeps) {
 		return { kind: "opened", request, answer };
 	};
 
-	/** The request still open for the same asker, entry, and operation, so a retry joins it. */
+	/** The request still open for the same caller, entry, and operation, so a retry joins it. */
 	const find = (input: VaultRequestInput): Pick<Pending, "request" | "answer"> | undefined => {
 		for (const entry of pending.values()) {
 			const { request } = entry;

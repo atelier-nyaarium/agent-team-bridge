@@ -43,7 +43,7 @@ internal fun expiresIn(deadlineAt: Long, now: Long = System.currentTimeMillis())
 	}
 }
 
-/** A second ask under the same asker is a rejected value; without one, the same command soon after an answer is a guess. */
+/** Same asker again is a rejected value; otherwise a timed guess. */
 internal fun repeatNotice(request: VaultPendingRequest): String? {
 	if (request.attempt <= 1) return null
 	val sudo = programOf(request.operation) == "sudo"
