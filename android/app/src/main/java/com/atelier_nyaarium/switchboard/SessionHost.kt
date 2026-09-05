@@ -19,6 +19,7 @@ internal interface SessionHost {
 	var terminalRefreshMs: Long
 	val spawnRetryWindowMs: Long
 	val forgetTombstoneMs: Long
+	val forgetRetryMs: Long
 
 	fun canonicalTarget(team: String): String
 	fun forgetReadAnchor(team: String)
@@ -38,7 +39,7 @@ internal interface SessionHost {
 	suspend fun listDirs(path: String, hostTarget: String, spawn: String): ConsoleListDirsResult
 	suspend fun wake(target: String, opId: String)
 	suspend fun closeSession(team: String)
-	suspend fun forget(team: String, boardDisposition: String?): String?
+	suspend fun forget(team: String, boardDisposition: String?, opId: String): String?
 
 	fun persistThreads(threads: Map<String, List<Message>>, anchors: Map<String, ReadAnchor>)
 	fun persistLabels(labels: Map<String, String>)
@@ -60,6 +61,7 @@ internal class ChatRepositorySessionHost(private val repo: ChatRepository) : Ses
 		set(value) { repo.store.terminalRefreshMs = value }
 	override val spawnRetryWindowMs get() = ChatRepository.SPAWN_RETRY_WINDOW_MS
 	override val forgetTombstoneMs get() = ChatRepository.FORGET_TOMBSTONE_MS
+	override val forgetRetryMs get() = ChatRepository.FORGET_RETRY_MS
 
 	override fun canonicalTarget(team: String) = repo.canonicalTarget(team)
 	override fun forgetReadAnchor(team: String) {
@@ -89,7 +91,8 @@ internal class ChatRepositorySessionHost(private val repo: ChatRepository) : Ses
 		repo.client().listDirs(path, hostTarget, spawn)
 	override suspend fun wake(target: String, opId: String) = repo.client().wake(target, opId)
 	override suspend fun closeSession(team: String) = repo.client().closeSession(team)
-	override suspend fun forget(team: String, boardDisposition: String?) = repo.client().forget(team, boardDisposition)
+	override suspend fun forget(team: String, boardDisposition: String?, opId: String) =
+		repo.client().forget(team, boardDisposition, opId)
 
 	override fun persistThreads(threads: Map<String, List<Message>>, anchors: Map<String, ReadAnchor>) =
 		repo.persistence.persistThreadsAndReadAnchors(threads, anchors)

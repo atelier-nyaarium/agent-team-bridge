@@ -276,7 +276,7 @@ class ChatRepository(
 	internal val drainHost: DrainHost = ChatRepositoryDrainHost(this)
 	internal val presenceHost: PresenceHost = ChatRepositoryPresenceHost(this)
 	internal val presence = PresenceOps(presenceHost)
-	internal val sessions = SessionOps(ChatRepositorySessionHost(this), ports)
+	internal val sessions = SessionOps(ChatRepositorySessionHost(this), ports, mutationJournal)
 	internal val renameOps = RenameOps(ChatRepositoryRenameHost(this))
 	// Keep staged invite secrets in memory only.
 	internal val enrollInvites = java.util.concurrent.ConcurrentHashMap<String, EnrollInvite>()
@@ -311,6 +311,11 @@ class ChatRepository(
 	internal val forgottenUntil = java.util.concurrent.ConcurrentHashMap<String, Long>()
 	// Rows reconciled once per process.
 	internal val reconciled = java.util.Collections.synchronizedSet(mutableSetOf<String>())
+
+	// Before the held roster lands below.
+	init {
+		sessions.armPendingForgetTombstones()
+	}
 
 	internal var currentFocus: FocusIntent
 		get() = focusHost.currentFocus
@@ -538,6 +543,8 @@ class ChatRepository(
 		const val BACKGROUND_TICK_MS = 30_000L
 		// Outlast one teams request.
 		const val FORGET_TOMBSTONE_MS = ConsoleHttp.DEFAULT_OWNER_OP_TIMEOUT_MS + 5_000L
+		// Re-send a forget the Gateway did not confirm.
+		internal const val FORGET_RETRY_MS = 30_000L
 		// Total attachment cap from wire protocol.
 		const val MAX_OUTGOING_BYTES = Protocol.MAX_BLOB_BYTES
 

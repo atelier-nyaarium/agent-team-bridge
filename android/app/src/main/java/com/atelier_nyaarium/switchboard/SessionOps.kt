@@ -4,17 +4,24 @@ import com.atelier_nyaarium.switchboard.proto.Address
 import com.atelier_nyaarium.switchboard.proto.SpawnPoint
 import com.atelier_nyaarium.switchboard.proto.parseTarget
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.getAndUpdate
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.updateAndGet
 import kotlinx.coroutines.withContext
+import org.json.JSONObject
 
 /** A session's life beyond its transcript: the terminal view, spawn/wake/relaunch, and the forget
  * that ends one. Owns the spawn idempotency map, which is why it is a held delegate rather than
  * extensions the way the voice settings and the drafts are. */
-internal class SessionOps(private val host: SessionHost, private val presence: PresencePort) {
+internal class SessionOps(
+	private val host: SessionHost,
+	private val presence: PresencePort,
+	private val journal: MutationJournal,
+) {
 	/** Fire and forget; a session action never waits on the roster. */
 	private fun refreshAfterAction() {
 		host.launchInBackground { presence.refreshAfterAction() }
@@ -294,7 +301,11 @@ internal class SessionOps(private val host: SessionHost, private val presence: P
 		// Canonicalize once and key every field removal by it (matching openThread's own key), so
 		// a non-canonical spelling can't leave a field's entry behind while the others clear.
 		val key = host.canonicalTarget(team)
-		host.forgottenUntil[key] = System.currentTimeMillis() + host.forgetTombstoneMs
+		// Any Gateway this owner's keyring can seal to; the pane and the board live there.
+		val t = runCatching { parseTarget(team, host.localDomain, host.state.value.homeGatewayId) }.getOrNull()
+		val pending = if (t is Address && t.isLocalTo(host.localDomain, keyringGateways().toSet())) journalForget(key, boardDisposition) else null
+		// Held until the Gateway confirms. A journal write that failed gets the plain window.
+		host.forgottenUntil[key] = if (pending?.journaled == true) FORGET_HELD else System.currentTimeMillis() + host.forgetTombstoneMs
 		var dropped: List<Message> = emptyList()
 		val priorDraft = host.state.value.drafts[key]
 		val next = host.state.updateAndGet { s ->
@@ -333,42 +344,103 @@ internal class SessionOps(private val host: SessionHost, private val presence: P
 		// the files are local no matter where the session lives, unlike the gateway RPC.
 		host.scheduleAttachmentDelete(dropped.flatMap { it.files }.mapNotNull { it.src })
 		priorDraft?.let { host.scheduleAttachmentDelete(it.files.mapNotNull { f -> f.src }) }
-		// Also tear the live session down on the gateway (kill tmux + drop the resume record) so it
-		// stops listing as available, and dispose of its board work in the same call. Any Gateway this
-		// owner's keyring can seal to: a session on another machine has a pane and a board there, and
-		// Best-effort, the gateway no-ops an absent session.
-		val t = runCatching { parseTarget(team, host.localDomain, host.state.value.homeGatewayId) }.getOrNull()
-		val reachable = keyringGateways().toSet()
-		if (t is Address && t.isLocalTo(host.localDomain, reachable)) {
+		if (pending != null) {
+			forgetsInFlight.add(pending.opId)
 			host.launchInBackground {
-				runCatchingCancellable { host.forget(team, boardDisposition) }
-					// The record drop already bumps the presence plane server-side, which wakes this
-					// device's own currently-held poll for free (same as closeTab/wakeSession/
-					// spawnSession, none of which nudge the poll loop either) - no client-side action
-					// needed on success.
-					.onSuccess { applied ->
-						refreshAfterAction()
-						// A Gateway that predates the field strips the request's copy and answers
-						// without one, so it RELEASED work the owner asked to cancel. Say so; the
-						// session is gone either way and there is nothing left to retry against.
-						if (boardDisposition != null && applied != boardDisposition) {
-							host.state.update {
-								it.copy(transientMessages = it.transientMessages + "Gateway needs an update; that session's tasks went back to the backlog.")
-							}
-						}
-						withContext(Dispatchers.Main) { onForgotten?.invoke() }
-					}
-					.onFailure { e ->
-						DebugLog.log("Forget", "team=$team failed: ${e.message?.take(160)}")
-					host.state.update { it.copy(transientMessages = it.transientMessages + (e.message ?: "Forget failed")) }
-					}
+				try {
+					deliverForget(pending, announce = true, onForgotten)
+				} finally {
+					forgetsInFlight.remove(pending.opId)
+				}
 			}
 		} else {
-			// A silent path otherwise: the pane and the record outlive the row the owner just dropped.
+			// The pane and the record outlive the row otherwise; nothing to send it to.
 			DebugLog.log("Forget", "team=$team dropped locally; no Gateway to send it to")
-			// Nothing to send it to, so the local drop IS the whole forget.
 			onForgotten?.invoke()
 		}
+	}
+
+	/** A forget the Gateway has not confirmed. */
+	private data class PendingForget(val opId: String, val team: String, val boardDisposition: String?, val journaled: Boolean = true)
+
+	// OpIds with a send outstanding; a replay skips them.
+	private val forgetsInFlight = java.util.Collections.synchronizedSet(mutableSetOf<String>())
+	private val forgetRetryArmed = AtomicBoolean(false)
+
+	/** Journaled before anything local goes, so a death here loses nothing the Gateway still holds. */
+	private fun journalForget(team: String, boardDisposition: String?): PendingForget {
+		val opId = UUID.randomUUID().toString()
+		val journaled = runCatching {
+			journal.append(opId, FORGET_JOURNAL_KIND, JSONObject().put("team", team).putOpt("boardDisposition", boardDisposition))
+		}
+			.onFailure { DebugLog.log("Forget", "journal append failed for $team: ${it.message?.take(160)}") }
+			.isSuccess
+		return PendingForget(opId, team, boardDisposition, journaled)
+	}
+
+	private fun pendingForgets(): List<PendingForget> =
+		journal.entries(FORGET_JOURNAL_KIND).map {
+			PendingForget(it.opId, it.payload.getString("team"), it.payload.optString("boardDisposition").ifEmpty { null })
+		}
+
+	/** Hide every journaled forget's row before the first roster lands. */
+	fun armPendingForgetTombstones() {
+		for (p in pendingForgets()) host.forgottenUntil[p.team] = FORGET_HELD
+	}
+
+	/** Re-send every forget the Gateway never confirmed. Idempotent per opId at the Gateway. */
+	suspend fun replayPendingForgets() {
+		for (p in pendingForgets()) {
+			if (!forgetsInFlight.add(p.opId)) continue
+			try {
+				host.forgottenUntil[p.team] = FORGET_HELD
+				deliverForget(p, announce = false)
+			} finally {
+				forgetsInFlight.remove(p.opId)
+			}
+		}
+	}
+
+	/** One retry timer at a time. */
+	private fun scheduleForgetRetry() {
+		if (!forgetRetryArmed.compareAndSet(false, true)) return
+		host.launchInBackground {
+			try {
+				delay(host.forgetRetryMs)
+			} finally {
+				forgetRetryArmed.set(false)
+			}
+			replayPendingForgets()
+		}
+	}
+
+	/** Kill the pane, drop the resume record, and dispose of the board work in one call. Confirmed, the
+	 * journal entry goes and the tombstone shrinks to the snapshot-race window. */
+	private suspend fun deliverForget(p: PendingForget, announce: Boolean, onForgotten: (() -> Unit)? = null) {
+		val applied = runCatchingCancellable { host.forget(p.team, p.boardDisposition, p.opId) }
+			.getOrElse { e ->
+				DebugLog.log("Forget", "team=${p.team} failed: ${e.message?.take(160)}")
+				if (announce) host.state.update { it.copy(transientMessages = it.transientMessages + (e.message ?: "Forget failed")) }
+				scheduleForgetRetry()
+				return
+			}
+		runCatching { journal.remove(p.opId) }
+		host.forgottenUntil[p.team] = System.currentTimeMillis() + host.forgetTombstoneMs
+		// The record drop bumps the presence plane server-side, which wakes this device's held poll.
+		refreshAfterAction()
+		// A Gateway that predates the field released work the owner asked to cancel.
+		if (p.boardDisposition != null && applied != p.boardDisposition) {
+			host.state.update {
+				it.copy(transientMessages = it.transientMessages + "Gateway needs an update; that session's tasks went back to the backlog.")
+			}
+		}
+		onForgotten?.let { withContext(Dispatchers.Main) { it() } }
+	}
+
+	private companion object {
+		const val FORGET_JOURNAL_KIND = "forget"
+		// Never expires; a confirmed forget replaces it with the window.
+		const val FORGET_HELD = Long.MAX_VALUE
 	}
 }
 

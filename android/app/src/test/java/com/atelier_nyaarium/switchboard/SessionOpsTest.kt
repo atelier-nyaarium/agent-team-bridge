@@ -8,10 +8,12 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
+import java.nio.file.Files
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SessionOpsTest {
@@ -24,10 +26,12 @@ class SessionOpsTest {
 		override var terminalRefreshMs = 1_000L
 		override val spawnRetryWindowMs = 40_000L
 		override val forgetTombstoneMs = 50_000L
+		override val forgetRetryMs = 60_000L
 		val created = mutableListOf<String>()
 		val remembered = mutableListOf<String>()
 		val wakes = mutableListOf<String>()
-		val forgotten = mutableListOf<Pair<String, String?>>()
+		val forgotten = mutableListOf<Triple<String, String?, String>>()
+		var forgetFails = false
 		var scheduled = 0
 		var goals = 0
 		var playback = 0
@@ -50,7 +54,11 @@ class SessionOpsTest {
 		override suspend fun listDirs(path: String, hostTarget: String, spawn: String) = ConsoleListDirsResult(emptyList())
 		override suspend fun wake(target: String, opId: String) { wakes += target }
 		override suspend fun closeSession(team: String) = Unit
-		override suspend fun forget(team: String, boardDisposition: String?) = boardDisposition.also { forgotten += team to it }
+		override suspend fun forget(team: String, boardDisposition: String?, opId: String): String? {
+			forgotten += Triple(team, boardDisposition, opId)
+			if (forgetFails) error("offline")
+			return boardDisposition
+		}
 		override fun persistThreads(threads: Map<String, List<Message>>, anchors: Map<String, ReadAnchor>) { persisted++ }
 		override fun persistLabels(labels: Map<String, String>) { persisted++ }
 		override fun persistDrafts(drafts: Map<String, Draft>) { persisted++ }
@@ -73,11 +81,13 @@ class SessionOpsTest {
 		assertNull(wakeTargetOf("a.b.c.d.e", "dom", "gw"))
 	}
 
+	private fun journalDir() = Files.createTempDirectory("forget-journal").toFile()
+
 	@Test
 	fun spawnRecordsProjectAndSettlesPendingState() = runBlocking {
 		val host = FakeHost()
 		val presence = RecordingPresencePort()
-		SessionOps(host, presence).spawnSession("dom.gw.project", "label", "/work")
+		SessionOps(host, presence, MutationJournal(journalDir())).spawnSession("dom.gw.project", "label", "/work")
 
 		assertEquals(listOf("dom.gw.project"), host.remembered)
 		assertEquals(listOf("dom.gw.project"), host.created)
@@ -89,7 +99,7 @@ class SessionOpsTest {
 	fun wakePublishesReceiptAndClearRemovesIt() {
 		val host = FakeHost()
 		val presence = RecordingPresencePort()
-		val ops = SessionOps(host, presence)
+		val ops = SessionOps(host, presence, MutationJournal(journalDir()))
 		ops.wakeSession("dom.gw.host.session")
 
 		assertEquals(listOf("dom.gw.host.session"), host.wakes)
@@ -110,17 +120,54 @@ class SessionOpsTest {
 			labels = mapOf(team to "label"),
 			drafts = mapOf(team to Draft(text = "draft")),
 		)
-		SessionOps(host, IdlePresencePort).forget(team, "cancel")
+		val dir = journalDir()
+		SessionOps(host, IdlePresencePort, MutationJournal(dir)).forget(team, "cancel")
 
 		assertNull(host.state.value.teams.firstOrNull { it.name == team })
 		assertNull(host.state.value.threads[team])
 		assertNull(host.state.value.labels[team])
 		assertNull(host.state.value.drafts[team])
-		assertNotNull(host.forgottenUntil[team])
-		assertEquals(listOf(team to "cancel"), host.forgotten)
+		assertEquals(listOf(team to "cancel"), host.forgotten.map { it.first to it.second })
 		assertEquals(1, host.scheduled)
 		assertEquals(1, host.goals)
 		assertEquals(1, host.playback)
 		assertEquals(3, host.persisted)
+		// Confirmed: the journal entry goes and the tombstone is the bounded window.
+		assertTrue(MutationJournal(dir).entries("forget").isEmpty())
+		assertTrue(host.forgottenUntil.getValue(team) < Long.MAX_VALUE)
+	}
+
+	@Test
+	fun aForgetTheGatewayNeverConfirmedReplaysUnderItsOpIdAfterRestart() {
+		val dir = journalDir()
+		val team = "dom.gw.host.session"
+		val dying = FakeHost().apply { forgetFails = true }
+		SessionOps(dying, IdlePresencePort, MutationJournal(dir)).forget(team, "cancel")
+
+		// Held, not the bounded window, while the Gateway still lists it.
+		assertEquals(Long.MAX_VALUE, dying.forgottenUntil[team])
+		val opId = dying.forgotten.single().third
+
+		// A new process over the same journal.
+		val host = FakeHost()
+		val ops = SessionOps(host, IdlePresencePort, MutationJournal(dir))
+		ops.armPendingForgetTombstones()
+		assertEquals(Long.MAX_VALUE, host.forgottenUntil[team])
+		runBlocking { ops.replayPendingForgets() }
+
+		assertEquals(listOf(Triple(team, "cancel", opId)), host.forgotten)
+		assertTrue(MutationJournal(dir).entries("forget").isEmpty())
+		assertTrue(host.forgottenUntil.getValue(team) < Long.MAX_VALUE)
+	}
+
+	@Test
+	fun aForgetWithNoGatewayToSendToIsNotJournaled() {
+		val dir = journalDir()
+		val host = FakeHost()
+		SessionOps(host, IdlePresencePort, MutationJournal(dir)).forget("dom.other.host.session")
+
+		assertTrue(host.forgotten.isEmpty())
+		assertTrue(MutationJournal(dir).entries("forget").isEmpty())
+		assertNotNull(host.forgottenUntil["dom.other.host.session"])
 	}
 }

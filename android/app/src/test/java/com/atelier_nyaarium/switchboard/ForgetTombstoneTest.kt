@@ -10,7 +10,8 @@ import org.junit.Test
  * wholesale teams() snapshot dispatched before `SessionOps.forget()` reaches the server can
  * still resolve carrying the just-forgotten team, which would otherwise overwrite the optimistic
  * local removal and bring the tile back. Bounded by a TTL rather than cleared on confirmation, since
- * a confirming snapshot never arrives for a failed forget or a same-address recreate.
+ * a confirming snapshot never arrives for a same-address recreate. A journaled forget the Gateway
+ * has not confirmed holds `Long.MAX_VALUE` instead, until it lands.
  *
  * Pure function logic, no Android context (no Robolectric).
  */

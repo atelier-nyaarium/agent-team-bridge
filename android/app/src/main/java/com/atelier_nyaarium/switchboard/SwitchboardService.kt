@@ -286,6 +286,7 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 		scope.launch(Dispatchers.IO) {
 			repo.connect()
 			repo.reconcilePending()
+			repo.sessions.replayPendingForgets()
 			repo.attachments.sweepOrphanAttachments()
 			repo.scheduled.fireDueScheduledSends()
 			repo.drain.start(scope)

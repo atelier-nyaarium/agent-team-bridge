@@ -87,6 +87,9 @@ single-flight, cadence and concurrency limits, and mutating-op deduplication.
   it to the local `spawn.session`, bounds the launch like `create_session`, and answers `pending` past
   the bound. A session the gateway holds no record for is re-created under its own id, as
   `create_session` does with a typed `sessionName`; a launch that never comes up forgets it again.
+- **Forget** journals the op under its opId in the phone's `MutationJournal` before the local drop,
+  holds the row's tombstone until the Gateway confirms, then replays every unconfirmed forget at
+  service start and after a failed send. The Gateway no-ops an absent session, so a replay is safe.
 - The reserved `host` slot requires `HOST_WS_TOKEN`.
 
 ## Armed goals
