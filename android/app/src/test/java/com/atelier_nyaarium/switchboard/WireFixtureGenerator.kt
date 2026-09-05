@@ -6,6 +6,8 @@ import com.atelier_nyaarium.switchboard.board.BoardManager
 import com.atelier_nyaarium.switchboard.board.BoardRouterWriter
 import com.atelier_nyaarium.switchboard.board.BoardSealing
 import com.atelier_nyaarium.switchboard.board.BoardStore
+import com.atelier_nyaarium.switchboard.crypto.VAULT_PUBLIC_TITLE_KIND
+import com.atelier_nyaarium.switchboard.crypto.VAULT_VALUE_KIND
 import com.atelier_nyaarium.switchboard.proto.BoardReadResult
 import com.atelier_nyaarium.switchboard.proto.BoardWriteResult
 import com.atelier_nyaarium.switchboard.proto.ConsoleOp
@@ -13,6 +15,10 @@ import com.atelier_nyaarium.switchboard.proto.EnabledPlugin
 import com.atelier_nyaarium.switchboard.proto.KeyGrant
 import com.atelier_nyaarium.switchboard.proto.KeyRequest
 import com.atelier_nyaarium.switchboard.proto.OwnerOp
+import com.atelier_nyaarium.switchboard.proto.VaultEntrySealed
+import com.atelier_nyaarium.switchboard.proto.VaultPut
+import com.atelier_nyaarium.switchboard.vault.VaultRouterWriter
+import com.atelier_nyaarium.switchboard.vault.VaultSealing
 import com.atelier_nyaarium.switchboard.proto.WireFixture
 import com.atelier_nyaarium.switchboard.proto.WireFixtureEntry
 import com.atelier_nyaarium.switchboard.proto.WireManifest
@@ -45,6 +51,7 @@ class WireFixtureGenerator {
 		val root = load("identity/set.json")
 		val out = System.getProperty("wireFixturesOut")?.let(::File)
 		val fixtures = listOf(hello(root), keyRequest(root), keyGrant(root), cursorTranslate(root), boardWrite(root), boardRead(root)) +
+			listOf(vaultPut(root), vaultList(root)) +
 			listOf(deliver(root), gatewayValue(root), keyGrantCase(root), reportRead(root), capabilities(root)) + consoleOps(root) + transport(root)
 		val manifest = WireManifest("Kotlin phone wire fixtures.", fixtures.map { it.second })
 		if (out != null) {
@@ -152,6 +159,62 @@ class WireFixtureGenerator {
 		}) { BoardWriteResult(outcome = "applied", revision = 0L, entries = emptyList()) }
 		runBlocking { writer.read("board_read-op") { result -> wireJson.decodeFromJsonElement<BoardReadResult>(result) } }
 		return ownerCase(root, "BoardRouterWriter.read", "board_read", captured!!, "board_read-op", "{\"revision\":1,\"entries\":[{\"clear\":{\"id\":\"fixture-entry\",\"state\":\"open\",\"rank\":\"m\",\"version\":1}}]}", draws = draws)
+	}
+
+	private fun vaultPut(root: JsonObject): Fixture {
+		val draws = FixtureDraws.forCase("VaultRouterWriter.put", "vault_put")
+		val boot = world.bootstrap()
+		val ambient = world.ambient(draws)
+		val ownerOps = OwnerOps(boot, ambient)
+		var captured: OwnerOp? = null
+		val writer = VaultRouterWriter { op, opId ->
+			captured = ownerOps.sign(op, opId)
+			buildJsonObject { put("outcome", "applied"); put("revision", 1L) }
+		}
+		val sealing = VaultSealing(boot, ambient) {}
+		val id = "fixture-vault"
+		val put = VaultPut(
+			id = id,
+			expectedRevision = 0L,
+			sealed = VaultEntrySealed(
+				publicTitle = sealing.seal("Deploy key", VAULT_PUBLIC_TITLE_KIND, id),
+				value = sealing.seal("hunter2", VAULT_VALUE_KIND, id),
+			),
+		)
+		runBlocking { writer.put(put, "vault_put-op") }
+		val op = checkNotNull(captured)
+		return ownerCase(
+			root,
+			"VaultRouterWriter.put",
+			"vault_put",
+			op,
+			"vault_put-op",
+			"{\"outcome\":\"applied\",\"revision\":1}",
+			buildJsonObject {
+				put("op", op.op)
+				put("opId", "vault_put-op")
+				put("nonce", op.nonce)
+				put("publicTitle", "Deploy key")
+				put("value", "hunter2")
+			},
+			draws = draws,
+			sealed = listOf(
+				WireSealed(path = "put.sealed.publicTitle", aadKind = "vault.publicTitle\n$id", plaintextOf = "publicTitle"),
+				WireSealed(path = "put.sealed.value", aadKind = "vault.value\n$id", plaintextOf = "value"),
+			),
+		)
+	}
+
+	private fun vaultList(root: JsonObject): Fixture {
+		val draws = FixtureDraws.forCase("VaultRouterWriter.list", "vault_list")
+		val ownerOps = OwnerOps(world.bootstrap(), world.ambient(draws))
+		var captured: OwnerOp? = null
+		val writer = VaultRouterWriter { op, opId ->
+			captured = ownerOps.sign(op, opId)
+			buildJsonObject { put("revision", 0L); put("since", 0L); put("entries", buildJsonArray {}) }
+		}
+		runBlocking { writer.list(null, "vault_list-op") }
+		return ownerCase(root, "VaultRouterWriter.list", "vault_list", captured!!, "vault_list-op", "{\"revision\":1,\"since\":0}", draws = draws)
 	}
 
 	private fun keyGrant(root: JsonObject): Fixture {

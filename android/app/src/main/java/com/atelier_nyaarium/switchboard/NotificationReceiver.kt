@@ -28,6 +28,15 @@ class NotificationReceiver : BroadcastReceiver() {
 			SttsTransport.ACTION_PAUSE -> return repo.command { playback.pausePlayback() }
 			SttsTransport.ACTION_SKIP -> return repo.command { playback.skipPlayback() }
 		}
+		intent.getStringExtra(SwitchboardService.EXTRA_VAULT_REQUEST)?.let { requestId ->
+			val decision = when (intent.action) {
+				ACTION_VAULT_ONCE -> com.atelier_nyaarium.switchboard.vault.VAULT_DECISION_ONCE
+				ACTION_VAULT_WINDOW -> com.atelier_nyaarium.switchboard.vault.VAULT_DECISION_WINDOW
+				ACTION_VAULT_DENY -> com.atelier_nyaarium.switchboard.vault.VAULT_DECISION_DENY
+				else -> return
+			}
+			return repo.command { vaultOps.answerById(requestId, decision) }
+		}
 		val team = intent.getStringExtra(SwitchboardService.EXTRA_OPEN_TEAM) ?: return
 		val at = intent.getLongExtra(SwitchboardService.EXTRA_MESSAGE_AT, -1L)
 		when (intent.action) {
@@ -51,5 +60,8 @@ class NotificationReceiver : BroadcastReceiver() {
 		const val ACTION_PLAY_FULL = "com.atelier_nyaarium.switchboard.PLAY_FULL"
 		const val ACTION_PLAY_SUMMARY = "com.atelier_nyaarium.switchboard.PLAY_SUMMARY"
 		const val ACTION_STATUS_DISMISSED = "com.atelier_nyaarium.switchboard.STATUS_DISMISSED"
+		const val ACTION_VAULT_ONCE = "com.atelier_nyaarium.switchboard.VAULT_ONCE"
+		const val ACTION_VAULT_WINDOW = "com.atelier_nyaarium.switchboard.VAULT_WINDOW"
+		const val ACTION_VAULT_DENY = "com.atelier_nyaarium.switchboard.VAULT_DENY"
 	}
 }

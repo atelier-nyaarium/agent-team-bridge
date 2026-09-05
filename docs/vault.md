@@ -79,6 +79,31 @@ and the delta list are in `docs/federation.md` under Owner state.
   reason, or `pending`.
 - **The value leaves the gateway only in an approved answer.**
 
+## Phone
+
+`android/.../vault/` and `VaultOps.kt`. The `vault` plugin gates the tab and reports the capability.
+
+- **`VaultSealing` is the phone's only door:** it seals and opens under `vaultAadKind`, the twin of
+  the gateway client. A typed value seals under the request id.
+- `VaultManager` holds the Router's entries under one store key. A full list replaces, a delta
+  merges, tombstones stay hidden, and a Router revision below the held one asks for a full list
+  next. A write's own entry lands at once; the held revision advances only when nothing was skipped.
+- `VaultRouterWriter` posts `vault_list`, `vault_put`, and `vault_delete` as signed owner ops.
+- **The `vault` plane carries the revision:** the Router pushes it on every applied write and
+  reports it in `planes_read`. The phone answers a bump with a list after its held revision, and
+  retries twice when the list fails.
+- A request reaches `VaultPlugin` as the `vault:request` action and is held with the conversation
+  it landed in; that conversation's gateway segment answers it. A duplicate dispatch and a request
+  past its deadline are dropped. A restart drops expired ones.
+- **One notification per pending request:** swipe denies. Once and 30 min buttons exist only while
+  Vault approvals is off. Tap opens the sheet. The sheet answers with `vault_answer` through the
+  gateway value op. Save as entry puts a typed value as a new entry after the answer.
+- Vault approvals, under Settings and Security: Off, Every approval, 30-minute unlock. The gate
+  runs before an approval and before a reveal. Loosening it asks for the owner first.
+- Grants are read per admitted gateway through `vault_grants` when the tab opens and after an
+  approval. The session card shows YOLO for a whole-session grant and vault for a window. The tab
+  lists them with Revoke.
+
 **File map:**
 
 - `src/gateway/compose/composeVault.ts` - the stage: stores, request delivery, routes, console handlers.
@@ -86,3 +111,5 @@ and the delta list are in `docs/federation.md` under Owner state.
 - `src/gateway/vault/decisions.ts`, `requests.ts`, `helperTokens.ts`, `vaultRoutes.ts` - grants, requests, helper tokens, routes.
 - `src/shared/schemasVault.ts` - wire shapes, the request row, the loopback shapes, the constants.
 - `src/federation-server/vault/` - the Router service.
+- `android/.../vault/` - sealing, the held entry set, the writer, the tab, the editor, the request sheet.
+- `android/.../VaultOps.kt`, `plugins/vault/VaultPlugin.kt` - repository operations and the plugin's claims.

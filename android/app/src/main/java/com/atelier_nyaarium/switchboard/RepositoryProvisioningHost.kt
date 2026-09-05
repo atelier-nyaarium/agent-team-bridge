@@ -2,6 +2,7 @@ package com.atelier_nyaarium.switchboard
 
 import com.atelier_nyaarium.switchboard.board.BoardSealing
 import com.atelier_nyaarium.switchboard.proto.DomainSnapshot
+import com.atelier_nyaarium.switchboard.vault.VaultSealing
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -19,6 +20,7 @@ internal interface RepositoryProvisioningHost {
 	fun refreshAdmittedGateways()
 	fun localDomain(): String
 	fun boardSealing(): BoardSealing?
+	fun vaultSealing(): VaultSealing?
 }
 
 internal class ChatRepositoryProvisioningHost(private val repo: ChatRepository) : RepositoryProvisioningHost {
@@ -83,6 +85,13 @@ internal class ChatRepositoryProvisioningHost(private val repo: ChatRepository) 
 	override fun boardSealing(): BoardSealing? {
 		val boot = repo.readyOrNull() ?: return null
 		return BoardSealing(boot, repo.ambient) { epoch ->
+			repo.repoScope.launch(Dispatchers.IO) { repo.keyDeliveryOrNull()?.requestMissing(epoch) }
+		}
+	}
+
+	override fun vaultSealing(): VaultSealing? {
+		val boot = repo.readyOrNull() ?: return null
+		return VaultSealing(boot, repo.ambient) { epoch ->
 			repo.repoScope.launch(Dispatchers.IO) { repo.keyDeliveryOrNull()?.requestMissing(epoch) }
 		}
 	}

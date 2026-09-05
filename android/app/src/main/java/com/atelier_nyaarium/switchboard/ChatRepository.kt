@@ -54,6 +54,8 @@ class ChatRepository(
 
 	val board = com.atelier_nyaarium.switchboard.board.BoardManager(store)
 
+	val vault = com.atelier_nyaarium.switchboard.vault.VaultManager(store)
+
 	@Volatile internal var homeGatewayId: String = store.loadGatewayId()
 	@Volatile internal var gapFloor: Long = 0L
 	@Volatile internal var gapDropped: Long = 0L
@@ -160,6 +162,8 @@ class ChatRepository(
 
 	internal fun boardSealing() = provisioningHost.boardSealing()
 
+	internal fun vaultSealing() = provisioningHost.vaultSealing()
+
 	init {
 		board.sealing = { boardSealing() }
 	}
@@ -217,6 +221,10 @@ class ChatRepository(
 		decode = { wireJson.decodeFromJsonElement(BoardWriteResult.serializer(), it) },
 	)
 
+	val vaultRouter = com.atelier_nyaarium.switchboard.vault.VaultRouterWriter { op, opId ->
+		client().postOwnerOp(ownerOps.sign(op, opId)) ?: error("owner op post failed")
+	}
+
 	internal val repoScope = CoroutineScope(
 		SupervisorJob() + Dispatchers.IO +
 			CoroutineExceptionHandler { _, e ->
@@ -262,7 +270,7 @@ class ChatRepository(
 	@Volatile internal var sttsClient: SttsClient? = null
 
 	internal val clearedOnReprovision: List<ClearsOnReprovision>
-		get() = listOf(this, board, presence, trust, drain, playback)
+		get() = listOf(this, board, vault, presence, trust, drain, playback)
 
 	override suspend fun clearInMemory() {
 		invalidateClient()
@@ -308,6 +316,7 @@ class ChatRepository(
 	private val scheduledSendCollaborators = ChatRepositoryScheduledSendCollaborators(this)
 	private val attachmentCollaborators = ChatRepositoryAttachmentCollaborators(this)
 	private val boardCollaborators = ChatRepositoryBoardCollaborators(this)
+	private val vaultCollaborators = ChatRepositoryVaultCollaborators(this)
 	private val trustCollaborators = ChatRepositoryTrustCollaborators(this)
 	private val playbackPort = ChatRepositoryPlaybackPort(this)
 	private val playbackCollaborators = ChatRepositoryPlaybackCollaborators(this)
@@ -351,6 +360,11 @@ class ChatRepository(
 		filesDir = filesDir,
 		homeGatewayId = { homeGatewayId },
 		collaborators = boardCollaborators,
+	)
+	internal val vaultOps = VaultOps(
+		state = _state,
+		repoScope = repoScope,
+		collaborators = vaultCollaborators,
 	)
 	internal val attachments = AttachmentOps(
 		state = _state,

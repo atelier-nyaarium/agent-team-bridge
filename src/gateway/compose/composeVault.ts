@@ -4,7 +4,7 @@ import type { ConsolePushEntry } from "../../shared/federation-protocol.js";
 import type { MIGRATING } from "../../shared/migration-fence.js";
 import { ownerKeyId } from "../../shared/owner-id.js";
 import type { VaultRequest } from "../../shared/schemasVault.js";
-import { storeKey } from "../../shared/session-id.js";
+import { Address, DEFAULT_SESSION, storeKey } from "../../shared/session-id.js";
 import type { VaultConsoleHandlers } from "../console/consoleTypes.js";
 import { createAddressing } from "../routes/addressing.js";
 import { createVaultDecisions } from "../vault/decisions.js";
@@ -35,28 +35,33 @@ export function composeVault(deps: VaultStageDeps): VaultStage {
 	const { ambient, context, localGatewayId, sessions } = deps;
 	const decisions = openDurable(deps.dataDir, "vault-decisions", (store) => createVaultDecisions({ store, ambient }));
 	const helperTokens = openDurable(deps.dataDir, "vault-helper", (store) => createHelperTokens({ store, ambient }));
-	const ownThread = `gateway.${localGatewayId}.vault`;
 	const ownerSignPub = () => context.slice()?.allowlist.ownerSignPub ?? null;
+	const localAddress = (sessionTarget: string): Address =>
+		createAddressing({ config: { localGatewayId, localDomainId: context.domainId() } }).localAddress(sessionTarget);
 
-	/** Helpers use the gateway's vault thread. */
+	/** A helper's request lands in the console's own conversation. */
 	const threadKey = (sessionTarget: string, owner: string): string => {
-		if (sessionTarget.startsWith("helper.")) return ownThread;
-		try {
-			const { localAddress } = createAddressing({
-				config: { localGatewayId, localDomainId: context.domainId() },
-			});
-			return storeKey({ kind: "conv", conversationId: ownerKeyId(owner), address: localAddress(sessionTarget) });
-		} catch {
-			return ownThread;
-		}
+		const conversationId = ownerKeyId(owner);
+		const domainId = context.domainId();
+		if (!domainId) throw new Error("no Domain");
+		const address = sessionTarget.startsWith("helper.")
+			? Address.local(domainId, localGatewayId, conversationId, DEFAULT_SESSION)
+			: localAddress(sessionTarget);
+		return storeKey({ kind: "conv", conversationId, address });
 	};
 
 	const deliver = (request: VaultRequest): boolean | typeof MIGRATING => {
 		const owner = ownerSignPub();
 		if (!owner) return false;
+		let sessionId: string;
+		try {
+			sessionId = threadKey(request.sessionTarget, owner);
+		} catch {
+			return false;
+		}
 		const entry: ConsolePushEntry = {
 			kind: "plugin_action",
-			session_id: threadKey(request.sessionTarget, owner),
+			session_id: sessionId,
 			pluginId: "vault",
 			actionType: "request",
 			payload: request,
@@ -91,9 +96,22 @@ export function composeVault(deps: VaultStageDeps): VaultStage {
 			const record = sessions.sessionAuthority.resolveConfirmedManagedSession(req);
 			return record ? sessions.sessionStore.teamOf(record) : null;
 		},
-		notifyOwner: (title, body) => {
+		notifyOwner: (sessionTarget, title, body) => {
+			let sender: Address;
+			try {
+				sender = localAddress(sessionTarget);
+			} catch {
+				return;
+			}
 			deps.routes().deliverToOwner({
-				entry: { kind: "notice", session_id: ownThread, title, summary: body, body },
+				entry: {
+					kind: "notice",
+					session_id: storeKey({ kind: "notice", sender }),
+					from: sender.canonical,
+					title,
+					summary: body,
+					body,
+				},
 				dedupeKey: ambient.newId(),
 				label: "vault",
 			});

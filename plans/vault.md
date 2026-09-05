@@ -444,6 +444,20 @@ still holds, and an answer to a request the gateway no longer holds reads as exp
 - Session card: YOLO badge and active grants with revoke, read through `vault_grants`.
 - Capability toggle reported through `capabilities_report`; Kotlin gate and a debug APK.
 
+Shipped beyond the bullets: the Router pokes the `vault` plane from every applied write and sweep,
+and `planeVersions` reports it, so a socket welcome carries the revision. The gateway keys a helper's
+request row to the console's own conversation and the capture notice to the capturing session as a
+`notice` key with `from`; the phone drops any row it cannot key to a team, which the earlier
+`gateway.<id>.vault` id was. The phone answers a plane bump with a delta list and retries twice when
+the list fails, since the bump is acknowledged before the list lands. A write's own entry lands at
+once and the held revision advances only when nothing was skipped. Expired requests are dropped at
+load, on refresh, and when the deadline passes on the gateway's side. Notification buttons Once and
+30 min appear only while Vault approvals is Off; a typed request offers Deny alone and the tap opens
+the sheet. Grants are read per admitted gateway when the tab opens and after an approval, not on
+every plane bump. The whole-session chip reads YOLO; a window reads vault. The 49 MB list bullet is
+deferred: the caps hold, and a real vault stays far under them. Kotlin fixtures gained `vault_put`
+and `vault_list`, replayed through the Router by `wire-fixtures-kotlin.test.ts`.
+
 ## Phase 4 - Askpass helper
 
 - `src/main-vault-askpass.ts`, a second entry in `scripts/build.ts` beside `main-mcp.js`, bundled

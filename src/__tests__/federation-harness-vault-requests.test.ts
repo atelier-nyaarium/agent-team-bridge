@@ -213,6 +213,11 @@ describe("federation harness: vault requests", () => {
 		expect(typed).toMatchObject({ outcome: "pending" });
 		const request = await nextRequest(seen);
 		expect(request).toMatchObject({ kind: "typed", shape: "sudo apt", requestId: typed.requestId });
+		// A helper has no session, so its row is keyed to the console's own conversation.
+		const row = h.phone
+			.entries(await h.phone.inboxRead())
+			.find((entry) => entry.kind === "plugin_action" && entry.payload?.requestId === request.requestId);
+		expect(row?.session_id?.startsWith("conv.")).toBe(true);
 		const value = h.phone.seal("t0ps3cret", vaultAadKind(VAULT_TYPED_KIND, request.requestId));
 		const answered = await h.phone.value({
 			kind: "vault_answer",

@@ -13,6 +13,10 @@ import com.atelier_nyaarium.switchboard.SwitchboardService.Companion.CHANNEL_SPE
 import com.atelier_nyaarium.switchboard.SwitchboardService.Companion.CHANNEL_STATUS
 import com.atelier_nyaarium.switchboard.SwitchboardService.Companion.EXTRA_MESSAGE_AT
 import com.atelier_nyaarium.switchboard.SwitchboardService.Companion.EXTRA_OPEN_TEAM
+import com.atelier_nyaarium.switchboard.SwitchboardService.Companion.EXTRA_VAULT_REQUEST
+import com.atelier_nyaarium.switchboard.vault.VAULT_UNLOCK_OFF
+import com.atelier_nyaarium.switchboard.vault.VaultPendingRequest
+import com.atelier_nyaarium.switchboard.vault.requester
 import com.atelier_nyaarium.switchboard.SwitchboardService.Companion.STATUS_NOTIFICATION_ID
 import com.atelier_nyaarium.switchboard.SwitchboardService.Companion.TRANSPORT_NOTIFICATION_ID
 import com.atelier_nyaarium.switchboard.SwitchboardService.Companion.statusDismissed
@@ -53,6 +57,12 @@ internal class ServiceNotifications(private val context: Context) {
 		nm.createNotificationChannel(
 			NotificationChannel(CHANNEL_SPEECH_FAILED, "Unspoken messages", NotificationManager.IMPORTANCE_DEFAULT).apply {
 				description = "A message could not be read aloud"
+			},
+		)
+		nm.createNotificationChannel(
+			NotificationChannel(CHANNEL_VAULT, "Vault requests", NotificationManager.IMPORTANCE_HIGH).apply {
+				description = "A session asks to use a secret"
+				enableVibration(true)
 			},
 		)
 		nm.createNotificationChannel(
@@ -232,12 +242,60 @@ internal class ServiceNotifications(private val context: Context) {
 		}
 	}
 
+	private fun vaultActionIntent(requestId: String, action: String): PendingIntent {
+		val intent = Intent(context, NotificationReceiver::class.java).setAction(action).putExtra(EXTRA_VAULT_REQUEST, requestId)
+		return PendingIntent.getBroadcast(
+			context,
+			(requestId.hashCode() * 31) xor action.hashCode(),
+			intent,
+			PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+		)
+	}
+
+	private fun vaultContentIntent(requestId: String): PendingIntent {
+		val intent = Intent(context, MainActivity::class.java)
+			.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+			.putExtra(EXTRA_VAULT_REQUEST, requestId)
+		return PendingIntent.getActivity(
+			context,
+			requestId.hashCode(),
+			intent,
+			PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+		)
+	}
+
+	/** Swipe denies; approve buttons only while no unlock is set. */
+	internal fun notifyVaultRequest(repo: ChatRepository, pending: VaultPendingRequest) {
+		if (!canNotify()) return
+		val who = requester(repo.state.value, pending)
+		val typed = pending.entryId == null
+		val builder = NotificationCompat.Builder(context, CHANNEL_VAULT)
+			.setSmallIcon(android.R.drawable.ic_lock_lock)
+			.setContentTitle(if (typed) "$who asks for a value" else "$who wants a secret")
+			.setContentText(pending.operation.take(120))
+			.setStyle(NotificationCompat.BigTextStyle().bigText(pending.operation))
+			.setAutoCancel(true)
+			.setContentIntent(vaultContentIntent(pending.requestId))
+			.setDeleteIntent(vaultActionIntent(pending.requestId, NotificationReceiver.ACTION_VAULT_DENY))
+		if (!typed && repo.store.vaultUnlock == VAULT_UNLOCK_OFF) {
+			builder.addAction(0, "Once", vaultActionIntent(pending.requestId, NotificationReceiver.ACTION_VAULT_ONCE))
+			builder.addAction(0, "30 min", vaultActionIntent(pending.requestId, NotificationReceiver.ACTION_VAULT_WINDOW))
+		}
+		builder.addAction(0, "Deny", vaultActionIntent(pending.requestId, NotificationReceiver.ACTION_VAULT_DENY))
+		NotificationManagerCompat.from(context).notify(vaultNotificationId(pending.requestId), builder.build())
+	}
+
+	internal fun cancelVaultRequest(requestId: String) {
+		NotificationManagerCompat.from(context).cancel(vaultNotificationId(requestId))
+	}
+
 	internal fun canNotify(): Boolean =
 		context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
 
 	companion object {
 		const val CHANNEL_MESSAGES = "messages_v2"
 		const val CHANNEL_SCHEDULED_SEND_FAILED = "scheduled_send_failed"
+		const val CHANNEL_VAULT = "vault_requests"
 
 		private const val TEAM_ID_RANGE_START = 1000
 		private const val TEAM_ID_RANGE_SIZE = 1_000_000
@@ -259,7 +317,17 @@ internal class ServiceNotifications(private val context: Context) {
 		internal fun scheduledSendFailedNotificationId(team: String): Int =
 			SCHEDULED_SEND_FAILED_ID_RANGE_START + (team.hashCode() and 0x7FFFFFFF) % SCHEDULED_SEND_FAILED_ID_RANGE_SIZE
 
+		// Own id range, like the failure range.
+		internal const val VAULT_ID_RANGE_START = 3_000_000
+		internal const val VAULT_ID_RANGE_SIZE = 1_000_000
+
+		internal fun vaultNotificationId(requestId: String): Int =
+			VAULT_ID_RANGE_START + (requestId.hashCode() and 0x7FFFFFFF) % VAULT_ID_RANGE_SIZE
+
 		init {
+			require(VAULT_ID_RANGE_START >= SCHEDULED_SEND_FAILED_ID_RANGE_START + SCHEDULED_SEND_FAILED_ID_RANGE_SIZE) {
+				"VAULT_ID_RANGE must fall entirely outside the scheduled-send failure id range"
+			}
 			require(STATUS_NOTIFICATION_ID < TEAM_ID_RANGE_START) {
 				"STATUS_NOTIFICATION_ID must fall outside the team notification id range"
 			}
@@ -301,7 +369,8 @@ internal class ServiceNotifications(private val context: Context) {
 				val message = id >= TEAM_ID_RANGE_START && id < TEAM_ID_RANGE_START + TEAM_ID_RANGE_SIZE
 				val failed = id >= SCHEDULED_SEND_FAILED_ID_RANGE_START &&
 					id < SCHEDULED_SEND_FAILED_ID_RANGE_START + SCHEDULED_SEND_FAILED_ID_RANGE_SIZE
-				if (message || failed) nmc.cancel(id)
+				val vault = id >= VAULT_ID_RANGE_START && id < VAULT_ID_RANGE_START + VAULT_ID_RANGE_SIZE
+				if (message || failed || vault) nmc.cancel(id)
 			}
 		}
 	}

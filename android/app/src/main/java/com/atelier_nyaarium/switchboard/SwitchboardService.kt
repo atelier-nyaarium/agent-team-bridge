@@ -311,6 +311,16 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 					notifications.reconcileTeamNotifications(repo, unread)
 				}
 		}
+		// Level-based like the team reconcile: a request shows while it is pending and goes when it settles.
+		scope.launch {
+			val posted = mutableSetOf<String>()
+			repo.vault.pending.collect { pending ->
+				val ids = pending.mapTo(HashSet()) { it.requestId }
+				for (gone in posted - ids) notifications.cancelVaultRequest(gone)
+				posted.retainAll(ids)
+				for (request in pending) if (posted.add(request.requestId)) notifications.notifyVaultRequest(repo, request)
+			}
+		}
 	}
 
 	override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
@@ -505,6 +515,7 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 		const val EXTRA_OPEN_TEAM = "open_team"
 		const val EXTRA_MESSAGE_AT = "message_at"
 		const val EXTRA_OPEN_QUEUE = "open_queue"
+		const val EXTRA_VAULT_REQUEST = "vault_request"
 
 		/** Its own request code, so the queue's PendingIntent cannot collapse into a team's. */
 		private const val REQUEST_OPEN_QUEUE = 4272

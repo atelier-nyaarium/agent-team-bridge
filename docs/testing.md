@@ -125,7 +125,7 @@ nonces, and commits what they produced; the other runtime consumes it with its r
   live pinned link; `WireFixturesDecodeTest.kt` opens every phone-bound answer.
 - `WireFixtureGenerator.kt` writes `tests/fixtures/wire/kotlin/<composer>/<case>.json`: the signed
   owner ops of the real phone composers (hello, key request and receipt, cursor translation, board
-  write, the board read, the four inbox ops, a scheduled send's delivery, a value op, the key
+  write, the board read, the vault put and list, the four inbox ops, a scheduled send's delivery, a value op, the key
   grant answering a gateway's request, the read report, the capabilities report) and the transport
   request family. Regenerate with `./gradlew :app:generateWireFixtures` from `android/`. An
   ordinary unit-test run asserts the committed files, and `kotlin-gate.sh` diffs a fresh

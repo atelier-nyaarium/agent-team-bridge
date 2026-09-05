@@ -116,7 +116,7 @@ fun SettingsScreen(
 				SettingsRoute.NETWORKS ->
 					NetworksSettings(repo, onManage, onYourDevices, onFederation, onClear) { onRoute(SettingsRoute.FEDERATION) }
 				SettingsRoute.FEDERATION -> FederationSettings(repo)
-				SettingsRoute.SECURITY -> SecuritySettings(state, onToggleBiometric)
+				SettingsRoute.SECURITY -> SecuritySettings(state, repo, onToggleBiometric)
 				SettingsRoute.PLUGINS -> PluginsSettings(plugins, repo)
 				SettingsRoute.SYSTEM -> SystemSettings(repo)
 			}

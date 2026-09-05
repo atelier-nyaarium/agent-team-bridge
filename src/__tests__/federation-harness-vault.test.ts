@@ -51,6 +51,9 @@ describe("federation harness: vault", () => {
 		expect(listed.revision).toBe(list.revision);
 		expect(listed.entries.map((entry) => entry.clear.id)).toContain(id);
 		expect(JSON.stringify(list)).not.toContain("hunter2");
+		// The plane carries the revision a phone lists from.
+		const { planes } = await h.phone.planesRead();
+		expect(planes.find((plane) => plane.name === "vault")).toMatchObject({ version: listed.revision });
 
 		// Current revision yields empty delta.
 		const caughtUp = VaultListResultSchema.parse(

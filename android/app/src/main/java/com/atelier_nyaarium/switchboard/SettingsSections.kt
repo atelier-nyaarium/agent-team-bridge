@@ -18,6 +18,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -413,7 +414,7 @@ internal fun RouterEndpointCard(repo: ChatRepository) {
 }
 
 @Composable
-internal fun SecuritySettings(state: ChatState, onToggleBiometric: (Boolean) -> Unit) {
+internal fun SecuritySettings(state: ChatState, repo: ChatRepository, onToggleBiometric: (Boolean) -> Unit) {
 	val scope = rememberCoroutineScope()
 	val activity = LocalContext.current as? FragmentActivity
 	Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -429,6 +430,36 @@ internal fun SecuritySettings(state: ChatState, onToggleBiometric: (Boolean) -> 
 	}
 	Text(
 		"Require fingerprint or device PIN on app open. Falls back to unlocked if nothing is enrolled.",
+		style = MaterialTheme.typography.bodySmall,
+	)
+	HorizontalDivider()
+	Text("Vault approvals", style = MaterialTheme.typography.titleMedium)
+	var vaultUnlock by remember { mutableStateOf(repo.store.vaultUnlock) }
+	val choices = listOf(
+		com.atelier_nyaarium.switchboard.vault.VAULT_UNLOCK_OFF to "Off",
+		com.atelier_nyaarium.switchboard.vault.VAULT_UNLOCK_EVERY to "Every approval",
+		com.atelier_nyaarium.switchboard.vault.VAULT_UNLOCK_WINDOW to "30-minute unlock",
+	)
+	for ((value, label) in choices) {
+		Row(
+			Modifier.fillMaxWidth().hapticClickable {
+				// Loosening the gate asks for the owner first.
+				scope.launch {
+					if (value != vaultUnlock && (value == com.atelier_nyaarium.switchboard.vault.VAULT_UNLOCK_EVERY ||
+							requireOwnerPresent(true, activity))) {
+						repo.store.vaultUnlock = value
+						vaultUnlock = value
+					}
+				}
+			},
+			verticalAlignment = Alignment.CenterVertically,
+		) {
+			RadioButton(selected = vaultUnlock == value, onClick = null)
+			Text(label, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(start = 8.dp))
+		}
+	}
+	Text(
+		"Fingerprint or device PIN before a secret is approved or revealed. Notification buttons approve only while this is off.",
 		style = MaterialTheme.typography.bodySmall,
 	)
 }

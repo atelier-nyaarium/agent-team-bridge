@@ -10,6 +10,8 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -88,15 +90,19 @@ fun MainTabsScreen(
 	// The second argument moves to the Sessions tab, which is where the board sends the owner after a
 	// save. The pager state lives here, so the board cannot reach it any other way.
 	board: @Composable (Modifier, () -> Unit) -> Unit,
+	vaultEnabled: Boolean = false,
+	vaultPending: Int = 0,
+	vault: @Composable (Modifier) -> Unit = {},
 ) {
-	val tabs = if (boardEnabled) listOf("Sessions", "Backlog") else listOf("Sessions")
+	val tabs = listOf("Sessions") + (if (boardEnabled) listOf("Backlog") else emptyList()) +
+		(if (vaultEnabled) listOf("Vault") else emptyList())
 	val pagerState = rememberPagerState(pageCount = { tabs.size })
 	val scope = rememberCoroutineScope()
 
 	Scaffold(
 		topBar = {
 			TopAppBar(
-				title = { Text(if (boardEnabled) "Switchboard" else "Agent Sessions") },
+				title = { Text(if (tabs.size > 1) "Switchboard" else "Agent Sessions") },
 				actions = {
 					// The queue's only IN-APP door. The bubble needs an overlay grant and the transport
 					// needs notifications, so a user who refuses both had no way to reach the list, the
@@ -134,14 +140,23 @@ fun MainTabsScreen(
 						Tab(
 							selected = pagerState.currentPage == index,
 							onClick = hapticClick { scope.launch { pagerState.animateScrollToPage(index) } },
-							text = { Text(title) },
+							text = {
+								if (title == "Vault" && vaultPending > 0) {
+									BadgedBox(badge = { Badge { Text("$vaultPending") } }) { Text(title) }
+								} else {
+									Text(title)
+								}
+							},
 						)
 					}
 				}
 			}
 			HorizontalPager(state = pagerState, modifier = Modifier.weight(1f)) { page ->
-				if (page == 0) sessions(Modifier.fillMaxSize())
-				else board(Modifier.fillMaxSize()) { scope.launch { pagerState.animateScrollToPage(0) } }
+				when (tabs[page]) {
+					"Backlog" -> board(Modifier.fillMaxSize()) { scope.launch { pagerState.animateScrollToPage(0) } }
+					"Vault" -> vault(Modifier.fillMaxSize())
+					else -> sessions(Modifier.fillMaxSize())
+				}
 			}
 		}
 	}

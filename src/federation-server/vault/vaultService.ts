@@ -23,6 +23,8 @@ type Deps = {
 	now?: () => number;
 	maxEntries?: number;
 	maxRecords?: number;
+	/** Every applied write bumps the owner's vault plane. */
+	pokeOwner?: (domainId: string, revision: number) => void;
 };
 
 const META_ID = "vault.meta";
@@ -38,6 +40,7 @@ export function createVaultService(deps: Deps) {
 		return { revision: Number(clear?.revision ?? 0), floor: Number(clear?.floor ?? 0) };
 	};
 	const revisionOf = (store: ReturnType<typeof storeOf>) => metaOf(store).revision;
+	const revision = (domainId: string): number => revisionOf(storeOf(domainId));
 	const entryOf = (record: StateRecord): VaultStoredEntry => ({
 		clear: record.clear as unknown as VaultEntryClear,
 		sealed: (record.sealed ?? {}) as VaultEntrySealed,
@@ -122,6 +125,7 @@ export function createVaultService(deps: Deps) {
 		);
 		if (committed === "conflict") return { outcome: "conflict", revision, ...winner };
 		if (committed === "failed") return refuse("durability_failure");
+		deps.pokeOwner?.(domainId, next);
 		return { outcome: "applied", revision: next, entry: { clear, sealed: input.sealed } };
 	};
 
@@ -147,6 +151,7 @@ export function createVaultService(deps: Deps) {
 		);
 		if (committed === "conflict") return { outcome: "conflict", revision, entry: held };
 		if (committed === "failed") return { outcome: "refused", revision, entry: held, refusal: "durability_failure" };
+		deps.pokeOwner?.(domainId, next);
 		return { outcome: "applied", revision: next, entry: { clear, sealed: {} } };
 	};
 
@@ -170,7 +175,9 @@ export function createVaultService(deps: Deps) {
 			},
 			floor,
 		);
-		return committed === "ok" ? dead.length : 0;
+		if (committed !== "ok") return 0;
+		deps.pokeOwner?.(domainId, meta.revision + 1);
+		return dead.length;
 	};
 
 	const register = (hooks: OwnerServiceHooks) => {
@@ -191,5 +198,5 @@ export function createVaultService(deps: Deps) {
 		);
 	};
 
-	return { read, put, del, sweep, register };
+	return { read, revision, put, del, sweep, register };
 }

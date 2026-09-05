@@ -95,6 +95,8 @@ fun SessionCard(
 	boardLine: BoardLiveLine? = null,
 	// The branch that line sits in. Null falls back to drawing the line alone.
 	boardBranch: com.atelier_nyaarium.switchboard.board.CardBranch? = null,
+	// The strongest vault grant this session holds: "session" or "window".
+	vaultTier: String? = null,
 	onClick: () -> Unit,
 	onLongPress: () -> Unit,
 ) {
@@ -157,6 +159,11 @@ fun SessionCard(
 				)
 				if (limitHit) StatusChip("limit hit", presenceColor("limit hit"))
 				if (checkTerminal) StatusChip("check terminal", presenceColor("check terminal"))
+				// A whole-session vault grant is the loud one; a window shows quietly.
+				when (vaultTier) {
+					"session" -> StatusChip("YOLO", MaterialTheme.colorScheme.error)
+					"window" -> StatusChip("vault", MaterialTheme.colorScheme.tertiary)
+				}
 				// Visible from the board without opening the thread. The dock inside the thread is
 				// still the sole edit/cancel surface, this is read-only.
 				if (state.scheduledSends.containsKey(team.name)) {

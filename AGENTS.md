@@ -80,6 +80,7 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
 - `android/.../ReportReadCompose.kt` / `ScheduledSendCompose.kt` / `CapabilitiesCompose.kt` - pure phone composers
 - `android/.../PlaybackOps.kt` / `PlaybackReadModels.kt` - playback serialization and lock-free read models
 - `android/.../BoardOps.kt` - repository board operations
+- `android/.../VaultOps.kt` - repository vault operations: refresh, save, delete, reveal, answer, grants
 - `android/.../AttachmentOps.kt` - attachment fetch-and-sweep state
 - `android/.../ScheduledSendOps.kt` - scheduled sends and single fire mutex
 - `android/.../GoalOps.kt` / `Goal.kt` - armed goals and `/goal` line production
@@ -97,6 +98,8 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
 - `android/.../RendererPoolBindings.kt` / `AppOverlays.kt` / `LinkMenu.kt` - WebView pool, overlays, and link actions
 - `android/.../SettingsSections.kt` / `SettingsSystem.kt` / `SettingsVoice.kt` - settings leaf screens
 - `android/.../MainTabsScreen.kt` / `SessionsHeaders.kt` / `SessionCard.kt` / `SessionCardPreview.kt` / `SessionsEmptyState.kt` - sessions tab shell, cards, rules, and empty-state machine
+- `android/.../vault/` - `VaultSealing.kt` / `VaultManager.kt` / `VaultRouterWriter.kt` / `VaultScreen.kt` / `VaultEntryDialog.kt` / `VaultRequestSheet.kt` - the sealing twin, the held entry set with pending requests, the owner-op writer, the tab, the editor, the request sheet
+- `android/.../plugins/vault/VaultPlugin.kt` - claims `vault:request`, forget, and wipe
 - `android/.../board/` - board reducers and durable `BoardManager`
 - `android/.../board/BoardSealing.kt` / `BoardRender.kt` / `BoardIntent.kt` / `BoardOptimistic.kt` / `BoardRouterWriter.kt` - board text sealing, render with cached fallback, edits held as intent, optimistic apply, and the CAS drain
 - `android/.../ConsoleTransportCoordinator.kt` / `ConsoleSocketDriver.kt` - one Router consumer across two transports, and generation-fenced frame routing

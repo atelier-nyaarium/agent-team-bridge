@@ -121,6 +121,7 @@ fun SessionsScreen(
 	boardBranch: (Team) -> com.atelier_nyaarium.switchboard.board.CardBranch? = { null },
 	undoneFor: (Team) -> Int = { 0 },
 	onForgetWithTasks: (String, Boolean) -> Unit = { _, _ -> },
+	vaultTier: (Team) -> String? = { null },
 	modifier: Modifier = Modifier,
 ) {
 	var actionTeam by remember { mutableStateOf<Team?>(null) }
@@ -303,6 +304,7 @@ fun SessionsScreen(
 										pulsePhase = pulsePhase,
 										boardLine = boardLine(team),
 									boardBranch = boardBranch(team),
+										vaultTier = vaultTier(team),
 										onClick = hapticClick { onOpen(team.name) },
 										onLongPress = { actionTeam = team },
 									)
@@ -337,6 +339,7 @@ fun SessionsScreen(
 									pulsePhase = pulsePhase,
 									boardLine = boardLine(team),
 									boardBranch = boardBranch(team),
+									vaultTier = vaultTier(team),
 									onClick = hapticClick { onOpen(team.name) },
 									onLongPress = { actionTeam = team },
 								)

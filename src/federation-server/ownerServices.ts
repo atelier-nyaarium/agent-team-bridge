@@ -246,7 +246,10 @@ export function createOwnerServices(deps: OwnerServicesDeps) {
 
 	const capabilities = createCapabilitiesService({ registry });
 	const readAnchors = createReadAnchorsService({ registry });
-	const vault = createVaultService({ registry });
+	const vault = createVaultService({
+		registry,
+		pokeOwner: (domainId, revision) => deps.consoleSockets?.pushPlane(domainId, "vault", revision, undefined),
+	});
 
 	const cursors = createCursorService({ registry, migrationEpoch: () => readRouterMigrationWindow().epoch ?? 0 });
 	for (const service of [share, presence, board, scheduled, capabilities, readAnchors, cursors, keyDelivery, vault])
@@ -283,12 +286,13 @@ export function createOwnerServices(deps: OwnerServicesDeps) {
 			return {
 				presence: "outcome" in projection ? 0 : projection.plane.version,
 				taskBoard: board.read(domainId).revision,
+				vault: vault.revision(domainId),
 			};
 		},
 		readPlane(domainId: string, _signerSignPub: string, name: string): unknown {
 			if (name === "presence")
 				return presence.ownerProjection(domainId, { admittedGateways, linkedDomains, isShared, connected });
-			// Board planes carry revisions.
+			// Board and vault planes carry revisions.
 			return undefined;
 		},
 		reconcileReferences(): void {

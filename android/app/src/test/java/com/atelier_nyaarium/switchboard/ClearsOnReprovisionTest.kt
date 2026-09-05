@@ -34,6 +34,6 @@ class ClearsOnReprovisionTest {
 			.map { it.name }
 			.toSet()
 		// playback: the run names the previous owner's messages and every transport surface draws it.
-		assertEquals(setOf("board", "presence", "trust", "drain", "playback"), declared)
+		assertEquals(setOf("board", "vault", "presence", "trust", "drain", "playback"), declared)
 	}
 }

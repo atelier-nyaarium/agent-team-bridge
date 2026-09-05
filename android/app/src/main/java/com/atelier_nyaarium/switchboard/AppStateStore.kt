@@ -53,7 +53,10 @@ class AppStateStore internal constructor(
 	private val prefs: SharedPreferences,
 	val encrypted: Boolean,
 ) :
-	IdleSilenceStore, ChatPersistenceStore, com.atelier_nyaarium.switchboard.board.BoardStore {
+	IdleSilenceStore,
+	ChatPersistenceStore,
+	com.atelier_nyaarium.switchboard.board.BoardStore,
+	com.atelier_nyaarium.switchboard.vault.VaultStore {
 	private constructor(context: Context, secure: Pair<SharedPreferences, Boolean>) : this(
 		context.filesDir,
 		secure.first,
@@ -130,6 +133,13 @@ class AppStateStore internal constructor(
 		get() = prefs.getBoolean(KEY_BIO, false)
 		set(value) {
 			prefs.edit().putBoolean(KEY_BIO, value).apply()
+		}
+
+	/** Vault approval gate: off, every, or window. */
+	var vaultUnlock: String
+		get() = prefs.getString(KEY_VAULT_UNLOCK, "off") ?: "off"
+		set(value) {
+			prefs.edit().putString(KEY_VAULT_UNLOCK, value).apply()
 		}
 
 	/** Provider descriptor id. */
@@ -275,6 +285,11 @@ class AppStateStore internal constructor(
 	override fun saveTaskBoard(json: String) = check(prefs.edit().putString(KEY_TASK_BOARD, json).commit())
 
 	override fun loadTaskBoard(): String? = prefs.getString(KEY_TASK_BOARD, null)
+
+	/** Vault entries and pending requests share one key. */
+	override fun saveVault(json: String) = check(prefs.edit().putString(KEY_VAULT, json).commit())
+
+	override fun loadVault(): String? = prefs.getString(KEY_VAULT, null)
 
 	/** Connected Gateway id. */
 	fun saveGatewayId(id: String) = prefs.edit().putString(KEY_GATEWAY_ID, id).apply()
@@ -477,6 +492,8 @@ class AppStateStore internal constructor(
 		const val KEY_STTS_VOICE_PREFIX = "stts_voice."
 		const val KEY_PLUGIN_ENABLED_PREFIX = "plugin_enabled."
 		const val KEY_TASK_BOARD = "task_board"
+		const val KEY_VAULT = "vault"
+		const val KEY_VAULT_UNLOCK = "vault_unlock"
 		const val KEY_AUTO_TTS = "auto_tts"
 		const val KEY_AUTO_PLAY = "auto_play_tier"
 		const val KEY_CHIME_URI = "stts_chime_uri"
@@ -506,7 +523,7 @@ class AppStateStore internal constructor(
 		/** Keep every grammar key here. */
 		val SCHEMA_WIPE_KEYS = listOf(
 			KEY_THREADS, KEY_READ_ANCHORS, KEY_LABELS, KEY_DRAFTS, KEY_SCHEDULED_SENDS, KEY_GOALS, KEY_ABSENCE_STREAKS,
-			KEY_SYNC_EPOCH, KEY_SYNC_ACKED, KEY_SYNC_DROPPED, KEY_TASK_BOARD,
+			KEY_SYNC_EPOCH, KEY_SYNC_ACKED, KEY_SYNC_DROPPED, KEY_TASK_BOARD, KEY_VAULT,
 		)
 
 		/** Keep every provisioning key here. */
@@ -518,7 +535,7 @@ class AppStateStore internal constructor(
 			KEY_TRUSTED_OWNERS,
 			KEY_THREADS, KEY_READ_ANCHORS, KEY_LABELS, KEY_DRAFTS, KEY_SCHEDULED_SENDS, KEY_GOALS, KEY_GATEWAY_ID,
 			KEY_CONVERSATION_ID,
-			KEY_SYNC_EPOCH, KEY_SYNC_ACKED, KEY_SYNC_DROPPED, KEY_ABSENCE_STREAKS, KEY_TASK_BOARD,
+			KEY_SYNC_EPOCH, KEY_SYNC_ACKED, KEY_SYNC_DROPPED, KEY_ABSENCE_STREAKS, KEY_TASK_BOARD, KEY_VAULT,
 			KEY_LAST_PROJECT,
 		)
 	}

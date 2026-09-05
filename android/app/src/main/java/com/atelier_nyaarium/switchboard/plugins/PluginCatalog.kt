@@ -23,5 +23,6 @@ object PluginCatalog {
 		// this claims no extension point. It exists to report the capability and carry the manifest's
 		// agent instructions to the gateway.
 		Entry("taskboard", PluginEntry {}),
+		Entry("vault", com.atelier_nyaarium.switchboard.plugins.vault.VaultPlugin()),
 	)
 }

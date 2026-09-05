@@ -49,6 +49,17 @@ const write = (id: string, expectedRevision: number, sealed: VaultEntrySealed): 
 });
 
 describe("vault service", () => {
+	it("pokes the owner's vault plane with each applied revision", () => {
+		const registry = registryIn(fresh());
+		const pokes: number[] = [];
+		const vault = createVaultService({ registry, pokeOwner: (_domainId, revision) => pokes.push(revision) });
+		expect(vault.put(domainId, write("a", 0, titled()), "phone", false).outcome).toBe("applied");
+		expect(vault.put(domainId, write("a", 0, titled()), "phone", false).outcome).toBe("conflict");
+		expect(vault.del(domainId, "a", 1).outcome).toBe("applied");
+		expect(pokes).toEqual([1, 2]);
+		expect(vault.revision(domainId)).toBe(2);
+	});
+
 	it("refuses an oversized field, a full vault, and a store that cannot commit", () => {
 		const registry = registryIn(fresh());
 		const vault = createVaultService({ registry, maxEntries: 1 });

@@ -34,7 +34,8 @@ export interface VaultRoutesDeps {
 	ambient: Pick<Ambient, "now" | "newId" | "setTimer" | "clearTimer">;
 	/** Resolve requests to session teams. */
 	resolveCaller: (req: Request) => string | null;
-	notifyOwner: (title: string, body: string) => void;
+	/** A notice in the session's thread. */
+	notifyOwner: (sessionTarget: string, title: string, body: string) => void;
 	hostToken?: string;
 }
 
@@ -201,7 +202,11 @@ export function createVaultRoutes(deps: VaultRoutesDeps): Map<string, Handler> {
 		const created = await client.create({ id, ...parsed.data, value });
 		if (created.kind === "unavailable") return json({ error: created.error }, 503);
 		if (created.kind === "refused") return json({ error: created.refusal }, 409);
-		deps.notifyOwner("Vault entry captured", `${who.target} captured "${parsed.data.publicTitle}" as ${id}.`);
+		deps.notifyOwner(
+			who.target,
+			"Vault entry captured",
+			`${who.target} captured "${parsed.data.publicTitle}" as ${id}.`,
+		);
 		return json({ id });
 	};
 

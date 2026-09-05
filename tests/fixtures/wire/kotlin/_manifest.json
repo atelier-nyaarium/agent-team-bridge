@@ -38,6 +38,18 @@
 			"peer": "router.handle"
 		},
 		{
+			"file": "VaultRouterWriter.put/vault_put.json",
+			"composer": "VaultRouterWriter.put",
+			"case": "vault_put",
+			"peer": "router.handle"
+		},
+		{
+			"file": "VaultRouterWriter.list/vault_list.json",
+			"composer": "VaultRouterWriter.list",
+			"case": "vault_list",
+			"peer": "router.handle"
+		},
+		{
 			"file": "ConsoleClient.send/deliver.json",
 			"composer": "ConsoleClient.send",
 			"case": "deliver",

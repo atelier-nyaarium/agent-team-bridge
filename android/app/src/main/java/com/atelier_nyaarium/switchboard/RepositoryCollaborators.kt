@@ -113,6 +113,15 @@ internal class ChatRepositoryBoardCollaborators(private val repo: ChatRepository
 	override fun command(block: () -> Unit) = repo.command { block() }
 }
 
+internal class ChatRepositoryVaultCollaborators(private val repo: ChatRepository) : VaultOpsCollaborators {
+	override val vault: com.atelier_nyaarium.switchboard.vault.VaultManager get() = repo.vault
+	override val writer: com.atelier_nyaarium.switchboard.vault.VaultRouterWriter get() = repo.vaultRouter
+	override fun sealing() = repo.vaultSealing()
+	override val client: ConsoleClient? get() = repo.clientOrNull()
+	override fun admittedGateways() = repo.sessions.keyringGateways()
+	override fun vaultUnlock() = repo.store.vaultUnlock
+}
+
 internal class ChatRepositoryTrustCollaborators(private val repo: ChatRepository) : TrustOpsCollaborators {
 	override suspend fun submitXdomainLink(srcDomainId: String, dstDomainId: String) =
 		repo.ownerFacts.submitXdomainLink(srcDomainId, dstDomainId)

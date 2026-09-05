@@ -62,6 +62,8 @@ class MainActivity : FragmentActivity() {
 
 	private val openQueueRequest = mutableStateOf(false)
 
+	private val vaultRequestRequest = mutableStateOf<String?>(null)
+
 	override fun onCreate(savedInstanceState: Bundle?) {
 		super.onCreate(savedInstanceState)
 		DebugLog.init(this)
@@ -71,7 +73,7 @@ class MainActivity : FragmentActivity() {
 		consume(intent)
 		setContent {
 			val colors = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()
-			MaterialTheme(colorScheme = colors) { App(repo, injected, openTeamRequest, openQueueRequest) }
+			MaterialTheme(colorScheme = colors) { App(repo, injected, openTeamRequest, openQueueRequest, vaultRequestRequest) }
 		}
 	}
 
@@ -91,7 +93,18 @@ class MainActivity : FragmentActivity() {
 			openQueueRequest.value = true
 			intent.removeExtra(SwitchboardService.EXTRA_OPEN_QUEUE)
 		}
+		intent.getStringExtra(SwitchboardService.EXTRA_VAULT_REQUEST)?.let {
+			vaultRequestRequest.value = it
+			intent.removeExtra(SwitchboardService.EXTRA_VAULT_REQUEST)
+		}
 	}
+}
+
+/** The vault's open modal. */
+private sealed interface VaultModal {
+	data class Entry(val id: String?) : VaultModal
+
+	data class Request(val id: String) : VaultModal
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -101,6 +114,7 @@ fun App(
 	injectedBlob: String?,
 	openTeamRequest: MutableState<String?>,
 	openQueueRequest: MutableState<Boolean>,
+	vaultRequestRequest: MutableState<String?> = remember { mutableStateOf(null) },
 ) {
 	val state by repo.state.collectAsState()
 	val bootState by repo.bootState.collectAsState()
@@ -113,6 +127,7 @@ fun App(
 	// Composition mirror; store persists.
 	var boardStripHeight by remember { mutableStateOf(repo.store.boardStripHeight) }
 	var boardModal by remember { mutableStateOf<Pair<String, String>?>(null) }
+	var vaultModal by remember { mutableStateOf<VaultModal?>(null) }
 	// Clear reveal after handoff.
 	val revealAtState = remember { mutableStateOf<Pair<String, Long>?>(null) }
 	var revealAt by revealAtState
@@ -196,6 +211,16 @@ fun App(
 			// Increment nonce for genuine opens.
 			openNonce++
 			openTeamRequest.value = null
+		}
+	}
+
+	// A notification tap opens the request.
+	LaunchedEffect(vaultRequestRequest.value) {
+		vaultRequestRequest.value?.let { requestId ->
+			showSettings = false
+			overlays = emptyList()
+			vaultModal = VaultModal.Request(requestId)
+			vaultRequestRequest.value = null
 		}
 	}
 
@@ -448,9 +473,27 @@ fun App(
 					team.name to repo.boardOps.boardCardBranchFor(team.name, line.currentId)
 				}.toMap()
 			}
+			val vaultOn = pluginManager.isActive("vault")
+			val vaultPending by repo.vault.pending.collectAsState()
+			// Grants re-read on the vault's own tick.
+			val vaultRevision by repo.vault.revision
+			val vaultTiers = remember(vaultRevision, state.teams, vaultOn) {
+				if (!vaultOn) emptyMap() else state.teams.associate { it.name to repo.vaultOps.grantTierFor(it.name) }
+			}
 			MainTabsScreen(
 				state = state,
 				boardEnabled = pluginManager.isActive("taskboard"),
+				vaultEnabled = vaultOn,
+				vaultPending = if (vaultOn) vaultPending.size else 0,
+				vault = { modifier ->
+					com.atelier_nyaarium.switchboard.vault.VaultScreen(
+						repo = repo,
+						state = state,
+						onOpenEntry = { vaultModal = VaultModal.Entry(it) },
+						onOpenRequest = { vaultModal = VaultModal.Request(it) },
+						modifier = modifier,
+					)
+				},
 				snackbarHostState = snackbarHostState,
 				onRefresh = {
 					repo.command { presence.refreshTeams() }
@@ -508,6 +551,7 @@ fun App(
 						},
 						boardLine = { team -> boardLines[team.name] },
 						boardBranch = { team -> boardBranches[team.name] },
+						vaultTier = { team -> vaultTiers[team.name] },
 						undoneFor = { team ->
 							if (pluginManager.isActive("taskboard")) {
 								repo.boardOps.boardUndoneCountFor(team.name)
@@ -535,6 +579,13 @@ fun App(
 	// Board dialog replaces current screen.
 	boardModal?.let { (gatewayId, entryId) ->
 		BoardEntryDialog(state, repo, gatewayId, entryId) { boardModal = null }
+	}
+	when (val modal = vaultModal) {
+		is VaultModal.Entry ->
+			com.atelier_nyaarium.switchboard.vault.VaultEntryDialog(repo, state, modal.id) { vaultModal = null }
+		is VaultModal.Request ->
+			com.atelier_nyaarium.switchboard.vault.VaultRequestSheet(repo, state, modal.id) { vaultModal = null }
+		null -> {}
 	}
 }
 

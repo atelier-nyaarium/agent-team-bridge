@@ -28,9 +28,13 @@ internal suspend fun ChatRepository.reportConsumerCapabilities() {
 }
 
 internal suspend fun ChatRepository.applyPlane(name: String, payload: JsonElement?): Boolean {
-	// Board pushes carry revisions only.
+	// Board and vault pushes carry revisions only.
 	if (name == "taskBoard") {
 		boardOps.refreshBoard()
+		return true
+	}
+	if (name == "vault") {
+		vaultOps.refresh()
 		return true
 	}
 	if (name != "presence" || payload == null) return false
