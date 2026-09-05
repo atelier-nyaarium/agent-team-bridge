@@ -8,8 +8,8 @@
 // the committed version, which is why bumping and building are one command rather than two: a dist/
 // built at a version the manifests do not claim looks correct and is not.
 //
-// Only the MCP entrypoint is bundled. The gateway runs in Docker from oven/bun:1 and the host daemon
-// runs on the host under tmux; both have bun by construction, so neither gains anything from a bundle.
+// The MCP entrypoint and the askpass helper are bundled; the installer copies the helper out of
+// dist/. The gateway and the host daemon run under bun by construction and need no bundle.
 //
 // package.json is the source of truth. It is the one file that gets BUMPED; every other target is
 // SET to whatever it now says, so the targets can never drift apart or be bumped by different
@@ -39,7 +39,7 @@ const VERSION_FIELD_RE = /"version"\s*:\s*"[^"]*"/g;
 /** The console's baked-in plugins, whose manifests ship inside the APK. */
 const PLUGIN_MANIFEST_DIR = path.join("android", "app", "src", "main", "assets", "plugins");
 
-const ENTRYPOINT = path.join("src", "main-mcp.ts");
+const ENTRYPOINTS = [path.join("src", "main-mcp.ts"), path.join("src", "main-vault-askpass.ts")];
 const DIST_DIR = "dist";
 
 /** A site that recomputes the version from package.json at build time, named by a string that must
@@ -263,7 +263,7 @@ function main(argv: string[]): void {
 	try {
 		execFileSync(
 			"bun",
-			["build", ENTRYPOINT, "--outdir", DIST_DIR, "--target", "node", "--minify", "--format", "esm"],
+			["build", ...ENTRYPOINTS, "--outdir", DIST_DIR, "--target", "node", "--minify", "--format", "esm"],
 			{ cwd: ROOT, stdio: "inherit" },
 		);
 	} catch {

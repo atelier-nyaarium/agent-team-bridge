@@ -10,6 +10,7 @@ import { VaultListResultSchema, type VaultRequest, VaultRequestSchema } from "..
 import { composeSessionName } from "../shared/session-id.js";
 import { attachFakeSession, type FakeSession } from "../testing/fakeSession.js";
 import { type FederationHarness, startFederationHarness } from "../testing/federationHarness.js";
+import { createGatewayPort, runAskpass } from "../vault-askpass/askpass.js";
 
 type UseAnswer = { outcome: string; decision?: string; value?: string; requestId?: string; reason?: string };
 
@@ -200,6 +201,10 @@ describe("federation harness: vault requests", () => {
 				}),
 			);
 		expect((await gatewayPost("/vault/helper-token", {}, {})).status).toBe(401);
+		// A withdraw of a request the caller did not open answers false.
+		expect(await (await post(alice, "/vault/withdraw", { requestId: "nothing-open" })).json).toEqual({
+			withdrawn: false,
+		});
 		const minted = await gatewayPost("/vault/helper-token", { "x-host-token": h.set.tokens.host }, {});
 		expect(minted.status).toBe(200);
 		const { token } = (await minted.json()) as { token: string };
@@ -252,11 +257,11 @@ describe("federation harness: vault requests", () => {
 		const second = await nextRequest(seen + 1);
 		expect(second).toMatchObject({ kind: "entry", entryId: id, shape: "ssh deploy@prod" });
 		await h.phone.value({ kind: "vault_answer", requestId: second.requestId, decision: "session" });
-		expect(await entryRoad).toEqual({ outcome: "approved", decision: "session", value: "k3y" });
-		// Session grants bypass requests.
+		// A helper's session tap is a window: every process on the host shares its token.
+		expect(await entryRoad).toEqual({ outcome: "approved", decision: "window", value: "k3y" });
 		expect(await askpass("ssh deploy@prod uptime", 200)).toEqual({
 			outcome: "approved",
-			decision: "session",
+			decision: "window",
 			value: "k3y",
 		});
 		expect((await requestRows()).length).toBe(seen + 2);
@@ -273,5 +278,55 @@ describe("federation harness: vault requests", () => {
 		expect(planted.status).toBe(200);
 		expect(await askpass("ssh deploy@prod uptime", 200)).toMatchObject({ outcome: "pending" });
 		expect((await nextRequest(seen + 2)).kind).toBe("typed");
+	});
+
+	it("the helper binary's port holds for the phone without a tty, and withdraws when the tty wins", async () => {
+		const minted = await h.gateway.router(
+			new Request("http://gateway.test/vault/helper-token", {
+				method: "POST",
+				headers: { "content-type": "application/json", "x-host-token": h.set.tokens.host },
+				body: "{}",
+			}),
+		);
+		expect(minted.status).toBe(200);
+		const { token } = (await minted.json()) as { token: string };
+		const gateway = createGatewayPort({
+			baseUrl: "http://gateway.test",
+			token,
+			fetch: (url, init) => h.gateway.router(new Request(url, init)),
+		});
+		const seen = (await requestRows()).length;
+		const held = runAskpass(
+			{ cmdline: "sudo apt install foo", prompt: "x" },
+			{ gateway, tty: null, now: Date.now },
+		);
+		const request = await nextRequest(seen);
+		await h.phone.value({
+			kind: "vault_answer",
+			requestId: request.requestId,
+			decision: "once",
+			value: h.phone.seal("fr0m-ph0ne", vaultAadKind(VAULT_TYPED_KIND, request.requestId)),
+		});
+		expect(await held).toEqual({ kind: "value", value: "fr0m-ph0ne", from: "phone" });
+
+		let typed: (value: string | null) => void = () => undefined;
+		const tty = {
+			readSecret: () =>
+				new Promise<string | null>((resolve) => {
+					typed = resolve;
+				}),
+		};
+		const raced = runAskpass({ cmdline: "sudo apt install bar", prompt: "x" }, { gateway, tty, now: Date.now });
+		const second = await nextRequest(seen + 1);
+		typed("fr0m-tty");
+		expect(await raced).toEqual({ kind: "value", value: "fr0m-tty", from: "tty" });
+		// The withdrawn request refuses the phone's late answer.
+		const late = await h.phone.value({
+			kind: "vault_answer",
+			requestId: second.requestId,
+			decision: "once",
+			value: h.phone.seal("late", vaultAadKind(VAULT_TYPED_KIND, second.requestId)),
+		});
+		expect(late.result).toMatchObject({ ok: false });
 	});
 });

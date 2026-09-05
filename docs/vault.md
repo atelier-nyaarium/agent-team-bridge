@@ -30,7 +30,8 @@ and the delta list are in `docs/federation.md` under Owner state.
 
 - `once` leaves no grant. `window` covers one entry, one operation shape, and one session for 30
   minutes. `session` covers every shape of one entry for one session, until the session ends or
-  eight hours pass.
+  eight hours pass. **A helper's session tap records a window:** every process on the host shares
+  the helper's token, so a whole-session grant there would cover them all.
 - **The shape is the program plus its first argument:** `operationShape` takes the program's
   basename. When the first argument is a flag, the whole line is the shape, since a flag's value
   could hide the target.
@@ -69,6 +70,8 @@ and the delta list are in `docs/federation.md` under Owner state.
   a request opens and the route waits up to `waitMs`, capped at `VAULT_ROUTE_WAIT_CAP_MS`. A wait
   that runs out answers `pending` with the request id and deadline.
 - `/vault/collect` (session or helper): waits on a pending request the caller opened.
+- `/vault/withdraw` (session or helper): closes a pending request the caller opened. A late answer
+  from the phone then reads as expired and records no grant.
 - `/vault/capture` (session): creates an entry from a value a session captured, trimming one
   trailing newline, and notifies the owner.
 - `/vault/askpass` (helper): an askpass command line. A lone entry whose public title equals the
@@ -78,6 +81,49 @@ and the delta list are in `docs/federation.md` under Owner state.
 - The answer is `VaultValueAnswer`: `approved` with the decision and the value, `refused` with a
   reason, or `pending`.
 - **The value leaves the gateway only in an approved answer.**
+
+## Askpass helper
+
+`src/main-vault-askpass.ts`, bundled to `dist/main-vault-askpass.js` beside the MCP entry. sudo, ssh,
+and git run it with the prompt as its one argument and read the value from stdout. The decision is
+`vault-askpass/askpass.ts`, over a gateway port, a tty port, and a clock.
+
+- The brief is the caller's `/proc/<ppid>/cmdline`, joined on spaces, with `/proc/<ppid>/exe` in
+  place of its first word, so a renamed binary shows where it lives. sudo's `-A` ahead of the
+  command is dropped, so `sudo -A apt install foo` briefs as `/usr/bin/sudo apt install foo` and
+  shapes as `sudo apt`. Without `/proc`, the prompt is the brief. The brief names the operation. It
+  does not authenticate the caller: a process may claim any command line.
+- **Only a secret prompt reaches the phone:** one naming a password, passphrase, secret, token, or
+  PIN, or an empty one. ssh's host-key confirmation and git's username prompt are served at the tty
+  alone, so a grant never answers a yes/no.
+- **The opening `/vault/askpass` call asks for no wait,** so the request id is known before anyone
+  can win; every later `/vault/collect` holds. A collect that ends without an answer is followed
+  by another until the request's deadline.
+- **A human at the tty races the phone and the first value wins:** the helper opens `/dev/tty`
+  when it can, prints the prompt there, and reads one line with echo off through an `sh` child;
+  collects hold 25 seconds. When the tty wins, the phone's request is withdrawn, bounded to three
+  seconds. When the phone wins, the read is abandoned, half-typed input is drained, and echo
+  restored. An empty line asks again; a closed tty leaves the phone road running and says so.
+  Ctrl-C ends both roads and withdraws.
+- **With no tty the helper holds for the phone:** collects hold `VAULT_ROUTE_WAIT_CAP_MS`. This is
+  the road for an agent's own commands and for ssh with no tty.
+- A gateway that cannot be reached, a token it does not know, or an owner who declined all leave
+  the tty as the only road. With no tty either, the helper exits 1. It prints nothing but the value
+  to stdout; notes go to stderr. Loopback calls go through `node:http`, so a proxy variable cannot
+  divert them.
+- A withdrawn request is closed on the gateway only. The phone's row stays until its deadline, and
+  answering it reads as expired. Any local process holding the token can withdraw a helper request;
+  that denies one prompt and diverts nothing, since an answer is sealed to its request id.
+- The token file is `VAULT_ASKPASS_TOKEN_FILE`, which the wrapper sets, or
+  `~/.config/switchboard/vault-askpass.token`; the gateway is `BRIDGE_ROUTER_URL`, default
+  `http://127.0.0.1:20000`. The helper needs a token but no session.
+- `scripts/install-vault-askpass.ts` mints the token with the host token from `.env` (an unenrolled
+  gateway refuses), copies the bundle under `~/.local/share/switchboard/`, writes the token 0600
+  under `~/.config/switchboard/`, writes the `~/.local/bin/vault-askpass` wrapper with the bun that
+  ran the installer, the token path, and the gateway baked in, and prints the `SUDO_ASKPASS`,
+  `SSH_ASKPASS`, and `GIT_ASKPASS` exports. sudo asks the helper only under `-A`, so plain sudo is
+  unchanged. `SSH_ASKPASS_REQUIRE=force` is optional: without it ssh asks the helper only when it
+  has no tty. `vault_revoke` on the phone drops the token by id.
 
 ## Phone
 
@@ -118,6 +164,8 @@ and the delta list are in `docs/federation.md` under Owner state.
 - `src/gateway/compose/composeVault.ts` - the stage: stores, request delivery, routes, console handlers.
 - `src/gateway/router/vaultClient.ts` - sealing, opening, the delta copy, the create.
 - `src/gateway/vault/decisions.ts`, `requests.ts`, `helperTokens.ts`, `vaultRoutes.ts` - grants, requests, helper tokens, routes.
+- `src/main-vault-askpass.ts`, `src/vault-askpass/askpass.ts` - the helper entry and its decision over ports.
+- `scripts/install-vault-askpass.ts` - the helper's installer.
 - `src/shared/schemasVault.ts` - wire shapes, the request row, the loopback shapes, the constants.
 - `src/federation-server/vault/` - the Router service.
 - `android/.../vault/` - sealing, the held entry set, the writer, the tab, the editor, the request sheet.

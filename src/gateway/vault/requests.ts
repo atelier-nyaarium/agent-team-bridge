@@ -11,6 +11,10 @@ import {
 } from "../../shared/schemasVault.js";
 import { operationShape } from "./decisions.js";
 
+/** The helper's principal. */
+export const helperTarget = (tokenId: string): string => `helper.${tokenId}`;
+export const isHelperTarget = (target: string): boolean => target.startsWith("helper.");
+
 export type VaultRequestInput =
 	| { kind: "entry"; entryId: string; operation: string; sessionTarget: string }
 	| { kind: "typed"; operation: string; sessionTarget: string };
@@ -120,8 +124,10 @@ export function createVaultRequests(deps: VaultRequestsDeps) {
 			entry.settle({ kind: "approved", decision: "once", typedValue });
 			return { ok: true };
 		}
-		deps.onApproved?.(entry.request, decision);
-		entry.settle({ kind: "approved", decision });
+		// A helper's session tap is a window: the host shares its token.
+		const tier = decision === "session" && isHelperTarget(entry.request.sessionTarget) ? "window" : decision;
+		deps.onApproved?.(entry.request, tier);
+		entry.settle({ kind: "approved", decision: tier });
 		return { ok: true };
 	};
 
@@ -137,6 +143,14 @@ export function createVaultRequests(deps: VaultRequestsDeps) {
 		return entry;
 	};
 
+	/** The opener withdraws a pending request; a later answer reads as expired. */
+	const withdraw = (requestId: string, sessionTarget: string): boolean => {
+		const entry = pending.get(requestId);
+		if (!entry || entry.settled || entry.request.sessionTarget !== sessionTarget) return false;
+		entry.settle({ kind: "refused" });
+		return forget(requestId);
+	};
+
 	/** Session end refuses open requests. */
 	const sessionEnded = (sessionTarget: string): void => {
 		for (const [requestId, entry] of [...pending]) {
@@ -146,7 +160,7 @@ export function createVaultRequests(deps: VaultRequestsDeps) {
 		}
 	};
 
-	return { open, answer, collect, forget, sessionEnded };
+	return { open, answer, collect, forget, withdraw, sessionEnded };
 }
 
 export type VaultRequests = ReturnType<typeof createVaultRequests>;

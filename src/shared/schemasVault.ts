@@ -151,6 +151,8 @@ export const VAULT_WINDOW_MS = 30 * 60 * 1000;
 // Whole-session grants cap at eight hours.
 export const VAULT_SESSION_GRANT_CAP_MS = 8 * 60 * 60 * 1000;
 export const MAX_VAULT_CAPTURE_CHARS = 8_192;
+// Under fetch's five-minute silence limit; longer holds re-collect.
+export const VAULT_ROUTE_WAIT_CAP_MS = 230_000;
 
 const waitMs = z.number().int().nonnegative().optional();
 
@@ -164,6 +166,7 @@ export const VaultPublicEntrySchema = z.object({
 export const VaultSearchRequestSchema = z.object({ query: z.string().max(256).optional() });
 export const VaultUseRequestSchema = z.object({ entryId, operation, waitMs });
 export const VaultCollectRequestSchema = z.object({ requestId, waitMs });
+export const VaultWithdrawRequestSchema = z.object({ requestId });
 export const VaultCaptureRequestSchema = z.object({
 	publicTitle: z.string().min(1).max(256),
 	publicDescription: z.string().max(2048).optional(),

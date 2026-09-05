@@ -3,6 +3,7 @@
 import { type Ambient, withinMs } from "../../shared/ambient.js";
 import { MIGRATING } from "../../shared/migration-fence.js";
 import {
+	VAULT_ROUTE_WAIT_CAP_MS,
 	type VaultApprovedDecision,
 	VaultAskpassRequestSchema,
 	VaultCaptureRequestSchema,
@@ -12,6 +13,7 @@ import {
 	VaultSearchRequestSchema,
 	VaultUseRequestSchema,
 	type VaultValueAnswer,
+	VaultWithdrawRequestSchema,
 } from "../../shared/schemasVault.js";
 import { bindingTokensEqual } from "../../shared/session-tokens.js";
 import { jsonResponse as json } from "../agentRouteEnvelope.js";
@@ -19,9 +21,8 @@ import type { VaultClient, VaultEntryView } from "../router/vaultClient.js";
 import { presentedByRequest } from "../sessionAuthority.js";
 import { type GrantScope, operationShape, type VaultDecisions } from "./decisions.js";
 import type { HelperTokens } from "./helperTokens.js";
-import type { VaultRequestAnswer, VaultRequests } from "./requests.js";
+import { helperTarget, type VaultRequestAnswer, type VaultRequests } from "./requests.js";
 
-export const VAULT_ROUTE_WAIT_CAP_MS = 230_000;
 const DEFAULT_WAIT_MS = 25_000;
 const REFUSAL = "the owner did not authorize";
 const HELPER_TOKEN_HEADER = "x-vault-helper-token";
@@ -66,7 +67,7 @@ export function createVaultRoutes(deps: VaultRoutesDeps): Map<string, Handler> {
 		const helperToken = req.headers.get(HELPER_TOKEN_HEADER);
 		if (helperToken) {
 			const tokenId = deps.helperTokens.verify(helperToken);
-			if (tokenId && accepts.includes("helper")) return { kind: "helper", target: `helper.${tokenId}` };
+			if (tokenId && accepts.includes("helper")) return { kind: "helper", target: helperTarget(tokenId) };
 			return json({ error: "not found" }, 404);
 		}
 		const team = deps.resolveCaller(req);
@@ -188,6 +189,14 @@ export function createVaultRoutes(deps: VaultRoutesDeps): Map<string, Handler> {
 		return settle(answer, pending.request, found instanceof Response ? () => null : found.value);
 	};
 
+	const withdraw: Handler = async (req, body) => {
+		const who = principal(req, ["session", "helper"]);
+		if (who instanceof Response) return who;
+		const parsed = VaultWithdrawRequestSchema.safeParse(body);
+		if (!parsed.success) return json({ error: "invalid vault withdraw request" }, 400);
+		return json({ withdrawn: deps.requests.withdraw(parsed.data.requestId, who.target) });
+	};
+
 	const capture: Handler = async (req, body) => {
 		const who = principal(req, ["session"]);
 		if (who instanceof Response) return who;
@@ -241,11 +250,12 @@ export function createVaultRoutes(deps: VaultRoutesDeps): Map<string, Handler> {
 		return settle(await withinMs(deps.ambient, opened.answer, waitMs), opened.request, () => null);
 	};
 
-	/** Host token gates helper minting. */
+	/** Host token gates helper minting; an unenrolled gateway has no vault to mint for. */
 	const helperToken: Handler = async (req) => {
 		const presented = req.headers.get("x-host-token");
 		if (!deps.hostToken || !presented || !bindingTokensEqual(presented, deps.hostToken))
 			return json({ error: "host token required" }, 401);
+		if (!deps.client()) return json({ error: "vault unavailable: this Gateway is not enrolled" }, 503);
 		const minted = deps.helperTokens.mint();
 		return minted ? json(minted) : json({ error: "the helper token could not be stored" }, 503);
 	};
@@ -254,6 +264,7 @@ export function createVaultRoutes(deps: VaultRoutesDeps): Map<string, Handler> {
 		["/vault/search", search],
 		["/vault/use", use],
 		["/vault/collect", collect],
+		["/vault/withdraw", withdraw],
 		["/vault/capture", capture],
 		["/vault/askpass", askpass],
 		["/vault/helper-token", helperToken],

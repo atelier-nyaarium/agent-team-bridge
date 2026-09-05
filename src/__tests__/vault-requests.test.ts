@@ -128,4 +128,53 @@ describe("vault requests", () => {
 		expect(requests.forget(requestId)).toBe(false);
 		expect(requests.collect(requestId, "helper.h1")).toBeUndefined();
 	});
+
+	it("only the opener withdraws, an answer already given stands, and a late answer grants nothing", async () => {
+		const { requests, approved } = bench();
+		const open = (sessionTarget: string) => {
+			const opened = requests.open({
+				kind: "entry",
+				entryId: "deploy",
+				operation: "ssh deploy@prod",
+				sessionTarget,
+			});
+			if (opened.kind !== "opened") throw new Error("the request did not open");
+			return opened;
+		};
+		const withdrawn = open("helper.h1");
+		expect(requests.withdraw(withdrawn.request.requestId, "host.alice")).toBe(false);
+		expect(requests.withdraw(withdrawn.request.requestId, "helper.h1")).toBe(true);
+		await expect(withdrawn.answer).resolves.toEqual({ kind: "refused" });
+		expect(requests.answer(withdrawn.request.requestId, "session")).toMatchObject({ ok: false });
+		expect(approved).toEqual([]);
+
+		const answered = open("helper.h1");
+		expect(requests.answer(answered.request.requestId, "window")).toEqual({ ok: true });
+		expect(requests.withdraw(answered.request.requestId, "helper.h1")).toBe(false);
+		expect(requests.collect(answered.request.requestId, "helper.h1")?.request.requestId).toBe(
+			answered.request.requestId,
+		);
+	});
+
+	it("a helper's session tap records a window, since every process on the host shares its token", async () => {
+		const { requests, approved } = bench();
+		const helper = requests.open({
+			kind: "entry",
+			entryId: "deploy",
+			operation: "ssh prod",
+			sessionTarget: "helper.h1",
+		});
+		const session = requests.open({
+			kind: "entry",
+			entryId: "deploy",
+			operation: "ssh prod",
+			sessionTarget: "host.alice",
+		});
+		if (helper.kind !== "opened" || session.kind !== "opened") throw new Error("the requests did not open");
+		expect(requests.answer(helper.request.requestId, "session")).toEqual({ ok: true });
+		expect(requests.answer(session.request.requestId, "session")).toEqual({ ok: true });
+		await expect(helper.answer).resolves.toEqual({ kind: "approved", decision: "window" });
+		await expect(session.answer).resolves.toEqual({ kind: "approved", decision: "session" });
+		expect(approved.map((grant) => grant.decision)).toEqual(["window", "session"]);
+	});
 });

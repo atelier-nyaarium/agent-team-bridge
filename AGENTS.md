@@ -4,7 +4,8 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
 
 ## Layout
 
-- `src/main-mcp.ts` / `main-gateway.ts` / `main-host-daemon.ts` / `main-federation.ts` - four entry points
+- `src/main-mcp.ts` / `main-gateway.ts` / `main-host-daemon.ts` / `main-federation.ts` / `main-vault-askpass.ts` - five entry points
+- `src/vault-askpass/askpass.ts` - the askpass helper's decision over gateway, tty, and clock ports; the tty race and the no-tty hold
 - `src/gateway/` - Docker-side HTTP and WS router
 - `src/gateway/composeGateway.ts` - fifteen compose stages, fault port, and cycles; `index.ts` is the Bun adapter
 - `src/gateway/compose/gatewayTypes.ts` - `GatewayConfig`, `GatewayDeps`, `GatewayGraph`, and the `GatewayFaultPort` the harness drives
@@ -197,6 +198,7 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
 - `android/` - Gradle/Kotlin console app; `proto/Protocol.kt` generated
 - `scripts/` - build, Kotlin codegen, leaf sync, setup, federation start, residue checks, and voice import
 - `scripts/lib/routerStart.ts` - sole Router `.env` and startup owner
+- `scripts/install-vault-askpass.ts` - mints the helper token and lands the askpass helper under the owner's home
 - `scripts/lib/verifyChecks.ts` - setup verification checks
 - `android/.../SelfMigration.kt` / `CursorTranslationOps.kt` - phone self-migration and consumer cursor translation
 - `android/.../ConsoleSocketClient.kt` - `ConsoleSocketMode`
@@ -215,6 +217,7 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
 **`main-gateway.ts`** Docker gateway and central router.
 **`main-host-daemon.ts`** host `host` WS slot, devcontainer wake, session spawn, terminal view.
 **`main-federation.ts`** self-hosted federation relay.
+**`main-vault-askpass.ts`** askpass helper on the host; asks the phone through the gateway, falls back to the tty.
 
 | Port | Service |
 |---|---|
