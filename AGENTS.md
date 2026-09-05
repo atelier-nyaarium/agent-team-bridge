@@ -126,6 +126,7 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
 - `src/federation-server/fileSecretStore.ts` - durable federation state and bounded atomic CAS
 - `src/federation-server/owner/` - per-owner state layer: fsync'd journal, CAS records, per-address rows, quarantine, lock, Domain quota
 - `src/federation-server/inbox/` - inbox service, op ledger, consumer and session registries, gateway incarnation, OwnerOp intake, blob fetch route
+- `src/federation-server/inbox/inboxAppend.ts` / `inboxRetire.ts` / `inboxSweep.ts` / `inboxOpResult.ts` / `inboxCore.ts` - row append and admission, row retirement, the expiry sweep, router-authored result rows, and shared primitives (`recordId`, `guarded`, `ledgerTransaction`, `ownerAddress`, `floorOf`) behind `InboxService`
 - `src/federation-server/blobs/` - Router blob cache with leases and the reference-held store
 - `src/federation-server/ownerServices.ts` / `ownerServiceHooks.ts` - the owner-state services behind one hook surface: OwnerOp kinds, gateway frames, register and drop listeners
 - `src/federation-server/presence/` - presence rows per gateway incarnation, resync, roster, owner and friend projections
@@ -140,7 +141,8 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
     EQUALITY only. Sequence orders rows within an epoch. Across epochs, the later report wins. The
     receiver stamps `at`; it decides cross-epoch merges. `ReadAnchor.kt` is the phone twin and
     resolves by row position.
-- `src/federation-server/gatewayBridge.ts` / `gatewayTransport.ts` - registration and relay routing; four trust callbacks required
+- `src/federation-server/gatewayBridge.ts` / `gatewayTransport.ts` - connection registry and frame dispatch; four trust callbacks required
+- `src/federation-server/bridge/registrationHandler.ts` / `relayRouter.ts` / `inboxFrames.ts` / `frameDispatch.ts` - gateway registration; cross-gateway relay and cross-Domain handshake; incarnation-gated inbox, blob, and value frames; the registered-frame table and its migration fence, which holds `board_op`, `cross_domain_share`, and `cross_domain_unshare` the way the owner-op registry holds their `value`-mutation twins
 - `src/federation-server/consoleSurface.ts` / `publicApproval.ts` - token-gated operations and token-exempt nonce routes
 - `src/federation-server/routerTls.ts` - persistent self-signed certificate; rotation re-provisions clients
 - `src/federation-server/*Coordinator.ts` - in-memory flow windows; restart loses and re-arms them

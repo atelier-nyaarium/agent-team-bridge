@@ -301,6 +301,38 @@ describe("GatewayBridge inbox", () => {
 		expect(answer).toMatchObject({ ok: false, error: "migrating" });
 	});
 
+	// The fence holds a share frame the same way it holds its owner-op twin.
+	it("holds board_op and cross-domain share frames under the Router migration window, but not an uncatalogued frame", async () => {
+		const { bridge } = await registered(fakeInbox());
+		const calls: string[] = [];
+		for (const name of ["board_op", "cross_domain_share", "cross_domain_unshare", "board_session_end"])
+			bridge.registerGatewayFrame(name, () => {
+				calls.push(name);
+				return { ok: true };
+			});
+		bridge.setMigrationReady(() => false);
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-fence-"));
+		const previousDataDir = process.env.DATA_DIR;
+		const previousEpoch = process.env.ROUTER_MIGRATION_EPOCH;
+		process.env.DATA_DIR = dir;
+		process.env.ROUTER_MIGRATION_EPOCH = "9";
+		try {
+			for (const name of ["board_op", "cross_domain_share", "cross_domain_unshare"])
+				expect(await bridge.handleCall("c1", name, { incarnation: 1 })).toEqual({
+					outcome: "refused",
+					reason: "migrating",
+				});
+			expect(await bridge.handleCall("c1", "board_session_end", { incarnation: 1 })).toEqual({ ok: true });
+		} finally {
+			if (previousDataDir === undefined) delete process.env.DATA_DIR;
+			else process.env.DATA_DIR = previousDataDir;
+			if (previousEpoch === undefined) delete process.env.ROUTER_MIGRATION_EPOCH;
+			else process.env.ROUTER_MIGRATION_EPOCH = previousEpoch;
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+		expect(calls).toEqual(["board_session_end"]);
+	});
+
 	it("pushes an owner row a gateway appends to the bound console sockets", async () => {
 		const pushed: Array<{ domainId: string; seq: number }> = [];
 		const { bridge, gateway, owner } = await registered(

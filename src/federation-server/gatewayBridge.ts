@@ -1,50 +1,18 @@
-import { z } from "zod";
-import { type DomainSnapshot, REGISTER_MAX_SKEW_MS } from "../shared/admission.js";
-import { parseBlobReference } from "../shared/blob-reference.js";
-import {
-	BlobBeginParamsSchema,
-	BlobChunkParamsSchema,
-	BlobFetchParamsSchema,
-	BlobFetchReplyParamsSchema,
-	type CrossDomainHandshakeReplyParams,
-	CrossDomainHandshakeReplyParamsSchema,
-	type CrossDomainHandshakeRevealReplyParams,
-	CrossDomainHandshakeRevealReplyParamsSchema,
-	CrossDomainHandshakeRevealRouteSchema,
-	CrossDomainHandshakeRouteSchema,
-	FEDERATION_PROTOCOL_FLOOR,
-	FEDERATION_PROTOCOL_VERSION,
-	FEDERATION_VALUE_PROTOCOL_VERSION,
-	GatewayRegisterParamsSchema,
-	type GatewayRelayReplyParams,
-	GatewayRelayReplyParamsSchema,
-	GatewayRelayRouteSchema,
-	InboxAckParamsSchema,
-	InboxAppendParamsSchema,
-	SessionForgetParamsSchema,
-	SessionUpsertParamsSchema,
-	ValueResultParamsSchema,
-} from "../shared/router-protocol.js";
-import {
-	formatInboxAddress,
-	type InboxAddress,
-	type InboxRow,
-	InboxRowInputSchema,
-	parseInboxAddress,
-} from "../shared/schemasInbox.js";
-import { OP_LEDGER_PROTOCOL } from "../shared/schemasRegister.js";
-import { GATEWAY_ERROR_STALE_INCARNATION, GATEWAY_REASON_NO_WAITER } from "../shared/wire-vocabulary.js";
+import type { DomainSnapshot } from "../shared/admission.js";
+import { FEDERATION_VALUE_PROTOCOL_VERSION } from "../shared/router-protocol.js";
+import { type InboxRow, parseInboxAddress } from "../shared/schemasInbox.js";
+import { GATEWAY_ERROR_STALE_INCARNATION } from "../shared/wire-vocabulary.js";
 import type { ReferenceHeldStore } from "./blobs/referenceHeldStore.js";
 import type { BlobOrigin, RouterBlobCache } from "./blobs/routerBlobCache.js";
-import { type DomainMeta, sanitizeDomainId } from "./enrollmentCoordinator.js";
+import { FrameDispatchTable, MIGRATION_FENCED_GATEWAY_FRAMES } from "./bridge/frameDispatch.js";
+import { INCARNATION_GATED_FRAMES, InboxFrames } from "./bridge/inboxFrames.js";
+import { RegistrationHandler } from "./bridge/registrationHandler.js";
+import { RelayRouter } from "./bridge/relayRouter.js";
+import type { DomainMeta } from "./enrollmentCoordinator.js";
 import { type ConnectionId, GatewayTransport, type ToolProvider } from "./gatewayTransport.js";
-import { HANDSHAKE_RATE_MAX, HANDSHAKE_RATE_WINDOW_MS } from "./handshakeRateLimit.js";
 import { BlobFetchRoute } from "./inbox/blobFetchRoute.js";
-import { type InboxService, type PeerRowGate, sessionTargetOf } from "./inbox/inboxService.js";
+import type { InboxService, PeerRowGate } from "./inbox/inboxService.js";
 import { readRouterMigrationWindow } from "./migration/leaseService.js";
-import { OwnerQuarantined } from "./owner/ownerStateStore.js";
-import { verifyRegistrationClaim } from "./registrationVerification.js";
-import { CROSS_DOMAIN_HANDSHAKE_TIMEOUT_MS, GATEWAY_RELAY_TIMEOUT_MS } from "./relayTimeouts.js";
 
 export interface GatewayBridgeParams {
 	port: number;
@@ -75,32 +43,18 @@ export type GatewayFrameHandler = (
 	params: Record<string, unknown>,
 ) => unknown | Promise<unknown>;
 
-/** Stable producer identity deduplicates retries. */
-const ProducerOpHashSchema = z.string().regex(/^[0-9a-f]{64}$/);
-
-const BUILT_IN_FRAMES = new Set([
-	"gateway_register",
-	"inbox_append",
-	"inbox_ack",
-	"session_upsert",
-	"session_forget",
-	"blob_fetch",
-	"blob_fetch_reply",
-	"blob_begin",
-	"blob_chunk",
-	"gateway_relay",
-	"gateway_relay_reply",
-	"cross_domain_handshake",
-	"cross_domain_handshake_reply",
-	"cross_domain_handshake_reveal",
-	"cross_domain_handshake_reveal_reply",
-	"list_gateways",
-]);
+/** A registered connection's identity and inbox incarnation. Null incarnation means no inbox claim. */
+export interface ConnGatewayRecord {
+	domainId: string;
+	gatewayId: string;
+	signPub: string | null;
+	incarnation: number | null;
+	protocolVersion?: number;
+}
 
 export class GatewayBridge implements ToolProvider {
-	private readonly frameHandlers = new Map<string, GatewayFrameHandler>();
+	private readonly frameTable = new FrameDispatchTable();
 	private readonly sessionForgottenListeners: Array<(reg: GatewayRegistration, sessionId: string) => void> = [];
-	private peerRowGate: PeerRowGate | null = null;
 	/** Whether a gateway is migration-fenced. */
 	private migrationFenced: ((domainId: string, gatewayId: string) => boolean) | null = null;
 	private migrationReady: ((domainId: string) => boolean) | null = null;
@@ -109,44 +63,14 @@ export class GatewayBridge implements ToolProvider {
 	private readonly droppedListeners: Array<(reg: GatewayRegistration) => void> = [];
 	private transport: GatewayTransport | null = null;
 	private gatewayConnections = new Map<string, Map<string, ConnectionId>>();
-	// Null incarnation means no inbox claim.
-	private connGateways = new Map<
-		ConnectionId,
-		{
-			domainId: string;
-			gatewayId: string;
-			signPub: string | null;
-			incarnation: number | null;
-			protocolVersion?: number;
-		}
-	>();
+	private connGateways = new Map<ConnectionId, ConnGatewayRecord>();
 	private readonly inbox: InboxService | null;
 	private readonly blobCache: RouterBlobCache | null;
 	private readonly referenceHeld: ReferenceHeldStore | null;
 	private readonly blobFetch: BlobFetchRoute | null;
-	private pendingValues = new Map<
-		string,
-		{ resolve: (result: unknown) => void; timer: ReturnType<typeof setTimeout>; connId: ConnectionId }[]
-	>();
-	private pendingRelays = new Map<
-		string,
-		{
-			resolve: (r: GatewayRelayReplyParams) => void;
-			timer: ReturnType<typeof setTimeout>;
-			dstDomainId: string;
-			dstGateway: string;
-		}
-	>();
-	private pendingHandshakes = new Map<
-		string,
-		{
-			resolve: (r: CrossDomainHandshakeReplyParams | CrossDomainHandshakeRevealReplyParams) => void;
-			timer: ReturnType<typeof setTimeout>;
-			dstConnId: ConnectionId;
-			dstGateway: string;
-		}
-	>();
-	private handshakeAttempts = new Map<string, number[]>();
+	private readonly registrationHandler: RegistrationHandler;
+	private readonly relayRouter: RelayRouter;
+	private readonly inboxFrames: InboxFrames;
 	private readonly port: number;
 	private readonly authToken: string;
 	private readonly getDomain: (domainId: string) => DomainSnapshot | null;
@@ -154,7 +78,6 @@ export class GatewayBridge implements ToolProvider {
 	private readonly hasLinkEdge: (srcDomainId: string, dstDomainId: string) => boolean;
 	private readonly adminDomainIdGetter: () => string | null;
 	private readonly reachGetter: GatewayBridgeParams["reach"];
-	private readonly seenRegisterNonces = new Map<string, number>();
 	private readonly now: () => number;
 
 	public constructor({
@@ -191,6 +114,51 @@ export class GatewayBridge implements ToolProvider {
 						: null;
 				})
 			: null;
+		this.relayRouter = new RelayRouter({
+			hasLinkEdge: this.hasLinkEdge,
+			now: this.now,
+			gatewayConnections: this.gatewayConnections,
+			getConnection: (connId) => this.transport?.getConnection(connId) ?? null,
+			registrationOf: (connId) => {
+				const reg = this.connGateways.get(connId);
+				return reg ? { domainId: reg.domainId, gatewayId: reg.gatewayId } : undefined;
+			},
+		});
+		this.registrationHandler = new RegistrationHandler({
+			getDomain: this.getDomain,
+			getDomainMeta: this.getDomainMeta,
+			adminDomainId: this.adminDomainIdGetter,
+			reach: this.reachGetter,
+			inbox: this.inbox,
+			now: this.now,
+			migrationLease: (domainId, gatewayId) => this.migrationLease?.(domainId, gatewayId),
+			migrationFenced: (domainId, gatewayId) => this.migrationFenced?.(domainId, gatewayId) ?? false,
+			setConnection: (domainId, gatewayId, connId) => this.domainMap(domainId).set(gatewayId, connId),
+			gatewaysInDomain: (domainId) => [...this.domainMap(domainId).keys()],
+			setRegistration: (connId, reg) => this.connGateways.set(connId, reg),
+			notifyRegistered: (registered) => {
+				for (const listener of this.registeredListeners) listener(registered);
+			},
+			getConnectionId: (domainId, gatewayId) => this.gatewayConnections.get(domainId)?.get(gatewayId),
+			getIncarnation: (connId) => this.connGateways.get(connId)?.incarnation,
+			send: (domainId, gatewayId, frame) => this.pushToGatewayInDomain(domainId, gatewayId, frame),
+		});
+		this.inboxFrames = new InboxFrames({
+			inbox: this.inbox,
+			hasLinkEdge: this.hasLinkEdge,
+			getDomain: this.getDomain,
+			blobCache: this.blobCache,
+			referenceHeld: this.referenceHeld,
+			blobFetch: this.blobFetch,
+			isMigrationFenced: (domainId, gatewayId) => this.migrationFenced?.(domainId, gatewayId) ?? false,
+			getRegistration: (connId) => this.connGateways.get(connId),
+			getConnectionId: (domainId, gatewayId) => this.gatewayConnections.get(domainId)?.get(gatewayId),
+			getConnection: (connId) => this.transport?.getConnection(connId) ?? null,
+			send: (domainId, gatewayId, frame) => this.pushToGatewayInDomain(domainId, gatewayId, frame),
+			notifySessionForgotten: (identity, sessionId) => {
+				for (const listener of this.sessionForgottenListeners) listener(identity, sessionId);
+			},
+		});
 		this.handleCall = this.handleCall.bind(this);
 		this.onConnect = this.onConnect.bind(this);
 		this.onDisconnect = this.onDisconnect.bind(this);
@@ -251,24 +219,8 @@ export class GatewayBridge implements ToolProvider {
 	public stop(): void {
 		this.transport?.stop();
 		this.transport = null;
-		for (const [relayId, pending] of this.pendingRelays) {
-			clearTimeout(pending.timer);
-			pending.resolve({ relayId, ok: false, error: "gateway bridge shutting down" });
-		}
-		this.pendingRelays.clear();
-		for (const [handshakeId, pending] of this.pendingHandshakes) {
-			clearTimeout(pending.timer);
-			pending.resolve({ handshakeId, ok: false, error: "gateway bridge shutting down" });
-		}
-		this.pendingHandshakes.clear();
-		for (const pending of this.pendingValues.values()) {
-			for (const waiter of pending) {
-				clearTimeout(waiter.timer);
-				waiter.resolve({ outcome: "timeout" });
-			}
-		}
-		this.pendingValues.clear();
-		this.handshakeAttempts.clear();
+		this.relayRouter.stop();
+		this.inboxFrames.stop();
 		this.blobFetch?.stop();
 		this.gatewayConnections.clear();
 		this.connGateways.clear();
@@ -337,9 +289,7 @@ export class GatewayBridge implements ToolProvider {
 
 	/** Handlers receive connection identity. */
 	public registerGatewayFrame(name: string, handler: GatewayFrameHandler): void {
-		if (this.frameHandlers.has(name) || BUILT_IN_FRAMES.has(name))
-			throw new Error(`gateway frame "${name}" already registered`);
-		this.frameHandlers.set(name, handler);
+		this.frameTable.register(name, handler);
 	}
 
 	public onSessionForgotten(listener: (reg: GatewayRegistration, sessionId: string) => void): void {
@@ -419,46 +369,13 @@ export class GatewayBridge implements ToolProvider {
 			}
 			this.gatewayConnections.delete(domainId);
 		}
-		for (const [relayId, pending] of this.pendingRelays) {
-			if (pending.dstDomainId !== domainId) continue;
-			clearTimeout(pending.timer);
-			this.pendingRelays.delete(relayId);
-			pending.resolve({ relayId, ok: false, error: reason });
-		}
+		this.relayRouter.evictDomain(domainId, reason);
 	}
 
 	public async handleCall(connId: ConnectionId, name: string, params: Record<string, unknown>): Promise<unknown> {
-		if (name === "gateway_register") return this.handleGatewayRegister(connId, params);
-		if (
-			[
-				"inbox_append",
-				"inbox_ack",
-				"session_upsert",
-				"session_forget",
-				"blob_fetch",
-				"blob_fetch_reply",
-				"blob_begin",
-				"blob_chunk",
-				"value_result",
-			].includes(name)
-		) {
-			const reg = this.connGateways.get(connId);
-			const incarnation = typeof params.incarnation === "number" ? params.incarnation : null;
-			if (!reg?.signPub || reg.incarnation === null) return { ok: false, error: "inbox_unavailable" };
-			if (incarnation !== reg.incarnation) {
-				console.warn(`[BridgeServer] stale gateway incarnation for ${name}`);
-				return { ok: false, error: GATEWAY_ERROR_STALE_INCARNATION };
-			}
-			if (name === "inbox_append") return this.handleInboxAppend(connId, params);
-			if (name === "inbox_ack") return this.handleInboxAck(connId, params);
-			if (name === "session_upsert") return this.handleSessionUpsert(connId, params);
-			if (name === "session_forget") return this.handleSessionForget(connId, params);
-			if (name === "blob_fetch") return this.handleBlobFetch(connId, params);
-			if (name === "blob_begin" || name === "blob_chunk") return this.handleBlobUpload(connId, name, params);
-			if (name === "value_result") return this.handleValueResult(connId, params);
-			return this.handleBlobFetchReply(connId, params);
-		}
-		const frameHandler = this.frameHandlers.get(name);
+		if (name === "gateway_register") return this.registrationHandler.handle(connId, params);
+		if (INCARNATION_GATED_FRAMES.has(name)) return this.inboxFrames.handle(connId, name, params);
+		const frameHandler = this.frameTable.get(name);
 		if (frameHandler) {
 			const reg = this.connGateways.get(connId);
 			if (!reg?.signPub || reg.incarnation === null) return { ok: false, error: "inbox_unavailable" };
@@ -468,7 +385,7 @@ export class GatewayBridge implements ToolProvider {
 			}
 			if (
 				readRouterMigrationWindow().fenced &&
-				name === "board_op" &&
+				MIGRATION_FENCED_GATEWAY_FRAMES.has(name) &&
 				this.migrationReady &&
 				!this.migrationReady(reg.domainId)
 			)
@@ -485,13 +402,15 @@ export class GatewayBridge implements ToolProvider {
 				payload,
 			);
 		}
-		if (name === "gateway_relay") return this.handleGatewayRelay(connId, params);
-		if (name === "gateway_relay_reply") return this.handleGatewayRelayReply(connId, params);
-		if (name === "cross_domain_handshake") return this.handleCrossDomainHandshake(connId, params);
-		if (name === "cross_domain_handshake_reply") return this.handleCrossDomainHandshakeReply(connId, params);
-		if (name === "cross_domain_handshake_reveal") return this.handleCrossDomainHandshakeReveal(connId, params);
+		if (name === "gateway_relay") return this.relayRouter.handleGatewayRelay(connId, params);
+		if (name === "gateway_relay_reply") return this.relayRouter.handleGatewayRelayReply(connId, params);
+		if (name === "cross_domain_handshake") return this.relayRouter.handleCrossDomainHandshake(connId, params);
+		if (name === "cross_domain_handshake_reply")
+			return this.relayRouter.handleCrossDomainHandshakeReply(connId, params);
+		if (name === "cross_domain_handshake_reveal")
+			return this.relayRouter.handleCrossDomainHandshakeReveal(connId, params);
 		if (name === "cross_domain_handshake_reveal_reply")
-			return this.handleCrossDomainHandshakeRevealReply(connId, params);
+			return this.relayRouter.handleCrossDomainHandshakeRevealReply(connId, params);
 		if (name === "list_gateways") return this.handleListGateways(connId);
 		return this.handleActionCall(name, params);
 	}
@@ -501,17 +420,7 @@ export class GatewayBridge implements ToolProvider {
 	}
 
 	public onDisconnect(connId: ConnectionId): void {
-		for (const [key, pending] of this.pendingValues) {
-			const remaining = pending.filter((waiter) => waiter.connId !== connId);
-			if (remaining.length === pending.length) continue;
-			for (const waiter of pending) {
-				if (waiter.connId !== connId) continue;
-				clearTimeout(waiter.timer);
-				waiter.resolve({ outcome: "unreachable" });
-			}
-			if (remaining.length) this.pendingValues.set(key, remaining);
-			else this.pendingValues.delete(key);
-		}
+		this.inboxFrames.dropConnection(connId);
 		const reg = this.connGateways.get(connId);
 		const wasCurrent = reg ? this.gatewayConnections.get(reg.domainId)?.get(reg.gatewayId) === connId : false;
 		console.log(`[BridgeServer] Client disconnected${reg ? ` (gateway ${reg.domainId}/${reg.gatewayId})` : ""}`);
@@ -525,181 +434,25 @@ export class GatewayBridge implements ToolProvider {
 			}
 		}
 		this.blobFetch?.failConnection(connId);
-		if (reg && wasCurrent) {
-			if (reg.signPub && reg.incarnation !== null) {
-				const dropped = {
-					domainId: reg.domainId,
-					gatewayId: reg.gatewayId,
-					signPub: reg.signPub,
-					incarnation: reg.incarnation,
-				};
-				for (const listener of this.droppedListeners) listener(dropped);
-			}
-			for (const [relayId, pending] of this.pendingRelays) {
-				if (pending.dstDomainId !== reg.domainId || pending.dstGateway !== reg.gatewayId) continue;
-				clearTimeout(pending.timer);
-				this.pendingRelays.delete(relayId);
-				pending.resolve({ relayId, ok: false, error: `gateway "${reg.gatewayId}" disconnected` });
-			}
-		}
-		for (const [handshakeId, pending] of this.pendingHandshakes) {
-			if (pending.dstConnId !== connId) continue;
-			clearTimeout(pending.timer);
-			this.pendingHandshakes.delete(handshakeId);
-			pending.resolve({ handshakeId, ok: false, error: `gateway "${pending.dstGateway}" disconnected` });
-		}
-	}
-
-	private handleGatewayRegister(connId: ConnectionId, params: Record<string, unknown>): unknown {
-		const parsed = GatewayRegisterParamsSchema.safeParse(params);
-		if (!parsed.success)
-			return { ok: false, error: `invalid gateway_register: ${parsed.error.issues[0]?.message}` };
-		const { gatewayId, protocolVersion } = parsed.data;
-		const domainId = sanitizeDomainId(parsed.data.domainId);
-		if (protocolVersion < FEDERATION_PROTOCOL_FLOOR) {
-			return { ok: false, error: "version_too_old", floor: FEDERATION_PROTOCOL_FLOOR };
-		}
-		const meta = this.getDomainMeta(domainId);
-		if (meta?.status === "pending") {
-			console.warn(`[BridgeServer] rejected gateway_register into pending domain "${domainId}/${gatewayId}"`);
-			return {
-				ok: false,
-				pending: true,
-				error: `registration_denied: admitted-identity proof required for domain "${domainId}"`,
+		if (reg && wasCurrent && reg.signPub && reg.incarnation !== null) {
+			const dropped = {
+				domainId: reg.domainId,
+				gatewayId: reg.gatewayId,
+				signPub: reg.signPub,
+				incarnation: reg.incarnation,
 			};
+			for (const listener of this.droppedListeners) listener(dropped);
 		}
-		const domain = this.getDomain(domainId);
-		if (domain) {
-			const presented = !!(parsed.data.signPub || parsed.data.admission || parsed.data.proof);
-			if (presented) {
-				const denied = verifyRegistrationClaim(
-					parsed.data,
-					{ ownerSignPub: domain.ownerSignPub, revocations: domain.revocations },
-					this.now(),
-				);
-				if (denied) {
-					console.warn(`[BridgeServer] rejected registration for "${domainId}/${gatewayId}": ${denied}`);
-					return { ok: false, error: `registration_denied: ${denied}` };
-				}
-				if (!this.rememberRegisterNonce(parsed.data.proofNonce)) {
-					console.warn(`[BridgeServer] rejected replayed registration proof for "${domainId}/${gatewayId}"`);
-					return { ok: false, error: `registration_denied: registration proof replayed` };
-				}
-			} else if (domainId !== this.adminDomain()) {
-				// Do not disclose unadmitted Domain state.
-				console.warn(
-					`[BridgeServer] rejected identity-less registration into a rooted non-admin domain "${domainId}/${gatewayId}"`,
-				);
-				return {
-					ok: false,
-					error: `registration_denied: admitted-identity proof required for domain "${domainId}"`,
-				};
-			}
-		}
-		this.domainMap(domainId).set(gatewayId, connId);
-		this.migrationLease?.(domainId, gatewayId);
-		// Only admitted identities receive inbox incarnations.
-		const admitted = !!parsed.data.signPub;
-		const incarnation = !admitted ? null : this.inbox ? this.inbox.registerGateway(domainId, gatewayId) : 1;
-		if (admitted && incarnation === null)
-			console.warn(`[BridgeServer] inbox unavailable for ${domainId}/${gatewayId}; registered without it`);
-		this.connGateways.set(connId, {
-			domainId,
-			gatewayId,
-			signPub: parsed.data.signPub ?? null,
-			incarnation,
-			protocolVersion,
-		});
-		console.log(`[BridgeServer] Gateway registered: ${domainId}/${gatewayId} (v${protocolVersion})`);
-		const peers = [...this.domainMap(domainId).keys()].filter((h) => h !== gatewayId);
-		const reply: Record<string, unknown> = {
-			ok: true,
-			protocolFloor: FEDERATION_PROTOCOL_FLOOR,
-			protocolVersion: FEDERATION_PROTOCOL_VERSION,
-			opLedgerProtocol: OP_LEDGER_PROTOCOL,
-			domainId,
-			gateways: peers,
-			...(incarnation !== null ? { incarnation } : {}),
-		};
-		if (domain) reply.domain = domain;
-		if (this.migrationFenced?.(domainId, gatewayId)) reply.migrationFenced = true;
-		if (meta) {
-			reply.domainStatus = meta.status;
-			if (meta.displayName != null) reply.displayName = meta.displayName;
-		}
-		reply.isAdminDomain = domainId === this.adminDomain();
-		// Preserve cached reach when available.
-		const reach = this.reachGetter?.();
-		if (reach && (reach.publicHost || reach.lanAddresses?.length)) reply.reach = reach;
-		if (incarnation !== null) {
-			this.pushRegisteredRows(domainId, gatewayId, incarnation);
-			const registered = { domainId, gatewayId, signPub: parsed.data.signPub as string, incarnation };
-			for (const listener of this.registeredListeners) listener(registered);
-		}
-		return reply;
-	}
-
-	private handleInboxAppend(connId: ConnectionId, params: Record<string, unknown>): unknown {
-		if (!this.inbox) return { ok: false, error: "inbox unavailable" };
-		const parsed = InboxAppendParamsSchema.safeParse(params);
-		const reg = this.connGateways.get(connId);
-		const address = parsed.success ? parseInboxAddress(parsed.data.address) : null;
-		const row = parsed.success ? InboxRowInputSchema.safeParse(parsed.data.row) : null;
-		if (!reg || !parsed.success || !address || !row?.success) return { ok: false, error: "invalid inbox_append" };
-		// Migration-fenced gateways must reconcile before writing.
-		if (this.migrationFenced?.(reg.domainId, reg.gatewayId)) return { ok: false, error: "migrating" };
-		const origin = row.data.envelope.origin;
-		const peerRow = origin.kind === "gateway" && row.data.envelope.epoch === "peer" && address.kind === "session";
-		// A reply targets a job key.
-		const peerReply = peerRow && row.data.envelope.kind === "reply";
-		// Replies need the return edge.
-		const allowedDomain =
-			address.domainId === reg.domainId ||
-			(peerRow &&
-				this.hasLinkEdge(reg.domainId, address.domainId) &&
-				(peerReply
-					? this.hasLinkEdge(address.domainId, reg.domainId)
-					: this.inbox.hasSession(address.domainId, address.gatewayId, address.sessionId)));
-		const addressOwned =
-			address.kind === "owner" || address.domainId !== reg.domainId || address.gatewayId === reg.gatewayId;
-		const originAllowed =
-			origin.domainId === reg.domainId &&
-			origin.gatewayId === reg.gatewayId &&
-			(origin.kind === "gateway" ||
-				(origin.kind === "session" &&
-					!!origin.sessionId &&
-					this.inbox.hasSession(reg.domainId, reg.gatewayId, origin.sessionId)));
-		if (!allowedDomain || !addressOwned || !originAllowed || !reg.signPub) return { ok: false, error: "refused" };
-		// Share state authorizes friend rows and supplies generation.
-		let shareGeneration: number | undefined;
-		if (address.domainId !== reg.domainId && this.peerRowGate && !peerReply) {
-			const target = sessionTargetOf(address);
-			const generation = target ? this.peerRowGate(address.domainId, target, reg.domainId) : null;
-			if (generation === null) return { ok: false, error: "refused" };
-			shareGeneration = generation;
-		}
-		// Hash only the row's operation key.
-		const hash = ProducerOpHashSchema.safeParse((parsed.data.opKey as { hash?: unknown })?.hash);
-		const result = this.inbox.appendRow({
-			address,
-			row: row.data,
-			producerSignPub: reg.signPub,
-			shareGeneration,
-			...(hash.success ? { opKey: { ...row.data.envelope.opKey, hash: hash.data } } : {}),
-		});
-		if (result.row && !this.pushRow(address, result.row)) this.inbox.markWaking(address.domainId, result.opKey);
-		return result;
+		this.relayRouter.dropConnection(connId, reg, wasCurrent);
 	}
 
 	public setPeerRowGate(gate: PeerRowGate): void {
-		this.peerRowGate = gate;
+		this.inboxFrames.setPeerRowGate(gate);
 	}
-
-	private ownerRowPush: ((domainId: string, row: InboxRow) => void) | null = null;
 
 	/** Owner rows a gateway appends reach the bound console sockets through this. */
 	public setOwnerRowPush(push: (domainId: string, row: InboxRow) => void): void {
-		this.ownerRowPush = push;
+		this.inboxFrames.setOwnerRowPush(push);
 	}
 
 	public setMigrationFence(fenced: (domainId: string, gatewayId: string) => boolean): void {
@@ -712,48 +465,6 @@ export class GatewayBridge implements ToolProvider {
 
 	public setMigrationLease(put: (domainId: string, gatewayId: string) => void): void {
 		this.migrationLease = put;
-	}
-
-	private handleInboxAck(connId: ConnectionId, params: Record<string, unknown>): unknown {
-		if (!this.inbox) return { ok: false, error: "inbox unavailable" };
-		const parsed = InboxAckParamsSchema.safeParse(params);
-		const reg = this.connGateways.get(connId);
-		const address = parsed.success ? parseInboxAddress(parsed.data.address) : null;
-		if (!reg || reg.incarnation === null || !parsed.success || !address)
-			return { ok: false, error: "invalid inbox_ack" };
-		return this.inbox.ack({
-			address,
-			seq: parsed.data.seq,
-			deliveryEpoch: parsed.data.deliveryEpoch,
-			outcome: parsed.data.outcome,
-			reason: parsed.data.reason,
-			by: { domainId: reg.domainId, gatewayId: reg.gatewayId, incarnation: reg.incarnation },
-		});
-	}
-
-	private handleSessionUpsert(connId: ConnectionId, params: Record<string, unknown>): unknown {
-		const parsed = SessionUpsertParamsSchema.safeParse(params);
-		const reg = this.connGateways.get(connId);
-		if (!reg || !parsed.success) return { ok: false, error: "invalid session_upsert" };
-		this.inbox?.upsertSession(reg.domainId, reg.gatewayId, parsed.data.sessionId, parsed.data);
-		return { ok: true };
-	}
-
-	private handleSessionForget(connId: ConnectionId, params: Record<string, unknown>): unknown {
-		const parsed = SessionForgetParamsSchema.safeParse(params);
-		const reg = this.connGateways.get(connId);
-		if (!reg || !parsed.success) return { ok: false, error: "invalid session_forget" };
-		this.inbox?.forgetSession(reg.domainId, reg.gatewayId, parsed.data.sessionId);
-		if (reg.signPub && reg.incarnation !== null) {
-			const identity = {
-				domainId: reg.domainId,
-				gatewayId: reg.gatewayId,
-				signPub: reg.signPub,
-				incarnation: reg.incarnation,
-			};
-			for (const listener of this.sessionForgottenListeners) listener(identity, parsed.data.sessionId);
-		}
-		return { ok: true };
 	}
 
 	/** Owner reads use the same cross-Domain gate. */
@@ -779,187 +490,7 @@ export class GatewayBridge implements ToolProvider {
 			value: unknown;
 		},
 	): Promise<unknown> {
-		const admitted = this.getDomain(domainId)?.admissions.some(
-			(entry) => entry.admission.kind === "gateway" && entry.admission.gatewayId === params.gatewayId,
-		);
-		if (!admitted) return Promise.resolve({ outcome: "unreachable" });
-		const connId = this.gatewayConnections.get(domainId)?.get(params.gatewayId);
-		const reg = connId ? this.connGateways.get(connId) : undefined;
-		const ws = connId ? this.transport?.getConnection(connId) : null;
-		if (reg && (reg.protocolVersion ?? 0) < FEDERATION_VALUE_PROTOCOL_VERSION) {
-			// Remove-by: every registered gateway reports protocol 2.
-			return Promise.resolve({ outcome: "unsupported" });
-		}
-		if (!connId || !reg || reg.incarnation === null || !ws) return Promise.resolve({ outcome: "unreachable" });
-		const key = `${domainId}/${params.gatewayId}/${params.conversationId}/${params.opId}`;
-		return new Promise((resolve) => {
-			const timer = setTimeout(() => {
-				const waiters = this.pendingValues.get(key) ?? [];
-				const remaining = waiters.filter((waiter) => waiter.resolve !== resolve);
-				if (remaining.length) this.pendingValues.set(key, remaining);
-				else this.pendingValues.delete(key);
-				resolve({ outcome: "timeout" });
-			}, GATEWAY_RELAY_TIMEOUT_MS);
-			this.pendingValues.set(key, [...(this.pendingValues.get(key) ?? []), { resolve, timer, connId }]);
-			try {
-				ws.send(JSON.stringify({ type: "value_op", ...params, incarnation: reg.incarnation }));
-			} catch {
-				clearTimeout(timer);
-				const waiters = this.pendingValues.get(key) ?? [];
-				const remaining = waiters.filter((waiter) => waiter.resolve !== resolve);
-				if (remaining.length) this.pendingValues.set(key, remaining);
-				else this.pendingValues.delete(key);
-				resolve({ outcome: "unreachable" });
-			}
-		});
-	}
-
-	private handleValueResult(connId: ConnectionId, params: Record<string, unknown>): unknown {
-		const parsed = ValueResultParamsSchema.safeParse(params);
-		const reg = this.connGateways.get(connId);
-		if (!parsed.success) return { settled: false, reason: "malformed" };
-		if (!reg || reg.incarnation !== parsed.data.incarnation)
-			return { settled: false, reason: GATEWAY_ERROR_STALE_INCARNATION };
-		const key = `${reg.domainId}/${reg.gatewayId}/${parsed.data.conversationId}/${parsed.data.opId}`;
-		const pending = this.pendingValues.get(key);
-		if (!pending || pending.every((waiter) => waiter.connId !== connId))
-			return { settled: false, reason: GATEWAY_REASON_NO_WAITER };
-		for (const waiter of pending) clearTimeout(waiter.timer);
-		this.pendingValues.delete(key);
-		for (const waiter of pending) waiter.resolve(parsed.data.result);
-		return { settled: true };
-	}
-
-	private async handleBlobFetch(connId: ConnectionId, params: Record<string, unknown>): Promise<unknown> {
-		const parsed = BlobFetchParamsSchema.safeParse(params);
-		const reg = this.connGateways.get(connId);
-		if (!reg || !parsed.success || !this.blobFetch) return { ok: false, error: "invalid blob_fetch" };
-		const origin = parsed.data.origin;
-		if (origin && origin.domainId !== reg.domainId && !this.hasLinkEdge(reg.domainId, origin.domainId))
-			return { outcome: "unreachable" };
-		return this.blobFetch.fetch(reg.domainId, parsed.data);
-	}
-
-	private handleBlobUpload(connId: ConnectionId, name: string, params: Record<string, unknown>): unknown {
-		const reg = this.connGateways.get(connId);
-		if (!reg) return { ok: false, error: "invalid blob upload" };
-		if (name === "blob_begin") {
-			const parsed = BlobBeginParamsSchema.safeParse(params);
-			if (!parsed.success) return { ok: false, error: "invalid blob_begin" };
-			const value = parsed.data;
-			if (value.store === "cache") {
-				if (!this.blobCache) return { ok: false, error: "blob cache unavailable" };
-				return this.blobCache.begin(
-					reg.domainId,
-					value.blobId,
-					{ domainId: reg.domainId, gatewayId: reg.gatewayId },
-					value.size,
-					value.ciphertextSize,
-					value.ciphertextDigest,
-					value.epoch,
-				);
-			}
-			if (!this.referenceHeld || !value.ref) return { ok: false, error: "held blob requires a reference" };
-			const ref = parseBlobReference(value.ref.id);
-			if (!ref || ref.kind !== value.ref.kind) return { ok: false, error: "reference missing" };
-			let referenceExists = false;
-			try {
-				referenceExists = this.referenceHeld.hasReference(reg.domainId, ref);
-			} catch (error) {
-				if (error instanceof OwnerQuarantined)
-					return { ok: false, error: "refused", reason: "durability_uncertain" };
-				throw error;
-			}
-			if (!referenceExists) return { ok: false, error: "reference missing" };
-			const begun = this.referenceHeld.begin(
-				reg.domainId,
-				value.blobId,
-				value.size,
-				value.ciphertextSize,
-				value.ciphertextDigest,
-				value.epoch,
-			);
-			if (begun.kind !== "quota") this.referenceHeld.applyRefs(reg.domainId, [{ ref, blobIds: [value.blobId] }]);
-			return begun;
-		}
-		const parsed = BlobChunkParamsSchema.safeParse(params);
-		if (!parsed.success) return { ok: false, error: "invalid blob_chunk" };
-		const value = parsed.data;
-		const bytes = Buffer.from(value.bytes, "base64");
-		const renewed =
-			value.store === "cache" ? this.blobCache?.renew(reg.domainId, value.blobId, value.lease.id) : null;
-		if (value.store === "cache" && (!renewed || renewed.kind === "lease_expired"))
-			return { ok: false, error: "lease_expired" };
-		return value.store === "cache"
-			? (this.blobCache?.commitChunk(
-					reg.domainId,
-					value.blobId,
-					value.lease,
-					value.offset,
-					bytes,
-					value.final,
-				) ?? { ok: false, error: "blob cache unavailable" })
-			: (this.referenceHeld?.commitChunk(
-					reg.domainId,
-					value.blobId,
-					value.lease,
-					value.offset,
-					bytes,
-					value.final,
-				) ?? { ok: false, error: "held blob store unavailable" });
-	}
-
-	private handleBlobFetchReply(connId: ConnectionId, params: Record<string, unknown>): unknown {
-		const parsed = BlobFetchReplyParamsSchema.safeParse(params);
-		return parsed.success && this.blobFetch?.settle(connId, parsed.data) ? { ok: true } : { ok: false };
-	}
-
-	private pushRow(address: InboxAddress, row: InboxRow): boolean {
-		if (address.kind === "owner") {
-			// Bound console sockets get the row now; the cursor covers the rest.
-			this.ownerRowPush?.(address.domainId, row);
-			return true;
-		}
-		const connId = this.gatewayConnections.get(address.domainId)?.get(address.gatewayId);
-		const reg = connId ? this.connGateways.get(connId) : undefined;
-		if (!reg || reg.incarnation === null) return false;
-		return this.pushToGatewayInDomain(address.domainId, address.gatewayId, {
-			type: "inbox_deliver",
-			address: formatInboxAddress(address),
-			rows: [row],
-			incarnation: reg.incarnation,
-			deliveryEpoch: this.inbox?.deliveryEpoch(address) ?? 1,
-		});
-	}
-
-	/** Redeliver held rows under current incarnation. */
-	private pushRegisteredRows(domainId: string, gatewayId: string, incarnation: number): void {
-		const inbox = this.inbox;
-		if (!inbox) return;
-		setTimeout(() => {
-			const connId = this.gatewayConnections.get(domainId)?.get(gatewayId);
-			if (!connId || this.connGateways.get(connId)?.incarnation !== incarnation) return;
-			let pending: ReturnType<InboxService["pendingFor"]>;
-			try {
-				pending = inbox.pendingFor(domainId, gatewayId);
-			} catch (err) {
-				console.warn(
-					`[BridgeServer] re-delivery skipped for ${domainId}/${gatewayId}: ${(err as Error).message}`,
-				);
-				return;
-			}
-			for (const entry of pending) {
-				const address = parseInboxAddress(entry.address);
-				if (!address) continue;
-				this.pushToGatewayInDomain(domainId, gatewayId, {
-					type: "inbox_deliver",
-					address: entry.address,
-					rows: entry.rows,
-					incarnation,
-					deliveryEpoch: inbox.deliveryEpoch(address),
-				});
-			}
-		}, 0);
+		return this.inboxFrames.forwardGatewayValue(domainId, params);
 	}
 
 	private domainMap(domainId: string): Map<string, ConnectionId> {
@@ -969,250 +500,6 @@ export class GatewayBridge implements ToolProvider {
 			this.gatewayConnections.set(domainId, m);
 		}
 		return m;
-	}
-
-	private rememberRegisterNonce(nonce: string | undefined): boolean {
-		if (!nonce) return false;
-		const now = this.now();
-		for (const [key, expiry] of this.seenRegisterNonces) if (expiry <= now) this.seenRegisterNonces.delete(key);
-		if (this.seenRegisterNonces.has(nonce)) return false;
-		this.seenRegisterNonces.set(nonce, now + REGISTER_MAX_SKEW_MS);
-		return true;
-	}
-
-	private handleGatewayRelay(
-		connId: ConnectionId,
-		params: Record<string, unknown>,
-	): Promise<GatewayRelayReplyParams> {
-		const parsed = GatewayRelayRouteSchema.safeParse(params);
-		if (!parsed.success) {
-			return Promise.resolve({
-				relayId: "",
-				ok: false,
-				error: `invalid gateway_relay: ${parsed.error.issues[0]?.message}`,
-			});
-		}
-		const { relayId, srcGateway, dstGateway, payload } = parsed.data;
-		const senderDomainId = this.connGateways.get(connId)?.domainId;
-		if (!senderDomainId) return Promise.resolve({ relayId, ok: false, error: "sender Gateway not registered" });
-		let dstDomainId = senderDomainId;
-		let dstConnId = this.gatewayConnections.get(senderDomainId)?.get(dstGateway);
-		if (!dstConnId) {
-			const foreign = this.resolveForeignGateway(senderDomainId, dstGateway);
-			if (foreign === "ambiguous") {
-				return Promise.resolve({
-					relayId,
-					ok: false,
-					error: `gateway "${dstGateway}" is ambiguous across Domains`,
-				});
-			}
-			// Link edges authorize cross-Domain relays.
-			if (foreign && this.hasLinkEdge(senderDomainId, foreign.domainId)) {
-				dstDomainId = foreign.domainId;
-				dstConnId = foreign.connId;
-			}
-		}
-		const ws = dstConnId ? this.transport?.getConnection(dstConnId) : null;
-		if (!ws) return Promise.resolve({ relayId, ok: false, error: `gateway "${dstGateway}" is offline` });
-		return new Promise<GatewayRelayReplyParams>((resolve) => {
-			const timer = setTimeout(() => {
-				this.pendingRelays.delete(relayId);
-				resolve({ relayId, ok: false, error: `gateway "${dstGateway}" did not answer in time` });
-			}, GATEWAY_RELAY_TIMEOUT_MS);
-			this.pendingRelays.set(relayId, { resolve, timer, dstDomainId, dstGateway });
-			try {
-				ws.send(
-					JSON.stringify({
-						type: "gateway_relay",
-						v: FEDERATION_PROTOCOL_VERSION,
-						relayId,
-						srcGateway,
-						srcDomain: senderDomainId,
-						dstGateway,
-						payload,
-					}),
-				);
-			} catch (err) {
-				clearTimeout(timer);
-				this.pendingRelays.delete(relayId);
-				resolve({ relayId, ok: false, error: `forward to "${dstGateway}" failed: ${err}` });
-			}
-		});
-	}
-
-	private handleGatewayRelayReply(connId: ConnectionId, params: Record<string, unknown>): unknown {
-		const parsed = GatewayRelayReplyParamsSchema.safeParse(params);
-		if (!parsed.success) return { settled: false };
-		const pending = this.pendingRelays.get(parsed.data.relayId);
-		const reg = this.connGateways.get(connId);
-		if (!pending || !reg || reg.domainId !== pending.dstDomainId || reg.gatewayId !== pending.dstGateway) {
-			return { settled: false };
-		}
-		clearTimeout(pending.timer);
-		this.pendingRelays.delete(parsed.data.relayId);
-		pending.resolve(parsed.data);
-		return { settled: true };
-	}
-
-	private handleCrossDomainHandshake(
-		connId: ConnectionId,
-		params: Record<string, unknown>,
-	): Promise<CrossDomainHandshakeReplyParams> {
-		const parsed = CrossDomainHandshakeRouteSchema.safeParse(params);
-		if (!parsed.success) {
-			return Promise.resolve({
-				handshakeId: "",
-				ok: false,
-				error: `invalid cross_domain_handshake: ${parsed.error.issues[0]?.message}`,
-			});
-		}
-		const { handshakeId, srcDomain, srcGateway, dstGateway, payload } = parsed.data;
-		const senderDomainId = this.connGateways.get(connId)?.domainId;
-		if (!senderDomainId) return Promise.resolve({ handshakeId, ok: false, error: "sender Gateway not registered" });
-		const dst = this.resolveForeignGateway(senderDomainId, dstGateway);
-		if (dst === "ambiguous") {
-			return Promise.resolve({
-				handshakeId,
-				ok: false,
-				error: `gateway "${dstGateway}" is ambiguous across Domains`,
-			});
-		}
-		const ws = dst ? this.transport?.getConnection(dst.connId) : null;
-		if (!dst || !ws)
-			return Promise.resolve({ handshakeId, ok: false, error: `gateway "${dstGateway}" is offline` });
-		if (!this.allowHandshakeAttempt(senderDomainId, dstGateway)) {
-			return Promise.resolve({
-				handshakeId,
-				ok: false,
-				error: `too many cross-Domain handshake attempts; try again later`,
-			});
-		}
-		return this.forwardHandshakeFrame("cross_domain_handshake", dst.connId, {
-			handshakeId,
-			srcDomain,
-			srcGateway,
-			dstGateway,
-			payload,
-		});
-	}
-
-	private handleCrossDomainHandshakeReveal(
-		connId: ConnectionId,
-		params: Record<string, unknown>,
-	): Promise<CrossDomainHandshakeRevealReplyParams> {
-		const parsed = CrossDomainHandshakeRevealRouteSchema.safeParse(params);
-		if (!parsed.success) {
-			return Promise.resolve({
-				handshakeId: "",
-				ok: false,
-				error: `invalid cross_domain_handshake_reveal: ${parsed.error.issues[0]?.message}`,
-			});
-		}
-		const { handshakeId, srcDomain, srcGateway, dstGateway, payload } = parsed.data;
-		const senderDomainId = this.connGateways.get(connId)?.domainId;
-		if (!senderDomainId) return Promise.resolve({ handshakeId, ok: false, error: "sender Gateway not registered" });
-		const dst = this.resolveForeignGateway(senderDomainId, dstGateway);
-		if (dst === "ambiguous") {
-			return Promise.resolve({
-				handshakeId,
-				ok: false,
-				error: `gateway "${dstGateway}" is ambiguous across Domains`,
-			});
-		}
-		const ws = dst ? this.transport?.getConnection(dst.connId) : null;
-		if (!dst || !ws)
-			return Promise.resolve({ handshakeId, ok: false, error: `gateway "${dstGateway}" is offline` });
-		return this.forwardHandshakeFrame("cross_domain_handshake_reveal", dst.connId, {
-			handshakeId,
-			srcDomain,
-			srcGateway,
-			dstGateway,
-			payload,
-		});
-	}
-
-	private forwardHandshakeFrame(
-		type: "cross_domain_handshake" | "cross_domain_handshake_reveal",
-		dstConnId: ConnectionId,
-		frame: { handshakeId: string; srcDomain: string; srcGateway: string; dstGateway: string; payload: unknown },
-	): Promise<CrossDomainHandshakeReplyParams> {
-		const { handshakeId, dstGateway } = frame;
-		const ws = this.transport?.getConnection(dstConnId);
-		if (!ws) return Promise.resolve({ handshakeId, ok: false, error: `gateway "${dstGateway}" is offline` });
-		return new Promise<CrossDomainHandshakeReplyParams>((resolve) => {
-			const timer = setTimeout(() => {
-				this.pendingHandshakes.delete(handshakeId);
-				resolve({ handshakeId, ok: false, error: `gateway "${dstGateway}" did not answer in time` });
-			}, CROSS_DOMAIN_HANDSHAKE_TIMEOUT_MS);
-			this.pendingHandshakes.set(handshakeId, { resolve, timer, dstConnId, dstGateway });
-			try {
-				ws.send(JSON.stringify({ type, ...frame }));
-			} catch (err) {
-				clearTimeout(timer);
-				this.pendingHandshakes.delete(handshakeId);
-				resolve({ handshakeId, ok: false, error: `forward to "${dstGateway}" failed: ${err}` });
-			}
-		});
-	}
-
-	private handleCrossDomainHandshakeReply(connId: ConnectionId, params: Record<string, unknown>): unknown {
-		const parsed = CrossDomainHandshakeReplyParamsSchema.safeParse(params);
-		if (!parsed.success) return { settled: false };
-		return this.settleHandshake(connId, parsed.data);
-	}
-
-	private handleCrossDomainHandshakeRevealReply(connId: ConnectionId, params: Record<string, unknown>): unknown {
-		const parsed = CrossDomainHandshakeRevealReplyParamsSchema.safeParse(params);
-		if (!parsed.success) return { settled: false };
-		return this.settleHandshake(connId, parsed.data);
-	}
-
-	private settleHandshake(
-		connId: ConnectionId,
-		reply: CrossDomainHandshakeReplyParams | CrossDomainHandshakeRevealReplyParams,
-	): { settled: boolean } {
-		const pending = this.pendingHandshakes.get(reply.handshakeId);
-		if (!pending || pending.dstConnId !== connId) return { settled: false };
-		clearTimeout(pending.timer);
-		this.pendingHandshakes.delete(reply.handshakeId);
-		pending.resolve(reply);
-		return { settled: true };
-	}
-
-	private resolveForeignGateway(
-		senderDomainId: string,
-		dstGateway: string,
-	): { domainId: string; connId: ConnectionId } | null | "ambiguous" {
-		let found: { domainId: string; connId: ConnectionId } | null = null;
-		for (const [domainId, gw] of this.gatewayConnections) {
-			if (domainId === senderDomainId) continue;
-			const connId = gw.get(dstGateway);
-			if (!connId) continue;
-			const ws = this.transport?.getConnection(connId);
-			if (ws?.readyState !== 1) continue;
-			if (found) return "ambiguous";
-			found = { domainId, connId };
-		}
-		return found;
-	}
-
-	private allowHandshakeAttempt(srcDomain: string, dstGateway: string): boolean {
-		const now = this.now();
-		const key = `${srcDomain}|${dstGateway}`;
-		const cutoff = now - HANDSHAKE_RATE_WINDOW_MS;
-		for (const [k, timestamps] of this.handshakeAttempts) {
-			const live = timestamps.filter((t) => t > cutoff);
-			if (live.length === 0) this.handshakeAttempts.delete(k);
-			else this.handshakeAttempts.set(k, live);
-		}
-		const recent = (this.handshakeAttempts.get(key) ?? []).filter((t) => t > cutoff);
-		if (recent.length >= HANDSHAKE_RATE_MAX) {
-			this.handshakeAttempts.set(key, recent);
-			return false;
-		}
-		recent.push(now);
-		this.handshakeAttempts.set(key, recent);
-		return true;
 	}
 
 	private handleListGateways(connId: ConnectionId): unknown {
