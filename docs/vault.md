@@ -125,9 +125,10 @@ and git run it with the prompt as its one argument and read the value from stdou
   gateway refuses), copies the bundle under `~/.local/share/switchboard/`, writes the token 0600
   under `~/.config/switchboard/`, writes the `~/.local/bin/vault-askpass` wrapper with the bun that
   ran the installer, the token path, and the gateway baked in, and prints the `SUDO_ASKPASS`,
-  `SSH_ASKPASS`, and `GIT_ASKPASS` exports. sudo asks the helper only under `-A`, so plain sudo is
-  unchanged. `SSH_ASKPASS_REQUIRE=force` is optional: without it ssh asks the helper only when it
-  has no tty. `vault_revoke` on the phone drops the token by id.
+  `SSH_ASKPASS`, and `GIT_ASKPASS` exports. `--keep-token` lands a new bundle and wrapper under the
+  token already there. sudo asks the helper only under `-A`, so plain sudo is unchanged.
+  `SSH_ASKPASS_REQUIRE=force` is optional: without it ssh asks the helper only when it has no tty.
+  `vault_revoke` on the phone drops the token by id.
 
 ## Phone
 

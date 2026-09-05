@@ -1,6 +1,8 @@
 // Installs the askpass helper for this owner.
 //
-//   bun scripts/install-vault-askpass.ts [--gateway http://127.0.0.1:20000]
+//   bun scripts/install-vault-askpass.ts [--gateway http://127.0.0.1:20000] [--keep-token]
+//
+// --keep-token lands a new bundle and wrapper under the token already there, minting none.
 
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
@@ -24,8 +26,9 @@ function wrapper(gateway: string): string {
 	return [
 		"#!/usr/bin/env bash",
 		`BUN=${quoted(process.execPath)}`,
+		`BUN_HOME=${quoted(path.join(HOME, ".bun"))}`,
 		'[ -x "$BUN" ] || BUN="$(command -v bun 2>/dev/null)"',
-		`[ -x "$BUN" ] || BUN="\${BUN_INSTALL:-${quoted(path.join(HOME, ".bun"))}}/bin/bun"`,
+		'[ -x "$BUN" ] || BUN="${BUN_INSTALL:-$BUN_HOME}/bin/bun"',
 		'if [ ! -x "$BUN" ]; then',
 		'\techo "vault-askpass: bun not found" >&2',
 		"\texit 1",
@@ -79,20 +82,23 @@ async function main(argv: string[]): Promise<void> {
 	const gateway = gatewayArg(argv);
 	if (!existsSync(BUNDLE)) throw new Error(`${BUNDLE} is missing; run bun run build --build-only`);
 
-	const minted = await mint(gateway);
+	const keep = argv.includes("--keep-token") && existsSync(TOKEN_FILE);
+	const minted = keep ? null : await mint(gateway);
 	mkdirSync(SHARE_DIR, { recursive: true });
 	mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
 	chmodSync(CONFIG_DIR, 0o700);
 	mkdirSync(path.dirname(BIN), { recursive: true });
 	copyFileSync(BUNDLE, path.join(SHARE_DIR, "main-vault-askpass.js"));
-	// Created fresh, so the mode holds from the first byte.
-	rmSync(TOKEN_FILE, { force: true });
-	writeFileSync(TOKEN_FILE, `${minted.token}\n`, { mode: 0o600 });
+	if (minted) {
+		// Created fresh, so the mode holds from the first byte.
+		rmSync(TOKEN_FILE, { force: true });
+		writeFileSync(TOKEN_FILE, `${minted.token}\n`, { mode: 0o600 });
+	}
 	writeFileSync(BIN, wrapper(gateway), { mode: 0o755 });
 	chmodSync(BIN, 0o755);
 
-	console.log(`Helper token ${minted.tokenId} minted. Revoke it from the phone's Vault tab.`);
-	console.log(`token: ${TOKEN_FILE} (0600)`);
+	if (minted) console.log(`Helper token ${minted.tokenId} minted. Revoke it from the phone's Vault tab.`);
+	console.log(`token: ${TOKEN_FILE} (0600${minted ? "" : ", kept"})`);
 	console.log(`helper: ${BIN}`);
 	console.log("\nAdd to your shell profile:\n");
 	console.log(`  export SUDO_ASKPASS="${BIN}"`);
