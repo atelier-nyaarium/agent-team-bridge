@@ -86,9 +86,11 @@ export function createOwnerServices(deps: OwnerServicesDeps) {
 	};
 	const linkedDomains = (domainId: string): string[] =>
 		registry.domains().filter((other) => other !== domainId && deps.hasLinkEdge(domainId, other));
+	const sweepers: Array<{ label: string; sweep: (domainId: string, now: number) => void }> = [];
 	const hooks: OwnerServiceHooks = {
 		ownerOp: (kind, handler) => deps.intake.register(kind, handler),
 		gatewayFrame: (name, mutation, handler) => bridge.registerGatewayFrame(name, mutation, handler),
+		onSweep: (label, sweep) => sweepers.push({ label, sweep }),
 		onGatewayRegistered: (listener) => bridge.onGatewayRegistered(listener),
 		onGatewayDropped: (listener) => bridge.onGatewayDropped(listener),
 		onSessionForgotten: (listener) => bridge.onSessionForgotten(listener),
@@ -309,10 +311,8 @@ export function createOwnerServices(deps: OwnerServicesDeps) {
 			// Migration fences hold all writers.
 			const fenced = readRouterMigrationWindow().fenced;
 			const held = (domainId: string) => fenced && !leases.ready(domainId);
-			perDomain("share sweep", (domainId) => held(domainId) || share.sweep(domainId, now));
-			perDomain("board sweep", (domainId) => held(domainId) || board.sweepTrash(domainId, now));
-			perDomain("capability sweep", (domainId) => held(domainId) || capabilities.sweep(domainId, now));
-			perDomain("vault sweep", (domainId) => held(domainId) || vault.sweep(domainId, now));
+			for (const { label, sweep } of sweepers)
+				perDomain(label, (domainId) => held(domainId) || sweep(domainId, now));
 		},
 		rearm(): void {
 			perDomain("presence rearm", (domainId) => presence.rearm(domainId));

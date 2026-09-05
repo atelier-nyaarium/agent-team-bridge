@@ -95,6 +95,7 @@ export function createCapabilitiesService(deps: CapabilitiesServiceDeps) {
 		snapshot,
 		sweep,
 		register(hooks: OwnerServiceHooks): void {
+			hooks.onSweep("capability sweep", sweep);
 			hooks.ownerOp("capabilities_report", async (op, value) => {
 				const result = report(op.domainId, op.conversationId, value);
 				if (!result.applied) return { outcome: result.outcome };

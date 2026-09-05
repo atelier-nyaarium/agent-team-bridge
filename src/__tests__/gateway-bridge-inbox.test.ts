@@ -13,7 +13,12 @@ import { blobIdFor } from "../shared/blob-store.js";
 import { generateIdentity } from "../shared/crypto.js";
 import { formatInboxAddress, signRowEnvelope } from "../shared/schemasInbox.js";
 import { sealBlobChunk, sealedBlobSize } from "../shared/sealed-blob.js";
-import { GATEWAY_REASON_NO_WAITER } from "../shared/wire-vocabulary.js";
+import {
+	GATEWAY_ERROR_INBOX_UNAVAILABLE,
+	GATEWAY_ERROR_NOT_ADMITTED,
+	GATEWAY_ERROR_NOT_REGISTERED,
+	GATEWAY_REASON_NO_WAITER,
+} from "../shared/wire-vocabulary.js";
 
 function socket() {
 	const sent: Record<string, unknown>[] = [];
@@ -168,15 +173,79 @@ describe("GatewayBridge inbox", () => {
 				owner.sign.pub,
 			),
 		);
-		const refused = { ok: false, error: "gateway_not_admitted" };
+		const refused = { ok: false, error: GATEWAY_ERROR_NOT_ADMITTED };
 		expect(await bridge.handleCall("c1", "probe", { incarnation: 1 })).toEqual(refused);
 		expect(await bridge.handleCall("c2", "list_gateways", {})).toEqual(refused);
 		bridge.evictSigner("domain", gateway.sign.pub, "revoked");
-		const gone = { ok: false, error: "inbox_unavailable" };
+		const gone = { ok: false, error: GATEWAY_ERROR_NOT_REGISTERED };
 		expect(await bridge.handleCall("c1", "probe", { incarnation: 1 })).toEqual(gone);
 		expect(await bridge.handleCall("c2", "probe", { incarnation: 1 })).toEqual(gone);
 		// Only the current connection was the gateway's presence.
 		expect(dropped).toEqual(["gateway"]);
+	});
+
+	it("a removed Domain's connections settle their waiters without writing presence for it", async () => {
+		const owner = generateIdentity();
+		const gateway = generateIdentity();
+		const admission = signAdmission(
+			{
+				kind: "gateway",
+				signPub: gateway.sign.pub,
+				boxPub: gateway.box.pub,
+				gatewayId: "gateway",
+				issuedAt: 1,
+				nonce: "admit",
+			},
+			owner.sign.priv,
+			owner.sign.pub,
+		);
+		let removed = false;
+		const bridge = new GatewayBridge({
+			ambient: processAmbient(),
+			port: 0,
+			authToken: "token",
+			getDomain: () =>
+				removed ? null : { ownerSignPub: owner.sign.pub, admissions: [admission], revocations: [] },
+			getDomainMeta: () => null,
+			hasLinkEdge: () => false,
+			adminDomainId: () => "domain",
+			inbox: fakeInbox(),
+		});
+		bridge.attach();
+		bridge.transportAdapter?.handleOpen(socket() as never);
+		const proofAt = Date.now();
+		const registered = await bridge.handleCall("c1", "gateway_register", {
+			domainId: "domain",
+			gatewayId: "gateway",
+			protocolVersion: 2,
+			signPub: gateway.sign.pub,
+			boxPub: gateway.box.pub,
+			admission: JSON.stringify(admission),
+			proofAt,
+			proofNonce: "proof",
+			proof: signRegister("gateway", proofAt, "proof", gateway.sign.priv),
+		});
+		expect(registered).toMatchObject({ ok: true, incarnation: 1 });
+		bridge.registerGatewayFrame("probe", "read", () => ({ ok: true }));
+		const dropped: string[] = [];
+		bridge.onGatewayDropped((reg) => dropped.push(reg.gatewayId));
+		const forwarded = bridge.forwardGatewayValue("domain", {
+			opId: "op",
+			conversationId: "conversation",
+			signerSignPub: "owner",
+			device: "phone",
+			gatewayId: "gateway",
+			value: { kind: "list_dirs", path: "/" },
+		});
+
+		removed = true;
+		bridge.evictDomain("domain", "Domain removed");
+		await expect(forwarded).resolves.toEqual({ outcome: "unreachable" });
+		expect(await bridge.handleCall("c1", "probe", { incarnation: 1 })).toEqual({
+			ok: false,
+			error: GATEWAY_ERROR_NOT_REGISTERED,
+		});
+		expect(dropped).toEqual([]);
 	});
 
 	it("refuses gateway_value for a protocol-1 gateway", async () => {
@@ -559,7 +628,7 @@ describe("GatewayBridge inbox", () => {
 		).not.toHaveProperty("incarnation");
 		expect(await bridge.handleCall("c1", "inbox_append", {})).toMatchObject({
 			ok: false,
-			error: "inbox_unavailable",
+			error: GATEWAY_ERROR_INBOX_UNAVAILABLE,
 		});
 	});
 

@@ -2,14 +2,14 @@ import type { GatewayRegistration } from "../gatewayBridge.js";
 import type { ConnectionId } from "../gatewayTransport.js";
 import type { OwnerOpMutation } from "../ownerOpRegistry.js";
 
-/** A gated frame runs after the bridge has verified the incarnation, so it is handed the identity. */
+/** Gated frames receive verified identity. */
 export type GatedFrameHandler = (
 	reg: GatewayRegistration,
 	params: Record<string, unknown>,
 	connId: ConnectionId,
 ) => unknown | Promise<unknown>;
 
-/** An open frame claims no incarnation, so it resolves whatever it needs from the connection. */
+/** Open frames lack incarnation; registered senders remain admission-checked. */
 export type OpenFrameHandler = (connId: ConnectionId, params: Record<string, unknown>) => unknown | Promise<unknown>;
 
 interface FrameCommon {

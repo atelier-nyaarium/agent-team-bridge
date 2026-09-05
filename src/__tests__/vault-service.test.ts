@@ -147,6 +147,7 @@ describe("vault service", () => {
 		const frames = new Map<string, (reg: GatewayRegistration, params: Record<string, unknown>) => unknown>();
 		const hooks = {
 			ownerOp: () => undefined,
+			onSweep: () => undefined,
 			gatewayFrame: (
 				name: string,
 				_mutation: string,

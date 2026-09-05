@@ -245,13 +245,7 @@ export class RouterServer {
 				console.error(`[router] an import began while serving; exiting rather than answering from it`);
 				process.exit(1);
 			}
-			try {
-				this.domain.inbox.sweep();
-				this.domain.blobCache.sweep();
-				this.ownerServices.sweep();
-			} catch (error) {
-				console.warn(`[router] sweep failed: ${(error as Error).message}`);
-			}
+			this.sweep();
 		}, 60_000);
 		this.approval = new PublicApproval({
 			port: params.port,
@@ -501,6 +495,17 @@ export class RouterServer {
 			this.bridge.evictDomain(removed, "Domain removed");
 		}
 		return result;
+	}
+
+	/** Maintenance tick with optional test time. */
+	public sweep(now?: number): void {
+		try {
+			this.domain.inbox.sweep();
+			this.domain.blobCache.sweep();
+			this.ownerServices.sweep(now);
+		} catch (error) {
+			console.warn(`[router] sweep failed: ${(error as Error).message}`);
+		}
 	}
 
 	private async flushOrError(domainId: string): Promise<{ ok: false; error: string } | null> {

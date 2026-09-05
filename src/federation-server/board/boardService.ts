@@ -450,6 +450,7 @@ export function createBoardService(deps: Deps) {
 		return removed;
 	};
 	const register = (hooks: OwnerServiceHooks) => {
+		hooks.onSweep("board sweep", (domainId, at) => sweepTrash(domainId, at));
 		// OwnerOp id is the idempotency key.
 		hooks.ownerOp("board_write", (op, value) =>
 			write(op.domainId, value.write ?? BoardWriteSchema.parse(value), { kind: "owner" }, op.opId),

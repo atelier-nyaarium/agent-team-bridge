@@ -11,6 +11,7 @@ import {
 	GatewayRelayReplyParamsSchema,
 	GatewayRelayRouteSchema,
 } from "../../shared/router-protocol.js";
+import { GATEWAY_ERROR_NOT_REGISTERED } from "../../shared/wire-vocabulary.js";
 import type { ConnectionId, GatewayTransport } from "../gatewayTransport.js";
 import { HANDSHAKE_RATE_MAX, HANDSHAKE_RATE_WINDOW_MS } from "../handshakeRateLimit.js";
 import { CROSS_DOMAIN_HANDSHAKE_TIMEOUT_MS, GATEWAY_RELAY_TIMEOUT_MS } from "../relayTimeouts.js";
@@ -106,7 +107,7 @@ export class RelayRouter {
 		}
 		const { relayId, srcGateway, dstGateway, payload } = parsed.data;
 		const senderDomainId = this.deps.registrationOf(connId)?.domainId;
-		if (!senderDomainId) return Promise.resolve({ relayId, ok: false, error: "sender Gateway not registered" });
+		if (!senderDomainId) return Promise.resolve({ relayId, ok: false, error: GATEWAY_ERROR_NOT_REGISTERED });
 		let dstDomainId = senderDomainId;
 		let dstConnId = this.deps.gatewayConnections.get(senderDomainId)?.get(dstGateway);
 		if (!dstConnId) {
@@ -180,7 +181,7 @@ export class RelayRouter {
 		}
 		const { handshakeId, srcDomain, srcGateway, dstGateway, payload } = parsed.data;
 		const senderDomainId = this.deps.registrationOf(connId)?.domainId;
-		if (!senderDomainId) return Promise.resolve({ handshakeId, ok: false, error: "sender Gateway not registered" });
+		if (!senderDomainId) return Promise.resolve({ handshakeId, ok: false, error: GATEWAY_ERROR_NOT_REGISTERED });
 		const dst = this.resolveForeignGateway(senderDomainId, dstGateway);
 		if (dst === "ambiguous") {
 			return Promise.resolve({
@@ -222,7 +223,7 @@ export class RelayRouter {
 		}
 		const { handshakeId, srcDomain, srcGateway, dstGateway, payload } = parsed.data;
 		const senderDomainId = this.deps.registrationOf(connId)?.domainId;
-		if (!senderDomainId) return Promise.resolve({ handshakeId, ok: false, error: "sender Gateway not registered" });
+		if (!senderDomainId) return Promise.resolve({ handshakeId, ok: false, error: GATEWAY_ERROR_NOT_REGISTERED });
 		const dst = this.resolveForeignGateway(senderDomainId, dstGateway);
 		if (dst === "ambiguous") {
 			return Promise.resolve({

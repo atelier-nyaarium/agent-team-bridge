@@ -75,6 +75,7 @@ describe("router presence slice", () => {
 			pushFrameTo: () => false,
 			gatewayIncarnation: () => 1,
 			connectedGateways: () => [],
+			onSweep: () => undefined,
 		});
 		expect([...classes]).toEqual([
 			["presence_baseline", "delivery"],
@@ -223,6 +224,7 @@ describe("router presence slice", () => {
 			},
 			gatewayIncarnation: () => 1,
 			connectedGateways: () => [],
+			onSweep: () => undefined,
 		});
 		frames.get("presence_baseline")!(reg, {
 			incarnation: 1,
@@ -288,6 +290,7 @@ describe("router presence slice", () => {
 			pushFrameTo: () => true,
 			gatewayIncarnation: () => 1,
 			connectedGateways: () => [],
+			onSweep: () => undefined,
 		});
 		service.applyBaseline(reg, {
 			incarnation: 1,
@@ -397,6 +400,7 @@ describe("router presence slice", () => {
 			pushFrameTo: () => true,
 			gatewayIncarnation: () => 1,
 			connectedGateways: () => ["gw"],
+			onSweep: () => undefined,
 		});
 
 		expect(
@@ -441,6 +445,7 @@ describe("router presence slice", () => {
 			},
 			gatewayIncarnation: () => 1,
 			connectedGateways: () => [],
+			onSweep: () => undefined,
 		};
 		service.register(hooks);
 		frames.get("presence_baseline")!(reg, {
@@ -497,6 +502,7 @@ describe("router presence slice", () => {
 			pushFrameTo: () => true,
 			gatewayIncarnation: () => 1,
 			connectedGateways: () => [],
+			onSweep: () => undefined,
 		});
 		const op = { domainId: "a" } as Parameters<ErasedOwnerOpHandler>[0];
 		expect(handlers.get("presence_read_friend")!(op, { toDomainId: "c" })).toEqual({

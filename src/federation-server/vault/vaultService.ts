@@ -20,7 +20,6 @@ import type { GatewayRegistration, OwnerServiceHooks } from "../ownerServiceHook
 
 type Deps = {
 	registry: OwnerStoreRegistry;
-	pokeOwner?: (domainId: string, revision: number) => void;
 	now?: () => number;
 	maxEntries?: number;
 	maxRecords?: number;
@@ -77,7 +76,6 @@ export function createVaultService(deps: Deps) {
 		if (result.kind === "conflict") return "conflict";
 		// Durability uncertainty still applied.
 		if (result.kind !== "ok" && result.kind !== "durability_uncertain") return "failed";
-		deps.pokeOwner?.(domainId, next);
 		return "ok";
 	};
 
@@ -176,6 +174,7 @@ export function createVaultService(deps: Deps) {
 	};
 
 	const register = (hooks: OwnerServiceHooks) => {
+		hooks.onSweep("vault sweep", sweep);
 		hooks.ownerOp("vault_list", (op, value) => read(op.domainId, value.sinceRevision));
 		hooks.ownerOp("vault_put", (op, value) => put(op.domainId, value.put, "phone", false));
 		hooks.ownerOp("vault_delete", (op, value) => del(op.domainId, value.id, value.expectedRevision));

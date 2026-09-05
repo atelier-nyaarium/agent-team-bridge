@@ -129,8 +129,14 @@ export class RegistrationHandler {
 		if (reach && (reach.publicHost || reach.lanAddresses?.length)) reply.reach = reach;
 		if (incarnation !== null) {
 			this.redeliverPending(domainId, gatewayId, incarnation);
-			const registered = { domainId, gatewayId, signPub: parsed.data.signPub as string, incarnation };
-			this.deps.notifyRegistered(registered);
+			// A snapshot-less Domain gets no listener, on either side.
+			if (domain)
+				this.deps.notifyRegistered({
+					domainId,
+					gatewayId,
+					signPub: parsed.data.signPub as string,
+					incarnation,
+				});
 		}
 		return reply;
 	}

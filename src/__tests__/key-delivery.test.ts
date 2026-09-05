@@ -98,6 +98,7 @@ function make() {
 		pushFrameTo: () => false,
 		gatewayIncarnation: () => null,
 		connectedGateways: () => [],
+		onSweep: () => undefined,
 	});
 	const ownerAddress: InboxAddress = { kind: "owner", domainId, ownerSignPub: owner.sign.pub };
 	const gatewayAddress: InboxAddress = { kind: "gateway", domainId, gatewayId: "gateway-a" };

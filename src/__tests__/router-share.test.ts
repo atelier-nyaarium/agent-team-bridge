@@ -87,6 +87,7 @@ const make = () => {
 			},
 			gatewayIncarnation: () => 1,
 			connectedGateways: () => [],
+			onSweep: () => undefined,
 		},
 	};
 };

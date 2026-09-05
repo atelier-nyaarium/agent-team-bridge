@@ -96,6 +96,9 @@ object Protocol {
 		const val BOARD_OUTCOME_APPLIED: String = "applied"
 		const val CONSOLE_REASON_CURSOR_STALE: String = "cursor_stale"
 		const val GATEWAY_ERROR_STALE_INCARNATION: String = "stale_incarnation"
+		const val GATEWAY_ERROR_NOT_REGISTERED: String = "not_registered"
+		const val GATEWAY_ERROR_NOT_ADMITTED: String = "gateway_not_admitted"
+		const val GATEWAY_ERROR_INBOX_UNAVAILABLE: String = "inbox_unavailable"
 		const val GATEWAY_REASON_NO_WAITER: String = "no_waiter"
 		const val CONTENT_NONCE_BYTES: Int = 12
 		const val WIRE_NONCE_BYTES: Int = 18

@@ -379,6 +379,12 @@ tolerated by both peers. Each phase ends with its harness scenarios green under 
 - Harness scenarios: a phone-driven `vault_put`, a gateway `vault_read`, the CAS conflict, and the
   fence refusing `vault_create` inside a migration window.
 
+Shipped beyond the bullets: `vault_list` answers `since` and keeps a retained floor, so a cursor
+below a swept tombstone gets a full list. Owner-state sweepers register through `hooks.onSweep`;
+the Router sweep holds them under the fence. The bridge checks admission on every signed frame,
+evicts a revoked signer through the one drop path, and names its frame refusals in
+`wire-vocabulary.ts`.
+
 ## Phase 2 - Gateway: vault client, decisions, request road
 
 - `src/gateway/compose/composeVault.ts`: the stage that builds the client, the decisions, and the

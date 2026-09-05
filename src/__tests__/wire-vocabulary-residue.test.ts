@@ -2,7 +2,24 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { OWNER_OP_KIND_LIST } from "../federation-server/ownerOpRegistry.js";
-import { CONSOLE_TOKEN_HEADER, ROUTER_PATHS, SIGNING_TAGS } from "../shared/wire-vocabulary.js";
+import {
+	CONSOLE_TOKEN_HEADER,
+	GATEWAY_ERROR_INBOX_UNAVAILABLE,
+	GATEWAY_ERROR_NOT_ADMITTED,
+	GATEWAY_ERROR_NOT_REGISTERED,
+	GATEWAY_ERROR_STALE_INCARNATION,
+	GATEWAY_REASON_NO_WAITER,
+	ROUTER_PATHS,
+	SIGNING_TAGS,
+} from "../shared/wire-vocabulary.js";
+
+const GATEWAY_ANSWERS = [
+	GATEWAY_ERROR_STALE_INCARNATION,
+	GATEWAY_ERROR_NOT_REGISTERED,
+	GATEWAY_ERROR_NOT_ADMITTED,
+	GATEWAY_ERROR_INBOX_UNAVAILABLE,
+	GATEWAY_REASON_NO_WAITER,
+];
 
 const root = join(import.meta.dirname, "..");
 const kotlinRoot = join(root, "..", "android/app/src/main/java/com/atelier_nyaarium/switchboard");
@@ -33,6 +50,7 @@ describe("wire vocabulary residue", () => {
 			...Object.values(ROUTER_PATHS).filter((value) => value !== ROUTER_PATHS.root),
 			CONSOLE_TOKEN_HEADER,
 			...Object.values(SIGNING_TAGS),
+			...GATEWAY_ANSWERS,
 		];
 		for (const value of values)
 			for (const file of files)
@@ -47,6 +65,7 @@ describe("wire vocabulary residue", () => {
 			...Object.values(ROUTER_PATHS).filter((value) => value !== ROUTER_PATHS.root),
 			CONSOLE_TOKEN_HEADER,
 			...Object.values(SIGNING_TAGS),
+			...GATEWAY_ANSWERS,
 			...OWNER_OP_KIND_LIST,
 			"welcome",
 			"inbox_rows",
@@ -68,6 +87,7 @@ describe("wire vocabulary residue", () => {
 			...Object.values(ROUTER_PATHS),
 			CONSOLE_TOKEN_HEADER,
 			...Object.values(SIGNING_TAGS),
+			...GATEWAY_ANSWERS,
 			"Bearer ",
 		];
 		for (const value of values) {

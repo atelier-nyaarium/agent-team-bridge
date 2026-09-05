@@ -15,13 +15,20 @@ describe("vault router residue", () => {
 		}
 	});
 
-	it("the Router sweep holds every Domain a migration window fences", () => {
-		const source = fs.readFileSync(path.join(root, "src/federation-server/ownerServices.ts"), "utf8");
-		const sweep = source.slice(source.indexOf("sweep(now"), source.indexOf("rearm()"));
-		expect(sweep).toContain("readRouterMigrationWindow().fenced");
+	it("every owner-state sweeper registers through the hook the fence holds", () => {
+		const compose = fs.readFileSync(path.join(root, "src/federation-server/ownerServices.ts"), "utf8");
+		const sweep = compose.slice(compose.indexOf("sweep(now"), compose.indexOf("rearm()"));
 		expect(sweep).toContain("leases.ready(domainId)");
-		for (const service of ["share.sweep", "board.sweepTrash", "capabilities.sweep", "vault.sweep"])
-			expect(sweep).toMatch(new RegExp(`held\\(domainId\\) \\|\\| ${service.replace(".", "\\.")}`));
+		expect(sweep).not.toMatch(/\b(share|board|capabilities|vault)\.sweep/);
+		for (const file of [
+			"share/shareService.ts",
+			"board/boardService.ts",
+			"tier1/capabilitiesService.ts",
+			"vault/vaultService.ts",
+		])
+			expect(fs.readFileSync(path.join(root, "src/federation-server", file), "utf8"), file).toContain(
+				"hooks.onSweep(",
+			);
 	});
 
 	it("catalogues the vault kinds with the class the fence reads", () => {

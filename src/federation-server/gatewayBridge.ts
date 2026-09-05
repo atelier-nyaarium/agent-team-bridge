@@ -2,7 +2,12 @@ import { type DomainSnapshot, resolveAdmitted, type SignedAdmission } from "../s
 import type { Ambient } from "../shared/ambient.js";
 import { FEDERATION_VALUE_PROTOCOL_VERSION } from "../shared/router-protocol.js";
 import { type InboxRow, parseInboxAddress } from "../shared/schemasInbox.js";
-import { GATEWAY_ERROR_STALE_INCARNATION } from "../shared/wire-vocabulary.js";
+import {
+	GATEWAY_ERROR_INBOX_UNAVAILABLE,
+	GATEWAY_ERROR_NOT_ADMITTED,
+	GATEWAY_ERROR_NOT_REGISTERED,
+	GATEWAY_ERROR_STALE_INCARNATION,
+} from "../shared/wire-vocabulary.js";
 import type { ReferenceHeldStore } from "./blobs/referenceHeldStore.js";
 import type { BlobOrigin, RouterBlobCache } from "./blobs/routerBlobCache.js";
 import { type GatedFrameHandler, GatewayFrameCatalog, type OpenFrameHandler } from "./bridge/frameDispatch.js";
@@ -239,6 +244,7 @@ export class GatewayBridge implements ToolProvider {
 		return connId ? (this.connGateways.get(connId)?.protocolVersion ?? null) : null;
 	}
 
+	/** Shutdown skips drop listeners while stores flush. */
 	public stop(): void {
 		this.transport?.stop();
 		this.transport = null;
@@ -394,8 +400,7 @@ export class GatewayBridge implements ToolProvider {
 	public evictSigner(domainId: string, signPub: string, reason: string): void {
 		for (const [connId, reg] of [...this.connGateways]) {
 			if (reg.domainId !== domainId || reg.signPub !== signPub) continue;
-			// Dropped with the registration in hand, so presence and share teardown fire.
-			this.onDisconnect(connId);
+			this.dropConnection(connId);
 			try {
 				this.transport?.getConnection(connId)?.close(1000, reason);
 			} catch {}
@@ -410,19 +415,17 @@ export class GatewayBridge implements ToolProvider {
 		return resolveAdmitted([reg.admission], domain.revocations, domain.ownerSignPub, reg.signPub) !== null;
 	}
 
+	/** Connections leave through the drop path; relays fail by destination. */
 	public evictDomain(domainId: string, reason: string): void {
-		const domainMap = this.gatewayConnections.get(domainId);
-		if (domainMap) {
-			for (const [gatewayId, connId] of domainMap) {
-				const ws = this.transport?.getConnection(connId);
-				try {
-					ws?.close(1000, reason);
-				} catch {}
-				this.connGateways.delete(connId);
-				console.log(`[BridgeServer] evicted gateway ${domainId}/${gatewayId}: ${reason}`);
-			}
-			this.gatewayConnections.delete(domainId);
+		for (const [connId, reg] of [...this.connGateways]) {
+			if (reg.domainId !== domainId) continue;
+			this.dropConnection(connId);
+			try {
+				this.transport?.getConnection(connId)?.close(1000, reason);
+			} catch {}
+			console.log(`[BridgeServer] evicted gateway ${domainId}/${reg.gatewayId}: ${reason}`);
 		}
+		this.gatewayConnections.delete(domainId);
 		this.relayRouter.evictDomain(domainId, reason);
 	}
 
@@ -433,16 +436,17 @@ export class GatewayBridge implements ToolProvider {
 		if (!frame.gated) {
 			const sender = this.connGateways.get(connId);
 			// A registered sender keeps no open frame past its revocation.
-			if (sender?.signPub && !this.stillAdmitted(sender)) return { ok: false, error: "gateway_not_admitted" };
+			if (sender?.signPub && !this.stillAdmitted(sender)) return { ok: false, error: GATEWAY_ERROR_NOT_ADMITTED };
 			return frame.handler(connId, params);
 		}
 		const reg = this.connGateways.get(connId);
-		if (!reg?.signPub || reg.incarnation === null) return { ok: false, error: "inbox_unavailable" };
+		if (!reg) return { ok: false, error: GATEWAY_ERROR_NOT_REGISTERED };
+		if (!reg.signPub || reg.incarnation === null) return { ok: false, error: GATEWAY_ERROR_INBOX_UNAVAILABLE };
 		if (params.incarnation !== reg.incarnation) {
 			console.warn(`[BridgeServer] stale gateway incarnation for ${name}`);
 			return { ok: false, error: GATEWAY_ERROR_STALE_INCARNATION };
 		}
-		if (!this.stillAdmitted(reg)) return { ok: false, error: "gateway_not_admitted" };
+		if (!this.stillAdmitted(reg)) return { ok: false, error: GATEWAY_ERROR_NOT_ADMITTED };
 		if (
 			frame.mutation !== "read" &&
 			readRouterMigrationWindow().fenced &&
@@ -462,21 +466,25 @@ export class GatewayBridge implements ToolProvider {
 	}
 
 	public onDisconnect(connId: ConnectionId): void {
+		this.dropConnection(connId);
+	}
+
+	/** All connection teardown uses one path. */
+	private dropConnection(connId: ConnectionId): void {
 		this.inboxFrames.dropConnection(connId);
 		const reg = this.connGateways.get(connId);
 		const wasCurrent = reg ? this.gatewayConnections.get(reg.domainId)?.get(reg.gatewayId) === connId : false;
 		console.log(`[BridgeServer] Client disconnected${reg ? ` (gateway ${reg.domainId}/${reg.gatewayId})` : ""}`);
 		this.connGateways.delete(connId);
 		if (reg) {
+			// Re-registration may retain old gateway keys.
 			const domainMap = this.gatewayConnections.get(reg.domainId);
-			const current = domainMap?.get(reg.gatewayId) === connId;
-			if (current) {
-				domainMap.delete(reg.gatewayId);
-				if (domainMap.size === 0) this.gatewayConnections.delete(reg.domainId);
-			}
+			for (const [gatewayId, held] of [...(domainMap ?? [])]) if (held === connId) domainMap?.delete(gatewayId);
+			if (domainMap?.size === 0) this.gatewayConnections.delete(reg.domainId);
 		}
 		this.blobFetch?.failConnection(connId);
-		if (reg && wasCurrent && reg.signPub && reg.incarnation !== null) {
+		// Removed Domains cannot recreate owner stores.
+		if (reg && wasCurrent && reg.signPub && reg.incarnation !== null && this.getDomain(reg.domainId)) {
 			const dropped = {
 				domainId: reg.domainId,
 				gatewayId: reg.gatewayId,
@@ -547,7 +555,7 @@ export class GatewayBridge implements ToolProvider {
 	private handleListGateways(connId: ConnectionId): unknown {
 		const reg = this.connGateways.get(connId);
 		// Preserve refusal versus an empty peer list.
-		if (!reg) throw new Error("not registered");
+		if (!reg) throw new Error(GATEWAY_ERROR_NOT_REGISTERED);
 		const { domainId, gatewayId: self } = reg;
 		const gateways = [...(this.gatewayConnections.get(domainId)?.keys() ?? [])]
 			.filter((h) => h !== self)

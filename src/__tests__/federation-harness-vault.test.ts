@@ -6,7 +6,12 @@ import {
 	type VaultFieldKind,
 	vaultAadKind,
 } from "../shared/content-envelope.js";
-import { type VaultEntrySealed, VaultListResultSchema, VaultWriteResultSchema } from "../shared/schemasVault.js";
+import {
+	VAULT_TOMBSTONE_TTL_MS,
+	type VaultEntrySealed,
+	VaultListResultSchema,
+	VaultWriteResultSchema,
+} from "../shared/schemasVault.js";
 import { type FederationHarness, startFederationHarness } from "../testing/federationHarness.js";
 
 describe("federation harness: vault", () => {
@@ -136,5 +141,29 @@ describe("federation harness: vault", () => {
 			else process.env.ROUTER_MIGRATION_EPOCH = previous;
 		}
 		expect(VaultWriteResultSchema.parse((await create("fenced")).result).outcome).toBe("applied");
+	});
+
+	it("the Router's sweep holds a tombstone under the fence and drops it past the TTL", async () => {
+		const id = "swept";
+		await put(id, 0, { publicTitle: field(VAULT_PUBLIC_TITLE_KIND, id, "Swept") });
+		const deleted = VaultWriteResultSchema.parse(
+			await h.phone.send({ kind: "vault_delete", id, expectedRevision: 1 }),
+		);
+		const past = Number(deleted.entry?.clear.updatedAt) + VAULT_TOMBSTONE_TTL_MS + 1;
+		const listed = async () => (await gatewayList()).entries.find((entry) => entry.clear.id === id);
+
+		// An unready lease holds the Domain.
+		const previous = process.env.ROUTER_MIGRATION_EPOCH;
+		process.env.ROUTER_MIGRATION_EPOCH = "7";
+		try {
+			await h.restartGateway();
+			h.router.server.sweep(past);
+			expect((await listed())?.clear.tombstone).toBe(true);
+		} finally {
+			if (previous === undefined) delete process.env.ROUTER_MIGRATION_EPOCH;
+			else process.env.ROUTER_MIGRATION_EPOCH = previous;
+		}
+		h.router.server.sweep(past);
+		expect(await listed()).toBeUndefined();
 	});
 });

@@ -14,6 +14,9 @@ export const OP_OUTCOME_ACCEPTED = "accepted";
 export const BOARD_OUTCOME_APPLIED = "applied";
 export const CONSOLE_REASON_CURSOR_STALE = "cursor_stale";
 export const GATEWAY_ERROR_STALE_INCARNATION = "stale_incarnation";
+export const GATEWAY_ERROR_NOT_REGISTERED = "not_registered";
+export const GATEWAY_ERROR_NOT_ADMITTED = "gateway_not_admitted";
+export const GATEWAY_ERROR_INBOX_UNAVAILABLE = "inbox_unavailable";
 export const GATEWAY_REASON_NO_WAITER = "no_waiter";
 
 export const SIGNING_TAGS = {

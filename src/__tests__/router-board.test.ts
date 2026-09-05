@@ -953,6 +953,7 @@ describe("router board service", () => {
 			pushFrameTo: () => false,
 			gatewayIncarnation: () => null,
 			connectedGateways: () => [],
+			onSweep: () => undefined,
 		});
 		const result = await handler?.(
 			{ domainId: "a", gatewayId: "g", signPub: "pub", incarnation: 1 },
@@ -993,6 +994,7 @@ describe("router board service", () => {
 			pushFrameTo: () => false,
 			gatewayIncarnation: () => null,
 			connectedGateways: () => [],
+			onSweep: () => undefined,
 		});
 		expect([...classes]).toEqual([
 			["board_op", "value"],
@@ -1045,6 +1047,7 @@ describe("router board service", () => {
 			pushFrameTo: () => false,
 			gatewayIncarnation: () => null,
 			connectedGateways: () => [],
+			onSweep: () => undefined,
 		});
 		expect(() =>
 			handler?.(
@@ -1077,6 +1080,7 @@ describe("router board service", () => {
 			pushFrameTo: () => false,
 			gatewayIncarnation: () => null,
 			connectedGateways: () => [],
+			onSweep: () => undefined,
 		});
 		expect(handler?.({ domainId: "a" }, {})).toEqual({ outcome: "durability_uncertain" });
 		registry.close();

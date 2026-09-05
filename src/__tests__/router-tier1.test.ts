@@ -54,6 +54,7 @@ const makeHooks = () => {
 			pushFrameTo: () => false,
 			gatewayIncarnation: () => null,
 			connectedGateways: () => [],
+			onSweep: () => undefined,
 		} satisfies OwnerServiceHooks,
 	};
 };
