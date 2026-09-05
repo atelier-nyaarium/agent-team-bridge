@@ -1,6 +1,5 @@
 import { z } from "zod";
-import { b64Field, slugField } from "./crypto.js";
-import { SealedEnvelopeSchema } from "./schemasConsoleOp.js";
+import { b64Field, SealedEnvelopeSchema, slugField } from "./crypto.js";
 
 export const ContentKindSchema = z.enum([
 	"board.title",

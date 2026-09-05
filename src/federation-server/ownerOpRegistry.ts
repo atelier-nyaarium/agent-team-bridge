@@ -34,6 +34,13 @@ import {
 	ReadAnchorsResultSchema,
 	ReportReadSchema,
 } from "../shared/schemasTier1.js";
+import {
+	VaultDeleteValueSchema,
+	VaultListResultSchema,
+	VaultListValueSchema,
+	VaultPutValueSchema,
+	VaultWriteResultSchema,
+} from "../shared/schemasVault.js";
 
 /** `read` passes the migration fence; `delivery` appends a row with its own nonce; `value` is the rest. */
 export type OwnerOpMutation = "delivery" | "value" | "read";
@@ -180,6 +187,9 @@ export const OWNER_OP_CATALOG = [
 		value: z.object({ kind: z.literal("cross_domain_list_shares") }),
 		mutation: "read",
 	},
+	{ kind: "vault_list", value: VaultListValueSchema, mutation: "read", answer: VaultListResultSchema },
+	{ kind: "vault_put", value: VaultPutValueSchema, mutation: "value", answer: VaultWriteResultSchema },
+	{ kind: "vault_delete", value: VaultDeleteValueSchema, mutation: "value", answer: VaultWriteResultSchema },
 ] as const satisfies readonly OwnerOpCatalogEntry[];
 
 type Catalog = (typeof OWNER_OP_CATALOG)[number];

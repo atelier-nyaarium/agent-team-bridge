@@ -62,6 +62,9 @@ object Protocol {
 		const val OWNER_OP_CROSS_DOMAIN_UNSHARE: String = "cross_domain_unshare"
 		const val OWNER_OP_CROSS_DOMAIN_UNLINK: String = "cross_domain_unlink"
 		const val OWNER_OP_CROSS_DOMAIN_LIST_SHARES: String = "cross_domain_list_shares"
+		const val OWNER_OP_VAULT_LIST: String = "vault_list"
+		const val OWNER_OP_VAULT_PUT: String = "vault_put"
+		const val OWNER_OP_VAULT_DELETE: String = "vault_delete"
 		const val SIGNING_TAG_ADMISSION: String = "ADMISSION_V1"
 		const val SIGNING_TAG_REVOCATION: String = "REVOCATION_V1"
 		const val SIGNING_TAG_REGISTER: String = "REGISTER_V1"
@@ -123,6 +126,9 @@ object Protocol {
 			const val CROSS_DOMAIN_LIST_PEERS: String = "cross_domain_list_peers"
 			const val CROSS_DOMAIN_UNLINK: String = "cross_domain_unlink"
 			const val CROSS_DOMAIN_UNTRUST: String = "cross_domain_untrust"
+			const val VAULT_ANSWER: String = "vault_answer"
+			const val VAULT_GRANTS: String = "vault_grants"
+			const val VAULT_REVOKE: String = "vault_revoke"
 		}
 
 		object SocketFrame {
@@ -426,6 +432,24 @@ sealed class ConsoleOp {
 	@SerialName("cross_domain_untrust")
 	data class CrossDomainUntrust(
 		val ownerSignPub: String,
+	) : ConsoleOp()
+
+	@Serializable
+	@SerialName("vault_answer")
+	data class VaultAnswer(
+		val requestId: String,
+		val decision: String,
+		val value: ContentEnvelope? = null,
+	) : ConsoleOp()
+
+	@Serializable
+	@SerialName("vault_grants")
+	data object VaultGrants : ConsoleOp()
+
+	@Serializable
+	@SerialName("vault_revoke")
+	data class VaultRevoke(
+		val grantId: String,
 	) : ConsoleOp()
 }
 
@@ -1382,6 +1406,110 @@ data class BoardObservationRow(
 )
 
 @Serializable
+data class VaultStoredEntry(
+	val clear: VaultEntryClear,
+	val sealed: VaultEntrySealed,
+)
+
+@Serializable
+data class VaultPut(
+	val id: String,
+	val expectedRevision: Long,
+	val sealed: VaultEntrySealed,
+)
+
+@Serializable
+data class VaultWriteResult(
+	val outcome: String,
+	val revision: Long,
+	val entry: VaultStoredEntry? = null,
+	val refusal: String? = null,
+)
+
+@Serializable
+data class VaultListResult(
+	val revision: Long,
+	val since: Long,
+	val entries: List<VaultStoredEntry>,
+)
+
+@Serializable
+data class VaultListValue(
+	@EncodeDefault
+	val kind: String = "vault_list",
+	val sinceRevision: Long? = null,
+)
+
+@Serializable
+data class VaultPutValue(
+	@EncodeDefault
+	val kind: String = "vault_put",
+	val put: VaultPut,
+)
+
+@Serializable
+data class VaultDeleteValue(
+	@EncodeDefault
+	val kind: String = "vault_delete",
+	val id: String,
+	val expectedRevision: Long,
+)
+
+@Serializable
+@OptIn(ExperimentalSerializationApi::class)
+@JsonClassDiscriminator("kind")
+sealed class VaultRequest {
+	@Serializable
+	@SerialName("entry")
+	data class Entry(
+		val entryId: String,
+		val v: Long,
+		val requestId: String,
+		val operation: String,
+		val shape: String,
+		val sessionTarget: String,
+		val deadlineAt: Long,
+	) : VaultRequest()
+
+	@Serializable
+	@SerialName("typed")
+	data class Typed(
+		val v: Long,
+		val requestId: String,
+		val operation: String,
+		val shape: String,
+		val sessionTarget: String,
+		val deadlineAt: Long,
+	) : VaultRequest()
+}
+
+@Serializable
+data class VaultGrant(
+	val grantId: String,
+	val tier: String,
+	val entryId: String? = null,
+	val shape: String? = null,
+	val sessionTarget: String,
+	val expiresAt: Long? = null,
+)
+
+@Serializable
+data class ConsoleVaultAnswerResult(
+	val ok: Boolean,
+	val reason: String? = null,
+)
+
+@Serializable
+data class ConsoleVaultGrantsResult(
+	val grants: List<VaultGrant>,
+)
+
+@Serializable
+data class ConsoleVaultRevokeResult(
+	val revoked: Boolean,
+)
+
+@Serializable
 data class ScheduledRecord(
 	val target: ScheduledTarget,
 	val fireAt: Long,
@@ -1910,6 +2038,27 @@ data class BoardCascaded(
 	val from: String,
 	val to: String,
 	val reason: String,
+)
+
+@Serializable
+data class VaultEntryClear(
+	val id: String,
+	val revision: Long,
+	val tombstone: Boolean,
+	val changedAt: Long,
+	val createdBy: String,
+	val createdAt: Long,
+	val updatedAt: Long,
+)
+
+@Serializable
+data class VaultEntrySealed(
+	val publicTitle: ContentEnvelope? = null,
+	val publicDescription: ContentEnvelope? = null,
+	val privateTitle: ContentEnvelope? = null,
+	val privateDescription: ContentEnvelope? = null,
+	val value: ContentEnvelope? = null,
+	val gateways: ContentEnvelope? = null,
 )
 
 @Serializable

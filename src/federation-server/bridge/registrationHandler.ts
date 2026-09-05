@@ -1,4 +1,4 @@
-import { type DomainSnapshot, REGISTER_MAX_SKEW_MS } from "../../shared/admission.js";
+import { type DomainSnapshot, REGISTER_MAX_SKEW_MS, type SignedAdmission } from "../../shared/admission.js";
 import type { Ambient } from "../../shared/ambient.js";
 import {
 	FEDERATION_PROTOCOL_FLOOR,
@@ -56,18 +56,22 @@ export class RegistrationHandler {
 			};
 		}
 		const domain = this.deps.getDomain(domainId);
+		let admission: SignedAdmission | null = null;
 		if (domain) {
 			const presented = !!(parsed.data.signPub || parsed.data.admission || parsed.data.proof);
 			if (presented) {
-				const denied = verifyRegistrationClaim(
+				const verdict = verifyRegistrationClaim(
 					parsed.data,
 					{ ownerSignPub: domain.ownerSignPub, revocations: domain.revocations },
 					this.deps.ambient.now(),
 				);
-				if (denied) {
-					console.warn(`[BridgeServer] rejected registration for "${domainId}/${gatewayId}": ${denied}`);
-					return { ok: false, error: `registration_denied: ${denied}` };
+				if (verdict.denied !== null) {
+					console.warn(
+						`[BridgeServer] rejected registration for "${domainId}/${gatewayId}": ${verdict.denied}`,
+					);
+					return { ok: false, error: `registration_denied: ${verdict.denied}` };
 				}
+				admission = verdict.admission;
 				if (!this.rememberRegisterNonce(parsed.data.proofNonce)) {
 					console.warn(`[BridgeServer] rejected replayed registration proof for "${domainId}/${gatewayId}"`);
 					return { ok: false, error: `registration_denied: registration proof replayed` };
@@ -98,6 +102,7 @@ export class RegistrationHandler {
 			domainId,
 			gatewayId,
 			signPub: parsed.data.signPub ?? null,
+			admission,
 			incarnation,
 			protocolVersion,
 		});

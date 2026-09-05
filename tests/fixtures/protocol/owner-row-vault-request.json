@@ -1,0 +1,19 @@
+{
+	"seq": 0,
+	"at": 1757000000000,
+	"kind": "plugin_action",
+	"session_id": "host.82d560",
+	"title": "host.82d560 wants to run ssh deploy@prod using key prod-deploy",
+	"pluginId": "vault",
+	"actionType": "request",
+	"payload": {
+		"v": 1,
+		"requestId": "request-1",
+		"kind": "entry",
+		"entryId": "prod-deploy",
+		"operation": "ssh deploy@prod",
+		"shape": "ssh deploy@prod",
+		"sessionTarget": "host.82d560",
+		"deadlineAt": 1757000540000
+	}
+}

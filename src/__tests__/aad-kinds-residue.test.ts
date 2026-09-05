@@ -34,6 +34,7 @@ describe("AAD kind residue", () => {
 			opPayloadAadKind: "opPayloadAad",
 			valueResultAadKind: "valueResultAad",
 			opResultAadKind: "opResultAad",
+			vaultAadKind: "vaultValueAad",
 		};
 		for (const builder of builders) expect(vectors[vectorByBuilder[builder]]).toBeDefined();
 		for (const vector of [
@@ -45,6 +46,13 @@ describe("AAD kind residue", () => {
 			"opPayloadAad",
 			"valueResultAad",
 			"opResultAad",
+			"vaultPublicTitleAad",
+			"vaultPublicDescriptionAad",
+			"vaultPrivateTitleAad",
+			"vaultPrivateDescriptionAad",
+			"vaultValueAad",
+			"vaultGatewaysAad",
+			"vaultTypedAad",
 		]) {
 			expect(read(tsTestPath)).toContain(vector);
 			expect(read(kotlinTestPath)).toContain(vector);
@@ -67,6 +75,13 @@ describe("AAD kind residue", () => {
 			["board", "title"],
 			["board", "body"],
 			["board", "name"],
+			["vault", "publicTitle"],
+			["vault", "publicDescription"],
+			["vault", "privateTitle"],
+			["vault", "privateDescription"],
+			["vault", "value"],
+			["vault", "gateways"],
+			["vault", "typed"],
 		].map((parts) => parts.join("."));
 		const files = filesUnder(path.join(root, "src"))
 			.filter((file) => file.endsWith(".ts"))

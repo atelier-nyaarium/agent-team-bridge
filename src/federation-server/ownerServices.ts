@@ -26,6 +26,7 @@ import { createScheduledService } from "./scheduled/scheduledService.js";
 import { createShareService } from "./share/shareService.js";
 import { createCapabilitiesService } from "./tier1/capabilitiesService.js";
 import { createReadAnchorsService } from "./tier1/readAnchorsService.js";
+import { createVaultService } from "./vault/vaultService.js";
 
 export interface OwnerServicesDeps {
 	registry: OwnerStoreRegistry;
@@ -243,9 +244,10 @@ export function createOwnerServices(deps: OwnerServicesDeps) {
 
 	const capabilities = createCapabilitiesService({ registry });
 	const readAnchors = createReadAnchorsService({ registry });
+	const vault = createVaultService({ registry });
 
 	const cursors = createCursorService({ registry, migrationEpoch: () => readRouterMigrationWindow().epoch ?? 0 });
-	for (const service of [share, presence, board, scheduled, capabilities, readAnchors, cursors, keyDelivery])
+	for (const service of [share, presence, board, scheduled, capabilities, readAnchors, cursors, keyDelivery, vault])
 		service.register(hooks);
 	// A catalogued kind nothing serves refuses at runtime, so construction refuses first.
 	const unserved = deps.intake.unregisteredKinds();
@@ -268,6 +270,7 @@ export function createOwnerServices(deps: OwnerServicesDeps) {
 		scheduled,
 		capabilities,
 		readAnchors,
+		vault,
 		planeVersions(domainId: string, _signerSignPub: string): Record<string, number> {
 			const projection = presence.ownerProjection(domainId, {
 				admittedGateways,
@@ -303,9 +306,13 @@ export function createOwnerServices(deps: OwnerServicesDeps) {
 			});
 		},
 		sweep(now = registry.now()): void {
-			perDomain("share sweep", (domainId) => share.sweep(domainId, now));
-			perDomain("board sweep", (domainId) => board.sweepTrash(domainId, now));
-			perDomain("capability sweep", (domainId) => capabilities.sweep(domainId, now));
+			// Migration fences hold all writers.
+			const fenced = readRouterMigrationWindow().fenced;
+			const held = (domainId: string) => fenced && !leases.ready(domainId);
+			perDomain("share sweep", (domainId) => held(domainId) || share.sweep(domainId, now));
+			perDomain("board sweep", (domainId) => held(domainId) || board.sweepTrash(domainId, now));
+			perDomain("capability sweep", (domainId) => held(domainId) || capabilities.sweep(domainId, now));
+			perDomain("vault sweep", (domainId) => held(domainId) || vault.sweep(domainId, now));
 		},
 		rearm(): void {
 			perDomain("presence rearm", (domainId) => presence.rearm(domainId));

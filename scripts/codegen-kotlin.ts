@@ -139,6 +139,20 @@ import {
 	ReportReadSchema,
 } from "../src/shared/schemasTier1.js";
 import {
+	ConsoleVaultAnswerResultSchema,
+	ConsoleVaultGrantsResultSchema,
+	ConsoleVaultRevokeResultSchema,
+	VaultDeleteValueSchema,
+	VaultGrantSchema,
+	VaultListResultSchema,
+	VaultListValueSchema,
+	VaultPutSchema,
+	VaultPutValueSchema,
+	VaultRequestSchema,
+	VaultStoredEntrySchema,
+	VaultWriteResultSchema,
+} from "../src/shared/schemasVault.js";
+import {
 	WireFixtureEntrySchema,
 	WireFixtureSchema,
 	WireFrameSchema,
@@ -278,6 +292,18 @@ const ROOTS: z.ZodType[] = [
 	BoardWriteResultSchema,
 	BoardReadResultSchema,
 	BoardObservationRowSchema,
+	VaultStoredEntrySchema,
+	VaultPutSchema,
+	VaultWriteResultSchema,
+	VaultListResultSchema,
+	VaultListValueSchema,
+	VaultPutValueSchema,
+	VaultDeleteValueSchema,
+	VaultRequestSchema,
+	VaultGrantSchema,
+	ConsoleVaultAnswerResultSchema,
+	ConsoleVaultGrantsResultSchema,
+	ConsoleVaultRevokeResultSchema,
 	ScheduledRecordSchema,
 	ScheduleSendValueSchema,
 	ScheduleCancelValueSchema,
@@ -304,6 +330,7 @@ const SEALED_ROOTS = new Set([
 	"CrossDomainShareTarget",
 	"BoardOp",
 	"BoardActor",
+	"VaultRequest",
 	"WireFixture",
 ]);
 

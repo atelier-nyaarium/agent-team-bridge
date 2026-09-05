@@ -2,6 +2,8 @@ import { z } from "zod";
 import { ChannelFilesSchema } from "./channel-file.js";
 import { SignedXDomainLinkSchema } from "./federation-protocol.js";
 import { BlobGetOpSchema, BlobPutOpSchema, BlobStatOpSchema } from "./schemasBlob.js";
+import { ContentEnvelopeSchema } from "./schemasContentKey.js";
+import { VaultDecisionSchema } from "./schemasVault.js";
 
 export { SealedEnvelopeSchema } from "./crypto.js";
 
@@ -123,6 +125,15 @@ export const ConsoleOpSchema = z
 			kind: z.literal("cross_domain_untrust"),
 			ownerSignPub: z.string().min(1).max(128),
 		}),
+		// Typed values bind request IDs.
+		z.object({
+			kind: z.literal("vault_answer"),
+			requestId: z.string().min(1).max(128),
+			decision: VaultDecisionSchema,
+			value: ContentEnvelopeSchema.optional(),
+		}),
+		z.object({ kind: z.literal("vault_grants") }),
+		z.object({ kind: z.literal("vault_revoke"), grantId: z.string().min(1).max(128) }),
 	])
 	.meta({ id: "ConsoleOp" });
 
@@ -157,6 +168,9 @@ export const VALUE_OP_KINDS = new Set([
 	"cross_domain_list_peers",
 	"cross_domain_unlink",
 	"cross_domain_untrust",
+	"vault_answer",
+	"vault_grants",
+	"vault_revoke",
 ]);
 
 export const MailboxEntrySchema = z

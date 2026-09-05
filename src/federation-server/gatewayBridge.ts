@@ -1,4 +1,4 @@
-import type { DomainSnapshot } from "../shared/admission.js";
+import { type DomainSnapshot, resolveAdmitted, type SignedAdmission } from "../shared/admission.js";
 import type { Ambient } from "../shared/ambient.js";
 import { FEDERATION_VALUE_PROTOCOL_VERSION } from "../shared/router-protocol.js";
 import { type InboxRow, parseInboxAddress } from "../shared/schemasInbox.js";
@@ -50,6 +50,8 @@ export interface ConnGatewayRecord {
 	domainId: string;
 	gatewayId: string;
 	signPub: string | null;
+	// The admission the registration verified; identity-less admin registrations hold none.
+	admission?: SignedAdmission | null;
 	incarnation: number | null;
 	protocolVersion?: number;
 }
@@ -388,6 +390,26 @@ export class GatewayBridge implements ToolProvider {
 		}
 	}
 
+	/** Every connection the signer holds, superseded ones included, leaves through the drop path. */
+	public evictSigner(domainId: string, signPub: string, reason: string): void {
+		for (const [connId, reg] of [...this.connGateways]) {
+			if (reg.domainId !== domainId || reg.signPub !== signPub) continue;
+			// Dropped with the registration in hand, so presence and share teardown fire.
+			this.onDisconnect(connId);
+			try {
+				this.transport?.getConnection(connId)?.close(1000, reason);
+			} catch {}
+			console.log(`[BridgeServer] evicted gateway ${domainId}/${reg.gatewayId}: ${reason}`);
+		}
+	}
+
+	/** The presented admission against the current revocations, as registration judged it. */
+	private stillAdmitted(reg: ConnGatewayRecord): boolean {
+		const domain = this.getDomain(reg.domainId);
+		if (!domain || !reg.signPub || !reg.admission) return false;
+		return resolveAdmitted([reg.admission], domain.revocations, domain.ownerSignPub, reg.signPub) !== null;
+	}
+
 	public evictDomain(domainId: string, reason: string): void {
 		const domainMap = this.gatewayConnections.get(domainId);
 		if (domainMap) {
@@ -408,13 +430,19 @@ export class GatewayBridge implements ToolProvider {
 		if (name === "gateway_register") return this.registrationHandler.handle(connId, params);
 		const frame = this.frames.get(name);
 		if (!frame) throw new Error(`unsupported gateway action: ${name}`);
-		if (!frame.gated) return frame.handler(connId, params);
+		if (!frame.gated) {
+			const sender = this.connGateways.get(connId);
+			// A registered sender keeps no open frame past its revocation.
+			if (sender?.signPub && !this.stillAdmitted(sender)) return { ok: false, error: "gateway_not_admitted" };
+			return frame.handler(connId, params);
+		}
 		const reg = this.connGateways.get(connId);
 		if (!reg?.signPub || reg.incarnation === null) return { ok: false, error: "inbox_unavailable" };
 		if (params.incarnation !== reg.incarnation) {
 			console.warn(`[BridgeServer] stale gateway incarnation for ${name}`);
 			return { ok: false, error: GATEWAY_ERROR_STALE_INCARNATION };
 		}
+		if (!this.stillAdmitted(reg)) return { ok: false, error: "gateway_not_admitted" };
 		if (
 			frame.mutation !== "read" &&
 			readRouterMigrationWindow().fenced &&

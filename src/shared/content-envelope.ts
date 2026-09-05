@@ -57,6 +57,28 @@ export function boardTextAadKind(
 		.join("\n") as `${BoardTextKind}\n${string}`;
 }
 
+export type VaultFieldKind =
+	| "vault.publicTitle"
+	| "vault.publicDescription"
+	| "vault.privateTitle"
+	| "vault.privateDescription"
+	| "vault.value"
+	| "vault.gateways"
+	| "vault.typed";
+export const VAULT_PUBLIC_TITLE_KIND: VaultFieldKind = "vault.publicTitle";
+export const VAULT_PUBLIC_DESCRIPTION_KIND: VaultFieldKind = "vault.publicDescription";
+export const VAULT_PRIVATE_TITLE_KIND: VaultFieldKind = "vault.privateTitle";
+export const VAULT_PRIVATE_DESCRIPTION_KIND: VaultFieldKind = "vault.privateDescription";
+export const VAULT_VALUE_KIND: VaultFieldKind = "vault.value";
+export const VAULT_GATEWAYS_KIND: VaultFieldKind = "vault.gateways";
+export const VAULT_TYPED_KIND: VaultFieldKind = "vault.typed";
+
+/** Binds entry or request ID. */
+export function vaultAadKind(kind: VaultFieldKind, id: string): `${VaultFieldKind}\n${string}` {
+	assertNewlineFree(kind, id);
+	return `${kind}\n${id}`;
+}
+
 export function inboxBodyAadKind(conversationId: string, opId: string): `inbox.body\n${string}` {
 	assertNewlineFree(conversationId, opId);
 	return `inbox.body\n${conversationId}\n${opId}`;
@@ -91,6 +113,7 @@ export interface ContentAad {
 	kind:
 		| Exclude<ContentKind, BoardTextKind | "inbox.body">
 		| `${BoardTextKind}\n${string}`
+		| `${VaultFieldKind}\n${string}`
 		| `inbox.body\n${string}`
 		| `op.result\n${string}`
 		| `blob\n${string}\n${number}\n${0 | 1}`;

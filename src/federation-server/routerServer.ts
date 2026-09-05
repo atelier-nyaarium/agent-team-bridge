@@ -482,6 +482,7 @@ export class RouterServer {
 		if (op.kind === "submit_revocation") {
 			this.domain.inbox.forgetConsumer(domainId, op.revocation.revocation.signPub);
 			this.consoleSockets.forget(domainId, op.revocation.revocation.signPub);
+			this.bridge.evictSigner(domainId, op.revocation.revocation.signPub, "revoked");
 		}
 		if (op.kind === "submit_admission" || op.kind === "submit_revocation") {
 			const failed = await this.flushOrError(domainId);

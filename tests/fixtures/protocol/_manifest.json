@@ -21,6 +21,10 @@
 		{ "file": "peek-result-legacy.json", "schema": "ConsolePeekResult", "expect": "pass" },
 		{ "file": "owner-row-reply.json", "schema": "MailboxEntry", "expect": "pass" },
 		{ "file": "owner-row-notice.json", "schema": "MailboxEntry", "expect": "pass" },
-		{ "file": "invalid-owner-row-bare-entry.json", "schema": "MailboxEntry", "expect": "fail" }
+		{ "file": "invalid-owner-row-bare-entry.json", "schema": "MailboxEntry", "expect": "fail" },
+		{ "file": "console-op-vault-answer.json", "schema": "ConsoleOp", "expect": "pass" },
+		{ "file": "invalid-vault-answer-missing-decision.json", "schema": "ConsoleOp", "expect": "fail" },
+		{ "file": "owner-row-vault-request.json", "schema": "MailboxEntry", "expect": "pass" },
+		{ "file": "invalid-owner-row-vault-request-bare.json", "schema": "MailboxEntry", "expect": "fail" }
 	]
 }

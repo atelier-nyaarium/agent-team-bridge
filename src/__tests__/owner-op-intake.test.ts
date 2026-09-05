@@ -233,6 +233,19 @@ describe("OwnerOp intake", () => {
 		reopened.close();
 	});
 
+	it("refuses an unsupported kind before spending its nonce, so the op lands once the kind is served", async () => {
+		const accepted: string[] = [];
+		const fixture = localIntake();
+		(fixture.intake as unknown as { params: { inbox: Record<string, unknown> } }).params.inbox.acceptOwnerOpNonce =
+			(_domainId: string, _signer: string, nonce: string) => {
+				accepted.push(nonce);
+				return true;
+			};
+		const op = signedOp(fixture, { kind: "vault_put_from_the_future" }, { opId: "future" });
+		expect(await fixture.intake.handle(op)).toMatchObject({ outcome: "refused", reason: "unsupported" });
+		expect(accepted).toEqual([]);
+	});
+
 	it("catalogues every served kind and refuses one it does not", () => {
 		const fixture = localIntake();
 		const register = (kind: string, handler: () => null) =>
@@ -261,6 +274,8 @@ describe("OwnerOp intake", () => {
 				["listeningToken", "pin", "requesterOwnerSignPub", "requesterDomainId", "requesterGatewayId"],
 			],
 			[{ kind: "cross_domain_unlink", domainId: "d" }, ["domainId"]],
+			[{ kind: "vault_answer", requestId: "r", decision: "once" }, ["requestId", "decision"]],
+			[{ kind: "vault_revoke", grantId: "g" }, ["grantId"]],
 		] as const;
 		for (const [value, required] of cases) {
 			expect(ConsoleOpSchema.safeParse(value).success).toBe(true);

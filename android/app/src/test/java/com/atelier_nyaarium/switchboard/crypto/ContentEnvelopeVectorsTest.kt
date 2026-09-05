@@ -48,6 +48,25 @@ class ContentEnvelopeVectorsTest {
 	}
 
 	@Test
+	fun everyVaultKindConstantMatchesItsVector() {
+		val root = vectors()
+		val kinds = mapOf(
+			"vaultPublicTitleAad" to VAULT_PUBLIC_TITLE_KIND,
+			"vaultPublicDescriptionAad" to VAULT_PUBLIC_DESCRIPTION_KIND,
+			"vaultPrivateTitleAad" to VAULT_PRIVATE_TITLE_KIND,
+			"vaultPrivateDescriptionAad" to VAULT_PRIVATE_DESCRIPTION_KIND,
+			"vaultValueAad" to VAULT_VALUE_KIND,
+			"vaultGatewaysAad" to VAULT_GATEWAYS_KIND,
+			"vaultTypedAad" to VAULT_TYPED_KIND,
+		)
+		for ((name, kind) in kinds) {
+			val vector = root[name]!!.jsonObject
+			assertEquals(kind, vector["kind"]!!.jsonPrimitive.content)
+			assertEquals(vector["expected"]!!.jsonPrimitive.content, vaultAadKind(kind, vector["id"]!!.jsonPrimitive.content))
+		}
+	}
+
+	@Test
 	fun aadKindsRejectNewlinesInEveryArgument() {
 		org.junit.Assert.assertThrows(Exception::class.java) { boardTextAadKind("board.title", "entry\n1") }
 		org.junit.Assert.assertThrows(Exception::class.java) { boardTextAadKind("board\ntitle", "entry-1") }
@@ -59,6 +78,8 @@ class ContentEnvelopeVectorsTest {
 		org.junit.Assert.assertThrows(Exception::class.java) { valueResultAadKind("operation\n1") }
 		org.junit.Assert.assertThrows(Exception::class.java) { opResultAadKind("conversation\n1", "operation") }
 		org.junit.Assert.assertThrows(Exception::class.java) { opResultAadKind("conversation", "operation\n1") }
+		org.junit.Assert.assertThrows(Exception::class.java) { vaultAadKind(VAULT_VALUE_KIND, "entry\n1") }
+		org.junit.Assert.assertThrows(Exception::class.java) { vaultAadKind("vault\nvalue", "entry-1") }
 	}
 
 	@Test

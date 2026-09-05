@@ -1,0 +1,7 @@
+{
+	"seq": 0,
+	"at": 1757000000000,
+	"kind": "plugin_action",
+	"pluginId": "vault",
+	"actionType": "request"
+}

@@ -15,6 +15,8 @@ export type RecordKind =
 	| "board.entry"
 	| "board.meta"
 	| "board.op"
+	| "vault.entry"
+	| "vault.meta"
 	| "scheduled"
 	| "share"
 	| "readAnchor"

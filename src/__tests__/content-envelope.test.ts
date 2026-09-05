@@ -19,11 +19,32 @@ import {
 	scheduledBodyAadKind,
 	sealContentWithNonce,
 	unwrapContentKey,
+	VAULT_GATEWAYS_KIND,
+	VAULT_PRIVATE_DESCRIPTION_KIND,
+	VAULT_PRIVATE_TITLE_KIND,
+	VAULT_PUBLIC_DESCRIPTION_KIND,
+	VAULT_PUBLIC_TITLE_KIND,
+	VAULT_TYPED_KIND,
+	VAULT_VALUE_KIND,
+	type VaultFieldKind,
 	valueResultAadKind,
+	vaultAadKind,
 	wrapContentKey,
 } from "../shared/content-envelope.js";
 import { generateIdentity } from "../shared/crypto.js";
 import { ContentEnvelopeSchema, KeyEnvelopeSchema } from "../shared/schemasContentKey.js";
+
+type VaultVector = { kind: VaultFieldKind; id: string; expected: string };
+/** Pins exported vault kinds. */
+const VAULT_VECTORS = {
+	vaultPublicTitleAad: VAULT_PUBLIC_TITLE_KIND,
+	vaultPublicDescriptionAad: VAULT_PUBLIC_DESCRIPTION_KIND,
+	vaultPrivateTitleAad: VAULT_PRIVATE_TITLE_KIND,
+	vaultPrivateDescriptionAad: VAULT_PRIVATE_DESCRIPTION_KIND,
+	vaultValueAad: VAULT_VALUE_KIND,
+	vaultGatewaysAad: VAULT_GATEWAYS_KIND,
+	vaultTypedAad: VAULT_TYPED_KIND,
+} as const;
 
 type Fixture = {
 	v: 1;
@@ -42,6 +63,13 @@ type Fixture = {
 	};
 	opResultAad: { conversationId: string; opId: string; expected: string };
 	valueResultAad: { opId: string; expected: string };
+	vaultPublicTitleAad: VaultVector;
+	vaultPublicDescriptionAad: VaultVector;
+	vaultPrivateTitleAad: VaultVector;
+	vaultPrivateDescriptionAad: VaultVector;
+	vaultValueAad: VaultVector;
+	vaultGatewaysAad: VaultVector;
+	vaultTypedAad: VaultVector;
 	ownerRowAadFull: {
 		domainId: string;
 		ownerSignPub: string;
@@ -107,6 +135,14 @@ describe("content envelope", () => {
 		};
 		for (const [name, value] of Object.entries(actual)) {
 			expect(value).toBe((fixture[name as keyof Fixture] as { expected: string }).expected);
+		}
+	});
+
+	it("pins every vault kind constant to its vector", () => {
+		for (const [name, kind] of Object.entries(VAULT_VECTORS) as [keyof typeof VAULT_VECTORS, VaultFieldKind][]) {
+			const vector = fixture[name];
+			expect(vector.kind).toBe(kind);
+			expect(vaultAadKind(kind, vector.id)).toBe(vector.expected);
 		}
 	});
 

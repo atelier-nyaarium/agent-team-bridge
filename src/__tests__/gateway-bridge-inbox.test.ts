@@ -7,7 +7,7 @@ import { ReferenceHeldStore } from "../federation-server/blobs/referenceHeldStor
 import { RouterBlobCache } from "../federation-server/blobs/routerBlobCache.js";
 import { GatewayBridge } from "../federation-server/gatewayBridge.js";
 import { OwnerQuarantined } from "../federation-server/owner/ownerStateStore.js";
-import { signAdmission, signRegister } from "../shared/admission.js";
+import { type SignedRevocation, signAdmission, signRegister, signRevocation } from "../shared/admission.js";
 import { processAmbient } from "../shared/ambient.js";
 import { blobIdFor } from "../shared/blob-store.js";
 import { generateIdentity } from "../shared/crypto.js";
@@ -102,6 +102,83 @@ const signedRow = (envelope: Parameters<typeof signRowEnvelope>[0], signPriv: st
 });
 
 describe("GatewayBridge inbox", () => {
+	it("a revoked gateway loses its frames on the open connection, then its connection", async () => {
+		const owner = generateIdentity();
+		const gateway = generateIdentity();
+		const admission = signAdmission(
+			{
+				kind: "gateway",
+				signPub: gateway.sign.pub,
+				boxPub: gateway.box.pub,
+				gatewayId: "gateway",
+				issuedAt: 1,
+				nonce: "admit",
+			},
+			owner.sign.priv,
+			owner.sign.pub,
+		);
+		const revocations: SignedRevocation[] = [];
+		const bridge = new GatewayBridge({
+			ambient: processAmbient(),
+			port: 0,
+			authToken: "token",
+			getDomain: () => ({ ownerSignPub: owner.sign.pub, admissions: [admission], revocations }),
+			getDomainMeta: () => null,
+			hasLinkEdge: () => false,
+			adminDomainId: () => "domain",
+			inbox: fakeInbox(),
+		});
+		bridge.attach();
+		bridge.transportAdapter?.handleOpen(socket() as never);
+		const proofAt = Date.now();
+		await bridge.handleCall("c1", "gateway_register", {
+			domainId: "domain",
+			gatewayId: "gateway",
+			protocolVersion: 1,
+			signPub: gateway.sign.pub,
+			boxPub: gateway.box.pub,
+			admission: JSON.stringify(admission),
+			proofAt,
+			proofNonce: "proof",
+			proof: signRegister("gateway", proofAt, "proof", gateway.sign.priv),
+		});
+		bridge.registerGatewayFrame("probe", "read", () => ({ ok: true }));
+		expect(await bridge.handleCall("c1", "probe", { incarnation: 1 })).toEqual({ ok: true });
+		// A second registration supersedes c1, which stays registered on its own socket.
+		bridge.transportAdapter?.handleOpen(socket() as never);
+		await bridge.handleCall("c2", "gateway_register", {
+			domainId: "domain",
+			gatewayId: "gateway",
+			protocolVersion: 1,
+			signPub: gateway.sign.pub,
+			boxPub: gateway.box.pub,
+			admission: JSON.stringify(admission),
+			proofAt,
+			proofNonce: "proof2",
+			proof: signRegister("gateway", proofAt, "proof2", gateway.sign.priv),
+		});
+		expect(await bridge.handleCall("c2", "list_gateways", {})).toEqual({ gateways: [] });
+		const dropped: string[] = [];
+		bridge.onGatewayDropped((reg) => dropped.push(reg.gatewayId));
+
+		revocations.push(
+			signRevocation(
+				{ signPub: gateway.sign.pub, issuedAt: 2, nonce: "revoke" },
+				owner.sign.priv,
+				owner.sign.pub,
+			),
+		);
+		const refused = { ok: false, error: "gateway_not_admitted" };
+		expect(await bridge.handleCall("c1", "probe", { incarnation: 1 })).toEqual(refused);
+		expect(await bridge.handleCall("c2", "list_gateways", {})).toEqual(refused);
+		bridge.evictSigner("domain", gateway.sign.pub, "revoked");
+		const gone = { ok: false, error: "inbox_unavailable" };
+		expect(await bridge.handleCall("c1", "probe", { incarnation: 1 })).toEqual(gone);
+		expect(await bridge.handleCall("c2", "probe", { incarnation: 1 })).toEqual(gone);
+		// Only the current connection was the gateway's presence.
+		expect(dropped).toEqual(["gateway"]);
+	});
+
 	it("refuses gateway_value for a protocol-1 gateway", async () => {
 		const { bridge } = await registered(fakeInbox());
 		await expect(

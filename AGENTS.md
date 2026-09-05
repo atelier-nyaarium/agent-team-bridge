@@ -103,6 +103,7 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
 - `src/mcp/devcontainer/` - host daemon plumbing and per-session tools
 - `src/mcp/devcontainer/hostResolve.ts` - pure host/workdir/watch-target resolution and tmux command construction
 - `src/mcp/devcontainer/windowsSpawn.ts` - Windows PowerShell probing, WSL path translation, and native directory listing
+- `src/mcp/devcontainer/buildTranscript.ts` - latest `devcontainer up` transcript and pane-less terminal fallback
 - `src/mcp/devcontainer/codexTargets.ts` - one supervised Codex App Server per execution target
 - `src/mcp/devcontainer/codexAppServer.ts` - JSONL transport and fail-closed App Server client
 - `src/mcp/devcontainer/codexThreadLifecycle.ts` - per-thread queues, settled-turn archival, bounded retirement
@@ -135,6 +136,8 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
 - `src/federation-server/presence/` - presence rows per gateway incarnation, resync, roster, owner and friend projections
 - `src/federation-server/share/` - share records, generations, attestations, sweep, unlink; the peer-row gate
 - `src/federation-server/board/` - board records with sealed text, authority and cascade on the clear envelope, observation rows
+- `src/federation-server/vault/` - vault entries: sealed fields, revision CAS, phone writes, gateway creates, unopened fields
+- `src/shared/schemasVault.ts` - vault wire truth: entries, puts, results, requests, grants, console answers
 - `src/federation-server/scheduled/` - scheduled sends: versioned records, timers, fire through the op ledger, result rows
 - `src/federation-server/tier1/` - capability fold and read anchors
 - `src/federation-server/migration/` - leases, serve gate, and cursor translation

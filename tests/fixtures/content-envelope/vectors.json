@@ -45,6 +45,41 @@
 		"opId": "value-operation",
 		"expected": "op.result\nvalue-operation"
 	},
+	"vaultPublicTitleAad": {
+		"kind": "vault.publicTitle",
+		"id": "entry-1",
+		"expected": "vault.publicTitle\nentry-1"
+	},
+	"vaultPublicDescriptionAad": {
+		"kind": "vault.publicDescription",
+		"id": "entry-1",
+		"expected": "vault.publicDescription\nentry-1"
+	},
+	"vaultPrivateTitleAad": {
+		"kind": "vault.privateTitle",
+		"id": "entry-1",
+		"expected": "vault.privateTitle\nentry-1"
+	},
+	"vaultPrivateDescriptionAad": {
+		"kind": "vault.privateDescription",
+		"id": "entry-1",
+		"expected": "vault.privateDescription\nentry-1"
+	},
+	"vaultValueAad": {
+		"kind": "vault.value",
+		"id": "entry-1",
+		"expected": "vault.value\nentry-1"
+	},
+	"vaultGatewaysAad": {
+		"kind": "vault.gateways",
+		"id": "entry-1",
+		"expected": "vault.gateways\nentry-1"
+	},
+	"vaultTypedAad": {
+		"kind": "vault.typed",
+		"id": "request-1",
+		"expected": "vault.typed\nrequest-1"
+	},
 	"ownerRowAadFull": {
 		"domainId": "alice",
 		"ownerSignPub": "EMaziVeIf7iZXFn3NmUDaj7tJ0fcnpHZKYQvelsinWE=",

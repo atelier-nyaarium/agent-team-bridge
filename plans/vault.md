@@ -179,10 +179,15 @@ backup for the values, which the substrate made free.
 ### Assumption A2 - One record kind, a note is an entry without a value
 
 `vault_entry` on the Router's owner state, CAS on revision like the board. Clear envelope: id,
-revision, tombstone. Sealed: public title and description, private title and description, value,
-the gateway allowlist. At least one title required. Public fields are the only ones ever served
-to an agent; a note is an entry with no value, so an agent can find it and never read it. The
-Router sees the envelope only.
+revision, tombstone, `createdBy`, `createdAt`, `updatedAt`. Sealed: public title and description,
+private title and description, value, the gateway allowlist. At least one title required. Public
+fields are the only ones ever served to an agent; a note is an entry with no value, so an agent can
+find it and never read it. The Router sees the envelope only.
+
+A delete wipes every sealed field and keeps the envelope as a tombstone, so every console converges
+on the deletion from one list. A blind re-create at revision 0 meets the tombstone as the conflict
+winner; reviving names the tombstone's revision. The sweep drops a tombstone seven days after
+`updatedAt`, one vault revision per batch.
 
 ### Assumption A3 - Decisions and windows are gateway-local
 
@@ -328,6 +333,22 @@ A: A. env, stdin, file, and the askpass helper. No argv template, no PTY supervi
 Recommendation reason: nearly every program takes a secret by env, stdin, or file. The argv
 template lands the value in `ps` and shell history; the PTY supervisor does not generalize.
 
+## Question 8 - Must a vault delete erase the ciphertext from the Router journal?
+
+Q: A delete wipes the live record to a tombstone, but the owner journal is append-only, so the
+earlier line still holds the sealed fields until the store compacts (past 4 MiB of journal, in
+`inboxSweep`). The Router never holds the content key, so the residue is ciphertext under a key the
+Router cannot use. Is that enough?
+
+- A) Yes. Convergence was the tombstone's purpose; the journal is the same substrate every sealed
+  record lives on, board text included. No change.
+- B) Force a compaction after a vault delete, with crash-safe manifest rotation. Erases the line
+  at the cost of a snapshot per delete.
+- C) Per-entry key epochs, so a delete destroys the key and the residue is unreadable by anyone.
+  A second key system.
+
+Open. Phase 1 shipped A.
+
 # Plan
 
 From the questionaire, refreshed against `7a865872`. Deploy order per AGENTS.md: Router first (it
@@ -339,21 +360,22 @@ tolerated by both peers. Each phase ends with its harness scenarios green under 
 - `src/shared/schemasVault.ts`: `VaultEntry` clear envelope (id, revision, tombstone, `createdBy`
   phone or gateway), sealed field envelopes, request and answer payloads. `.meta({id})` for the
   Kotlin codegen.
-- AAD kinds in `content-envelope.ts`: one builder per field, each binding the entry id like
-  `boardTextAadKind`. Kotlin twin in `ContentAadKinds.kt`. One vector each in the
-  `aad-kinds-residue` fixture corpus.
+- AAD kinds in `content-envelope.ts`: one builder taking a kind, like `boardTextAadKind`; one
+  exported constant per field, binding the entry id, plus a typed-value kind binding the request id
+  (Q4). Kotlin twin in `ContentAadKinds.kt`. One vector per constant in the content-envelope
+  corpus, pinned from the constants on both runtimes.
 - `src/federation-server/vault/`: owner-state service through `ownerServiceHooks.ts`. CAS on
   revision. Authority on the clear envelope: a signed console OwnerOp may create, update, and
   delete; a gateway frame may create only (Q3). Router blind to every field.
 - OwnerOps `vault_list` (`read`), `vault_put` and `vault_delete` (`value`), registered in
-  `ownerOpRegistry.ts` with answer schemas. Gateway frames `vault_read` (`read`, open) and
-  `vault_create` (`value`, gated), registered in the frame catalog (R9).
+  `ownerOpRegistry.ts` with answer schemas. Gateway frames `vault_read` (`read`) and
+  `vault_create` (`value`), both gated on the incarnation, registered in the frame catalog (R9).
 - `vault_answer` and `vault_grants` and `vault_revoke` added to `VALUE_OP_KINDS`. Additive, no
   `CONSOLE_PROTOCOL_VERSION` bump.
-- Fixtures under `tests/fixtures/protocol/` for the request row, the answer, and a bare invalid
-  row, opened by `protocol-fixtures.test.ts` and `ProtocolFixturesTest.kt`. Sealed field
-  envelopes minted into `tests/fixtures/wire/` by `gen-wire-fixtures.ts` and
-  `WireFixtureGenerator.kt` under the identity set.
+- Fixtures under `tests/fixtures/protocol/` for the request row (`MailboxEntry`), the answer
+  (`ConsoleOp`), and a bare invalid row of each, opened by `protocol-fixtures.test.ts` and
+  `ProtocolFixturesTest.kt`. Sealed field envelopes join `tests/fixtures/wire/` with their
+  composers: the gateway client in Phase 2, the Kotlin sealing in Phase 3.
 - Harness scenarios: a phone-driven `vault_put`, a gateway `vault_read`, the CAS conflict, and the
   fence refusing `vault_create` inside a migration window.
 
@@ -373,8 +395,9 @@ tolerated by both peers. Each phase ends with its harness scenarios green under 
   `vault:request` through `deliverToOwner`, durable in `OwnerRowOutbox`. The `vault_answer` value
   op reaches `consoleHandler.ts` through the console dispatcher in `composeRouterFrames.ts` and
   resolves the request. Deny and timeout answer the same refusal.
-- Harness scenarios: request then answer once; answer 30 minutes then a second run inside the
-  window; deny; timeout; a gateway restart with a window held.
+- Harness scenarios under both timer drives: request then answer once; answer 30
+  minutes then a second run inside the window; deny; timeout; a gateway restart with a window held.
+- A vault sealing case in `gen-wire-fixtures.ts`, minted under the identity set.
 - Loopback routes for the MCP server and the helper: search (public fields only), run-begin,
   collect, capture, askpass. Helper token minted at install, verified per call (A6).
 - The value leaves the gateway only in a loopback answer to an approved request.
@@ -382,9 +405,13 @@ tolerated by both peers. Each phase ends with its harness scenarios green under 
 ## Phase 3 - Phone: Vault tab, editor, request sheet
 
 - `plugins/vault/`: `VaultPlugin.kt` claims `vault:request`, wipe, and forget (A7).
-- `VaultSealing.kt` twin of the AAD kinds. `VaultManager` holds Router-held entries through the
-  OwnerOps, sealed with `ContentKeyring`. `Protocol.kt` regenerates with
-  `bun scripts/codegen-kotlin.ts`; the Kotlin gate diffs it.
+- `VaultSealing.kt` twin of the AAD kinds, with its case in `WireFixtureGenerator.kt`.
+  `VaultManager` holds Router-held entries through the OwnerOps, sealed with `ContentKeyring`.
+  `Protocol.kt` regenerates with `bun scripts/codegen-kotlin.ts`; the Kotlin gate diffs it.
+- The `vault` plane: the Router's push and `planeVersions` entry land together with the phone's
+  `applyPlane` arm, so a version the phone cannot acknowledge is never advertised.
+- A full `vault_list` at the caps is about 49 MB of ciphertext in one frame. Page it, or bound the
+  entry total, before the phone holds the list.
 - Vault tab in `MainTabsScreen.kt`, conditional on the capability like Backlog, badged by pending
   requests. List, search, add, edit, delete, reveal. A captured entry opens editable (Q3).
 - Request sheet: the brief names the operation and the shape; buttons Once, 30 minutes, Whole

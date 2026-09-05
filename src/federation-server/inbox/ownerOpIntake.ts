@@ -17,6 +17,7 @@ import {
 import { type LeaseService, readRouterMigrationWindow } from "../migration/leaseService.js";
 import { OwnerQuarantined } from "../owner/ownerStateStore.js";
 import {
+	type ErasedOwnerOpHandler,
 	type OwnerOpCatalogEntry,
 	type OwnerOpHandler,
 	type OwnerOpKind,
@@ -153,11 +154,14 @@ export class OwnerOpIntake {
 			outcome: "durability_uncertain" as const,
 		});
 		const entry = ownerOpEntry(String(op.op.kind));
+		const handler = entry && this.registry.handler(entry.kind);
+		// Refuse before spending the nonce.
+		if (!entry || !handler) return refused("unsupported");
 		try {
-			const result = await this.dispatch(op, entry, refused);
+			const result = await this.dispatch(op, entry, handler);
 			if (isMigrating(result)) return result;
 			if (
-				entry?.mutation !== "delivery" &&
+				entry.mutation !== "delivery" &&
 				nonceStore.acceptOwnerOpNonce &&
 				!nonceStore.acceptOwnerOpNonce(op.domainId, op.signerSignPub, op.nonce, op.at)
 			)
@@ -174,14 +178,17 @@ export class OwnerOpIntake {
 
 	private dispatch(
 		op: OwnerOp,
-		entry: OwnerOpCatalogEntry | null,
-		refused: (reason: string) => OpResultEnvelope,
+		entry: OwnerOpCatalogEntry,
+		handler: ErasedOwnerOpHandler,
 	): unknown | Promise<unknown> {
-		if (readRouterMigrationWindow().fenced && entry && entry.mutation !== "read") {
-			if (!this.params.leases?.ready(op.domainId)) return refused("migrating");
+		if (readRouterMigrationWindow().fenced && entry.mutation !== "read") {
+			if (!this.params.leases?.ready(op.domainId))
+				return {
+					opKey: { conversationId: op.conversationId, opId: op.opId },
+					outcome: "refused" as const,
+					reason: "migrating",
+				};
 		}
-		const handler = entry && this.registry.handler(entry.kind);
-		if (!entry || !handler) return refused("unsupported");
 		const answered = handler(op, entry.value.parse(op.op) as Record<string, unknown>);
 		const schema = entry.answer;
 		if (!schema) return answered;

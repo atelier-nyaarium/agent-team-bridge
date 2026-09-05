@@ -276,6 +276,11 @@ export function createConsoleDispatcher({
 
 			case "cross_domain_untrust":
 				return crossDomainOps.untrust(op);
+
+			case "vault_answer":
+			case "vault_grants":
+			case "vault_revoke":
+				throw new Error("vault is not available on this Gateway");
 		}
 	}
 
