@@ -14,13 +14,15 @@ import org.junit.Test
  */
 class FriendOnboardingTest {
 	private fun prov(pending: PendingTenantRef?) =
-		Provisioning(
+		ConsoleCredentials(
 			routerUrl = "https://router.example:20001",
 			routerCertFp = "ab12",
 			appToken = "app",
 			device = "dev",
 			conversationId = "conv",
 			pendingTenant = pending,
+			enrollHandshake = null,
+			deviceApprovalReach = null,
 		)
 
 	private fun team(name: String, domainId: String?, status: String = "online", displayName: String? = null) =

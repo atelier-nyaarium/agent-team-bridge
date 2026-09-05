@@ -2,11 +2,9 @@ import type { BlobReference } from "../../shared/blob-reference.js";
 import type { ContentEnvelope } from "../../shared/schemasContentKey.js";
 import type { InboxAddress, OpKey, OpResultEnvelope, OwnerOp } from "../../shared/schemasInbox.js";
 import {
-	ScheduleCancelValueSchema,
 	type ScheduledRecord,
 	ScheduledRecordSchema,
 	type ScheduledTarget,
-	ScheduleListValueSchema,
 	ScheduleSendValueSchema,
 } from "../../shared/schemasScheduled.js";
 import { isComposite } from "../../shared/session-id.js";
@@ -293,17 +291,8 @@ export function createScheduledService(deps: ScheduledDeps) {
 			hooks.ownerOp("schedule_send", (op: OwnerOp, value) =>
 				schedule(op.domainId, { conversationId: op.conversationId, device: op.device, opId: op.opId }, value),
 			);
-			hooks.ownerOp("schedule_cancel", (op, value) => {
-				const parsed = ScheduleCancelValueSchema.safeParse(value);
-				return parsed.success
-					? cancel(op.domainId, parsed.data.target, parsed.data.expectedVersion)
-					: envelope(op, "refused", { reason: "malformed" });
-			});
-			hooks.ownerOp("schedule_list", (op, value) =>
-				ScheduleListValueSchema.safeParse(value).success
-					? list(op.domainId)
-					: envelope(op, "refused", { reason: "malformed" }),
-			);
+			hooks.ownerOp("schedule_cancel", (op, value) => cancel(op.domainId, value.target, value.expectedVersion));
+			hooks.ownerOp("schedule_list", (op) => list(op.domainId));
 		},
 	};
 }

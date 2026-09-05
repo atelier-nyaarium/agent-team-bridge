@@ -1,18 +1,14 @@
 import type { DomainSnapshot } from "../shared/admission.js";
 import type { BlobReference } from "../shared/blob-reference.js";
-import { OwnerBlobFetchParamsSchema } from "../shared/router-protocol.js";
 import type { ContentEnvelope } from "../shared/schemasContentKey.js";
 import {
 	formatInboxAddress,
-	GatewayValueOpSchema,
 	type InboxAddress,
 	type InboxRow,
 	type OpKey,
-	PlanesReadValueSchema,
 	parseInboxAddress,
 	signRowEnvelope,
 } from "../shared/schemasInbox.js";
-import { OWNER_OP_KINDS } from "../shared/wire-vocabulary.js";
 import type { ReferenceHeldStore } from "./blobs/referenceHeldStore.js";
 import { createBoardService } from "./board/boardService.js";
 import type { ConsoleSockets } from "./console/consoleSockets.js";
@@ -105,24 +101,21 @@ export function createOwnerServices(deps: OwnerServicesDeps) {
 			inbox.markWaking(domainId, row.envelope.opKey);
 	};
 
-	deps.intake.register(OWNER_OP_KINDS.hello, (op) => ({
+	deps.intake.register("hello", (op) => ({
 		opKey: { conversationId: op.conversationId, opId: op.opId },
 		outcome: "complete" as const,
 		hello: { domainId: op.domainId, signerSignPub: op.signerSignPub },
 	}));
 
-	deps.intake.register(OWNER_OP_KINDS.blobFetch, (op, value) =>
-		bridge.fetchBlobForOwner(op.domainId, OwnerBlobFetchParamsSchema.parse(value)),
-	);
-	deps.intake.register(OWNER_OP_KINDS.gatewayValue, (op, value) => {
-		const parsed = GatewayValueOpSchema.parse(value);
+	deps.intake.register("blob_fetch", (op, value) => bridge.fetchBlobForOwner(op.domainId, value));
+	deps.intake.register("gateway_value", (op, value) => {
 		return bridge
 			.forwardGatewayValue(op.domainId, {
 				opId: op.opId,
 				conversationId: op.conversationId,
 				signerSignPub: op.signerSignPub,
 				device: op.device,
-				...parsed,
+				...value,
 			})
 			.then((result) => {
 				const opKey = { conversationId: op.conversationId, opId: op.opId };
@@ -135,14 +128,11 @@ export function createOwnerServices(deps: OwnerServicesDeps) {
 				return { opKey, outcome: "accepted" as const, result };
 			});
 	});
-	deps.intake.register(OWNER_OP_KINDS.planesRead, (op, value) => {
-		const parsed = PlanesReadValueSchema.parse(value);
-		return {
-			opKey: { conversationId: op.conversationId, opId: op.opId },
-			outcome: "accepted" as const,
-			result: { planes: deps.consoleSockets?.readPlanes(op.domainId, op.signerSignPub, parsed.known) ?? [] },
-		};
-	});
+	deps.intake.register("planes_read", (op, value) => ({
+		opKey: { conversationId: op.conversationId, opId: op.opId },
+		outcome: "accepted" as const,
+		result: { planes: deps.consoleSockets?.readPlanes(op.domainId, op.signerSignPub, value.known) ?? [] },
+	}));
 
 	const share = createShareService({
 		registry,

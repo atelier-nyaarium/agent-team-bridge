@@ -13,7 +13,8 @@ import {
 	type CodexStoredTurn,
 	sanitizeCodexErrorText,
 } from "../shared/codex-agent.js";
-import { type CodexApplication, CodexTransitionError } from "./codexAgentTypes.js";
+import type { SessionRecord } from "../shared/session-store.js";
+import { type CodexAcceptanceResult, type CodexApplication, CodexTransitionError } from "./codexAgentTypes.js";
 
 ////////////////////////////////
 //  Interfaces & Types
@@ -258,4 +259,16 @@ export function withTerminal(
 		fence,
 		updatedAt: at,
 	});
+}
+
+/** `unresolved` marks the ones reconciliation could still make sense of, as opposed to a receipt
+ * that genuinely does not describe this record. Only the first may withhold an acknowledgement. */
+export function indeterminate(
+	owner: SessionRecord,
+	agent: CodexPersistedAgent,
+	operation: CodexStoredOperation,
+	catalogRevision: number,
+	unresolved?: true,
+): CodexAcceptanceResult {
+	return { owner, agent, operation, disposition: "indeterminate", catalogRevision, unresolved };
 }

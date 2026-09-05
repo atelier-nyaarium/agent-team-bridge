@@ -90,7 +90,7 @@ object DebugLog {
 	 * builds enable periodic log streaming; release builds no-op (body inside
 	 * BuildConfig.DEBUG).
 	 */
-	fun attachIngest(prov: Provisioning, baseUrl: () -> String) {
+	fun attachIngest(prov: ConsoleCredentials, baseUrl: () -> String) {
 		if (BuildConfig.DEBUG) {
 			// The base is a PROVIDER, not a value: the transport fails over between Router addresses,
 			// and a flush that kept dialing the one it was attached with would die on exactly the

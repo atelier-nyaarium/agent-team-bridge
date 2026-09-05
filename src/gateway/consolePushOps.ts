@@ -20,7 +20,7 @@ import {
 	payloadBytes,
 	stampBlobHolder,
 } from "./routeSchemas.js";
-import type { CallerScope } from "./routes.js";
+import type { CallerScope } from "./routes/callerGuards.js";
 
 export interface DeliverToOwnerOptions {
 	entry: ConsolePushEntry;

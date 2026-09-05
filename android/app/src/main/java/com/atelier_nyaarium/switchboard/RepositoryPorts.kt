@@ -17,6 +17,9 @@ internal interface IdentityPort {
 internal interface PresencePort {
 	suspend fun refreshAfterAction()
 	fun refreshAdmittedGateways()
+	/** Republish the held roster without a fresh plane read. */
+	suspend fun reapplyCachedTeams()
+	suspend fun restoreLastProjection()
 }
 
 internal class ChatRepositoryPorts(private val repo: ChatRepository) : ClientPort, IdentityPort, PresencePort {
@@ -29,4 +32,6 @@ internal class ChatRepositoryPorts(private val repo: ChatRepository) : ClientPor
 	override val federation get() = repo.federation
 	override suspend fun refreshAfterAction() = repo.presence.refreshAfterAction()
 	override fun refreshAdmittedGateways() = repo.provisioningHost.refreshAdmittedGateways()
+	override suspend fun reapplyCachedTeams() = repo.presence.reapplyCachedTeams()
+	override suspend fun restoreLastProjection() = repo.presence.restoreLastProjection()
 }

@@ -8,6 +8,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { z } from "zod";
+import { OWNER_OP_KIND_LIST } from "../src/federation-server/ownerOpRegistry.js";
 import {
 	AdmissionSchema,
 	RevocationSchema,
@@ -172,7 +173,6 @@ import {
 	GATEWAY_ERROR_STALE_INCARNATION,
 	GATEWAY_REASON_NO_WAITER,
 	OP_OUTCOME_ACCEPTED,
-	OWNER_OP_KINDS,
 	ROUTER_PATHS,
 	SIGNING_TAGS,
 	WIRE_NONCE_BYTES,
@@ -532,7 +532,7 @@ const wireConstants: ReadonlyArray<readonly [string, string | number]> = [
 	...Object.entries(ROUTER_PATHS).map(([name, value]) => [`ROUTER_PATH_${name}`, value] as const),
 	["CONSOLE_TOKEN_HEADER", CONSOLE_TOKEN_HEADER],
 	["BEARER_PREFIX", BEARER_PREFIX],
-	...Object.entries(OWNER_OP_KINDS).map(([name, value]) => [`OWNER_OP_${name}`, value] as const),
+	...OWNER_OP_KIND_LIST.map((kind) => [`OWNER_OP_${kind}`, kind] as const),
 	...Object.entries(SIGNING_TAGS).map(([name, value]) => [`SIGNING_TAG_${name}`, value] as const),
 	["OP_OUTCOME_ACCEPTED", OP_OUTCOME_ACCEPTED],
 	["BOARD_OUTCOME_APPLIED", BOARD_OUTCOME_APPLIED],

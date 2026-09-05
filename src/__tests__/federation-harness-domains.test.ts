@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { canonicalJson, sha256Hex } from "../shared/canonical-json.js";
-import { signRowEnvelope } from "../shared/schemasInbox.js";
+import { sha256Hex } from "../shared/canonical-json.js";
 import { parseSessionName } from "../shared/session-id.js";
 import { attachFakeSession, type FakeSession } from "../testing/fakeSession.js";
 import { type DomainPeer, type FederationHarness, startFederationHarness } from "../testing/federationHarness.js";
@@ -54,12 +53,10 @@ describe("two linked Domains", () => {
 		);
 		return peer.phone.open(row) as DispatchResult;
 	};
-	/** Router record, then gateway mirror. */
+	/** One value op; the gateway writes the Router record and its own mirror. */
 	const share = async (peer: DomainPeer, team: string, toDomainId: string, kind: "share" | "unshare" = "share") => {
 		const op = kind === "share" ? "cross_domain_share" : "cross_domain_unshare";
 		const target = { kind: "domain" as const, domainId: toDomainId };
-		const recorded = await peer.phone.send({ kind: op, sessionTarget: remote(peer, team), target });
-		expect(recorded, JSON.stringify(recorded)).toMatchObject({ ok: true });
 		const mirrored = await peer.phone.value({ kind: op, sessionTarget: team, target });
 		expect(mirrored.result, JSON.stringify(mirrored.result)).toMatchObject({ ok: true });
 	};
@@ -248,8 +245,6 @@ describe("two linked Domains", () => {
 
 /** A rogue peer's reply for a job it never held. */
 async function forgeReply(from: DomainPeer, to: DomainPeer, jobKey: string, response: string): Promise<unknown> {
-	const federation = from.gateway.federation();
-	if (!federation) throw new Error("the forging gateway is not federated");
 	const target = { domainId: to.set.domain.id, gatewayId: to.set.gateway.id };
 	const op = { kind: "response_push", session_id: jobKey, response };
 	const envelope = {
@@ -261,16 +256,7 @@ async function forgeReply(from: DomainPeer, to: DomainPeer, jobKey: string, resp
 	};
 	const { project, session: sessionName } = parseSessionName(jobKey);
 	const address = `session:${target.domainId}/${target.gatewayId}/${project}.${sessionName}`;
-	const answer = await federation.routerClient.callInboxTool("inbox_append", {
-		address,
-		row: {
-			envelope,
-			producerSig: signRowEnvelope(envelope, from.set.gateway.identity.sign.priv),
-			body: federation.sealer.seal(target, op),
-		},
-		opKey: { ...envelope.opKey, hash: sha256Hex(canonicalJson({ address, op })) },
-	});
-	return answer.result;
+	return from.gateway.faults.forgePeerRow(target, address, envelope, op);
 }
 
 function linkStub() {

@@ -12,7 +12,7 @@ import { Allowlist } from "./federation/allowlist.js";
 import { ContentKeyStore } from "./federation/contentKeyStore.js";
 import type { CrossDomainHandshakeCoordinator } from "./federation/crossDomainHandshake.js";
 import type { CrossDomainPeers } from "./federation/crossDomainPeers.js";
-import type { CrossDomainPresenceSource } from "./federation/crossDomainPresence.js";
+import type { CrossDomainPresenceSource } from "./federation/crossDomainPresenceSource.js";
 import type { CrossDomainShareState } from "./federation/crossDomainShareState.js";
 import type { AdmitGatewayPayload } from "./federation/enrollQr.js";
 import { loadOrCreateIdentity } from "./federation/identity.js";
@@ -35,14 +35,23 @@ export interface DomainMeta {
 	isAdminDomain?: boolean;
 }
 
-/** The Router frame handlers, built against the federation-aware routes after the rebuild.
- * A frame arriving before they land on the slice is dropped (the console re-polls). */
-export interface RouterHandlers {
+/** What the gateway answers a Router frame with. A frame arriving before these land on the slice
+ * is dropped (the console re-polls). */
+export interface RouterFrameHandlers {
 	gatewayRelay: (frame: unknown) => void;
 	valueOp: (frame: unknown) => void;
 	crossDomainHandshake: (frame: unknown) => void;
+}
+
+/** The cross-Domain presence pipeline's own lifecycle, separate from frame dispatch. */
+export interface RouterPresenceHandlers {
 	presenceSource: CrossDomainPresenceSource;
 	stopPresencePushes: () => void;
+}
+
+export interface RouterHandlers {
+	frames: RouterFrameHandlers;
+	presence: RouterPresenceHandlers;
 }
 
 /** Everything FederationActive owns. Only domainMeta (the Router's first register reply) and

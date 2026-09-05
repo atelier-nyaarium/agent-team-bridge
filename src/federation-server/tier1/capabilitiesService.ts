@@ -1,6 +1,6 @@
 import type { CapabilitySnapshot } from "../../shared/capabilities.js";
 import { admit, type CapabilityFoldRecord, foldCapabilitySnapshot } from "../../shared/capability-fold.js";
-import { CapabilitiesReadSchema, CapabilitiesReportSchema } from "../../shared/schemasTier1.js";
+import { CapabilitiesReadSchema } from "../../shared/schemasTier1.js";
 import { foldWriteResult } from "../../shared/write-result.js";
 import { OwnerOpRefused } from "../inbox/ownerOpIntake.js";
 import type { OwnerStoreRegistry } from "../inbox/ownerStoreRegistry.js";
@@ -95,17 +95,12 @@ export function createCapabilitiesService(deps: CapabilitiesServiceDeps) {
 		snapshot,
 		sweep,
 		register(hooks: OwnerServiceHooks): void {
-			hooks.ownerOp("capabilities_report", async (_op, value) => {
-				const parsed = CapabilitiesReportSchema.safeParse(value);
-				if (!parsed.success) throw new OwnerOpRefused("malformed");
-				const result = report(_op.domainId, _op.conversationId, parsed.data);
+			hooks.ownerOp("capabilities_report", async (op, value) => {
+				const result = report(op.domainId, op.conversationId, value);
 				if (!result.applied) return { outcome: result.outcome };
-				return { ...snapshot(_op.domainId), outcome: result.outcome };
+				return { ...snapshot(op.domainId), outcome: result.outcome };
 			});
-			hooks.ownerOp("capabilities_read", async (op, value) => {
-				if (!CapabilitiesReadSchema.safeParse(value).success) throw new OwnerOpRefused("malformed");
-				return snapshot(op.domainId);
-			});
+			hooks.ownerOp("capabilities_read", async (op) => snapshot(op.domainId));
 			hooks.gatewayFrame("capabilities_read", async (reg, value) => {
 				if (!CapabilitiesReadSchema.safeParse(value).success) throw new OwnerOpRefused("malformed");
 				try {

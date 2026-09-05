@@ -1,11 +1,13 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { CONSOLE_TOKEN_HEADER, OWNER_OP_KINDS, ROUTER_PATHS, SIGNING_TAGS } from "../shared/wire-vocabulary.js";
+import { OWNER_OP_KIND_LIST } from "../federation-server/ownerOpRegistry.js";
+import { CONSOLE_TOKEN_HEADER, ROUTER_PATHS, SIGNING_TAGS } from "../shared/wire-vocabulary.js";
 
 const root = join(import.meta.dirname, "..");
 const kotlinRoot = join(root, "..", "android/app/src/main/java/com/atelier_nyaarium/switchboard");
-const tsExcluded = new Set(["wire-vocabulary.ts", "composeGateway.ts", "index.ts"]);
+// httpRouter.ts serves the GATEWAY's own /health, which only spells the Router's path.
+const tsExcluded = new Set(["wire-vocabulary.ts", "httpRouter.ts", "index.ts"]);
 const schemaFile = (file: string) => file.startsWith("schemas") || file === "router-protocol.ts";
 const stringLiteral = (value: string) => new RegExp(`["']${value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}["']`);
 
@@ -45,7 +47,7 @@ describe("wire vocabulary residue", () => {
 			...Object.values(ROUTER_PATHS).filter((value) => value !== ROUTER_PATHS.root),
 			CONSOLE_TOKEN_HEADER,
 			...Object.values(SIGNING_TAGS),
-			...Object.values(OWNER_OP_KINDS),
+			...OWNER_OP_KIND_LIST,
 			"welcome",
 			"inbox_rows",
 			"plane",

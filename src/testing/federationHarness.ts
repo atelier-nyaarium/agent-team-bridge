@@ -116,7 +116,7 @@ export async function waitFor<T>(probe: () => Probe<T>, label: string, timeoutMs
 }
 
 const registered = (graph: GatewayGraph) =>
-	waitFor(() => graph.federation()?.routerClient.isRegistered() || undefined, "gateway registration", 15_000);
+	waitFor(() => graph.faults.routerRegistered() || undefined, "gateway registration", 15_000);
 
 export async function startFederationHarness(options: FederationHarnessOptions = {}): Promise<FederationHarness> {
 	const base = await startRouterOnly({ now: options.now, wakeTimeoutMs: options.wakeTimeoutMs });

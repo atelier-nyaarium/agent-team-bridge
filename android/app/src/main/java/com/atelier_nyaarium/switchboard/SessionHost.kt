@@ -47,8 +47,6 @@ internal interface SessionHost {
 	fun cancelGoal(team: String)
 	fun dropPlayback(team: String)
 	fun scheduleAttachmentDelete(srcs: List<String>)
-	fun refreshAfterAction()
-	suspend fun reapplyCachedTeams()
 }
 
 internal class ChatRepositorySessionHost(private val repo: ChatRepository) : SessionHost {
@@ -106,6 +104,4 @@ internal class ChatRepositorySessionHost(private val repo: ChatRepository) : Ses
 		}
 	}
 	override fun scheduleAttachmentDelete(srcs: List<String>) = repo.attachments.scheduleAttachmentDelete(srcs)
-	override fun refreshAfterAction() { launchInBackground { repo.presence.refreshAfterAction() } }
-	override suspend fun reapplyCachedTeams() { repo.presence.reapplyCachedTeams() }
 }

@@ -128,7 +128,7 @@ private fun advanceFloor(answer: kotlinx.serialization.json.JsonElement?, fallba
 	(answer as? JsonObject)?.get("floor")?.jsonPrimitive?.content?.toLongOrNull() ?: fallback
 
 /** Four plane cursors and drain-gate subscribers. */
-internal class PollDrain(private val host: DrainHost) : ClearsOnReprovision {
+internal class PollDrain(private val host: DrainHost, private val presence: PresencePort) : ClearsOnReprovision {
 	private var pollFails = 0
 	private var pollJob: Job? = null
 	// Scope for loop-bound work.
@@ -304,7 +304,7 @@ internal class PollDrain(private val host: DrainHost) : ClearsOnReprovision {
 		pollScope = scope
 		pollJob = scope.launch(Dispatchers.IO) {
 				// Restore cached roster first.
-				runCatching { host.restorePresence() }
+				runCatching { presence.restoreLastProjection() }
 			pollLoop@ while (isActive) {
 				var failed = false
 				var heldEmpty = false

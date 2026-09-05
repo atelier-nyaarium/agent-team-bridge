@@ -5,6 +5,7 @@ import com.atelier_nyaarium.switchboard.crypto.ContentKeyring
 import com.atelier_nyaarium.switchboard.crypto.Keyring
 import com.atelier_nyaarium.switchboard.proto.ConsoleApprovalJoin
 import com.atelier_nyaarium.switchboard.proto.ConsoleApprovalOp
+import com.atelier_nyaarium.switchboard.proto.Provisioning
 import com.atelier_nyaarium.switchboard.proto.SignedAdmission
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -57,11 +58,11 @@ internal class DeviceApprovalOps(
 	/** The Router's public device-approval reach for the authorize-console QR, or null when this network
 	 * has no public ingress (the Add-a-device entry is then shown disabled). */
 	fun deviceApprovalReach(): String? =
-		runCatching { store.load()?.let { Provisioning.parse(it, store) } }.getOrNull()?.deviceApprovalReach?.takeIf { it.isNotEmpty() }
+		runCatching { store.load()?.let { ConsoleCredentials.parse(it, store) } }.getOrNull()?.deviceApprovalReach?.takeIf { it.isNotEmpty() }
 
 	/** The Router cert fingerprint to pin the reach against, empty when this device holds none. */
 	private fun routerCertFp(): String =
-		runCatching { store.load()?.let { Provisioning.parse(it, store) } }.getOrNull()?.routerCertFp ?: ""
+		runCatching { store.load()?.let { ConsoleCredentials.parse(it, store) } }.getOrNull()?.routerCertFp ?: ""
 
 	/** HELD device: arm a one-time approval window and build the authorize-console QR. The QR carries
 	 * PUBLIC material only (owner keys + Domain + the reach/token/nonce), never an SA token. Fails when
@@ -138,7 +139,7 @@ internal class DeviceApprovalOps(
 	/** Transport for an approved device. */
 	private fun buildConsoleTransport(recipientBoxPub: String): ConsoleTransport {
 		val boot = identity.readyOrNull() ?: error("Your Domain isn't confirmed yet - open a session first.")
-		val prov = boot.provisioning
+		val prov = boot.credentials
 		val console = boot.consoleIdentity
 		val domainId = boot.domainId
 		identity.ensureContentEpochs(boot)
@@ -234,12 +235,12 @@ internal class DeviceApprovalOps(
 		}
 		// Every transport field is restated: a rebuild that enumerates a subset drops a record on the
 		// way in, and the new device silently provisions against nothing.
-		val prov = com.atelier_nyaarium.switchboard.proto.Provisioning(
+		val prov = Provisioning(
 			routerUrl = transport.routerUrl.ifEmpty { null },
 			routerCertFp = transport.routerCertFp.ifEmpty { null },
 			appToken = transport.appToken,
 		)
-		val blob = wireJson.encodeToString(com.atelier_nyaarium.switchboard.proto.Provisioning.serializer(), prov)
+		val blob = wireJson.encodeToString(Provisioning.serializer(), prov)
 		val domainJson = transport.domain?.let {
 			wireJson.encodeToString(com.atelier_nyaarium.switchboard.proto.DomainSnapshot.serializer(), it)
 		}
@@ -257,7 +258,7 @@ internal class DeviceApprovalOps(
 			"installed approved-device transport; consoleAdmitted+firstRooted set, " +
 				"keyring=${if (transport.domain != null) "adopted" else "absent"} gateway=${transport.gatewayId ?: "none"}",
 		)
-		val parsed = Provisioning.parse(blob, store)
+		val parsed = ConsoleCredentials.parse(blob, store)
 		state.update { it.copy(provisioned = true, error = null, deviceName = parsed.device, firstRooted = true) }
 	}
 

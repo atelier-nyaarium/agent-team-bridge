@@ -3,14 +3,11 @@ import { sha256Hex } from "../shared/canonical-json.js";
 import { verifyKeyReceipt, verifyKeyRequest } from "../shared/key-delivery.js";
 import {
 	type KeyGrant,
-	KeyGrantOpSchema,
 	type KeyReceipt,
 	KeyReceiptFrameSchema,
-	KeyReceiptOpSchema,
 	KeyReceiptsReadResultSchema,
 	type KeyRequest,
 	KeyRequestFrameSchema,
-	KeyRequestOpSchema,
 } from "../shared/schemasContentKey.js";
 import { type InboxAddress, type InboxRow, signRowEnvelope } from "../shared/schemasInbox.js";
 import type { GatewayRegistration } from "./gatewayBridge.js";
@@ -126,30 +123,22 @@ export function createKeyDeliveryService(params: {
 	};
 	const register = (hooks: OwnerServiceHooks) => {
 		hooks.ownerOp("key_request", (op, value) => {
-			const parsed = KeyRequestOpSchema.safeParse(value);
-			if (!parsed.success) return refuse({ conversationId: op.conversationId, opId: op.opId }, "malformed");
-			if (parsed.data.request.requesterSignPub !== op.signerSignPub)
+			if (value.request.requesterSignPub !== op.signerSignPub)
 				return refuse({ conversationId: op.conversationId, opId: op.opId }, "requester");
-			return requestHandler(op, parsed.data.request);
+			return requestHandler(op, value.request);
 		});
-		hooks.ownerOp("key_grant", (op, value) => {
-			const parsed = KeyGrantOpSchema.safeParse(value);
-			if (!parsed.success) return refuse({ conversationId: op.conversationId, opId: op.opId }, "malformed");
-			return grantHandler(op, parsed.data.grant);
-		});
+		hooks.ownerOp("key_grant", (op, value) => grantHandler(op, value.grant));
 		hooks.ownerOp("key_receipt", (op, value) => {
-			const parsed = KeyReceiptOpSchema.safeParse(value);
 			const opKey = { conversationId: op.conversationId, opId: op.opId };
 			if (
-				!parsed.success ||
-				!verifyKeyReceipt(parsed.data.receipt) ||
-				parsed.data.receipt.domainId !== op.domainId ||
-				parsed.data.receipt.recipientSignPub !== op.signerSignPub ||
-				Math.abs(params.registry.now() - parsed.data.receipt.at) > REGISTER_MAX_SKEW_MS ||
-				!admission(op.domainId, parsed.data.receipt.recipientSignPub)
+				!verifyKeyReceipt(value.receipt) ||
+				value.receipt.domainId !== op.domainId ||
+				value.receipt.recipientSignPub !== op.signerSignPub ||
+				Math.abs(params.registry.now() - value.receipt.at) > REGISTER_MAX_SKEW_MS ||
+				!admission(op.domainId, value.receipt.recipientSignPub)
 			)
 				return refuse(opKey, "invalid receipt");
-			return receipt(op.domainId, opKey, parsed.data.receipt);
+			return receipt(op.domainId, opKey, value.receipt);
 		});
 		hooks.ownerOp("key_receipts_read", (op) => {
 			const receipts = params.registry

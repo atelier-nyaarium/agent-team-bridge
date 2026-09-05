@@ -452,7 +452,7 @@ export function createBoardService(deps: Deps) {
 	const register = (hooks: OwnerServiceHooks) => {
 		// OwnerOp id is the idempotency key.
 		hooks.ownerOp("board_write", (op, value) =>
-			write(op.domainId, BoardWriteSchema.parse(value.write ?? value), { kind: "owner" }, op.opId),
+			write(op.domainId, value.write ?? BoardWriteSchema.parse(value), { kind: "owner" }, op.opId),
 		);
 		hooks.ownerOp("board_read", (op) => read(op.domainId));
 		// Gateways act only for registered sessions.

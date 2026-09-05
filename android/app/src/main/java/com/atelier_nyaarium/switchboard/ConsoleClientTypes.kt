@@ -6,6 +6,7 @@ import com.atelier_nyaarium.switchboard.proto.EnrollHandshakeOp
 import com.atelier_nyaarium.switchboard.proto.EnrollHandshakeRef
 import com.atelier_nyaarium.switchboard.proto.EnrollOp
 import com.atelier_nyaarium.switchboard.proto.PendingTenantRef
+import com.atelier_nyaarium.switchboard.proto.Provisioning
 import com.atelier_nyaarium.switchboard.proto.RosterRequest
 import com.atelier_nyaarium.switchboard.proto.SealedEnvelope
 import com.atelier_nyaarium.switchboard.proto.SignedFirstRoot
@@ -23,58 +24,60 @@ import kotlinx.serialization.json.Json
  * Credential blob the console holds. Reaches the console bridge through the leaf-pinned Router,
  * which the app token authenticates to.
  *
- * Thin wrapper over the generated proto.Provisioning wire shape, adding the runtime behavior a
- * schema cannot express: device defaulting to Build.MODEL, conversationId persistence, and
- * trailing-slash URL normalization.
+ * Every field is named and required, so nothing a reader depends on can be absent. [parse] is the
+ * one builder over the optional `Provisioning` wire shape, and the one place its optionality is
+ * resolved: the device name, the conversation id, and trailing-slash normalization.
  */
-data class Provisioning(
+data class ConsoleCredentials(
 	/** The Router endpoint and the leaf fingerprint pinned against it. */
-	val routerUrl: String = "",
-	val routerCertFp: String = "",
+	val routerUrl: String,
+	val routerCertFp: String,
 	val appToken: String,
 	val device: String,
 	val conversationId: String,
 	/** Present on a friend invite blob: the pending Domain id + one-time invite nonce the app
 	 * first-roots with. Its presence is what distinguishes an invite from an already-rooted admin blob. */
-	val pendingTenant: PendingTenantRef? = null,
+	val pendingTenant: PendingTenantRef?,
 	/** Present alongside pendingTenant on an enroll invite: the admin's owner keys + Domain and the
 	 * handshakeId + pin seeding the in-person trust compare. The enrollee reads it after first-rooting
 	 * to run the ceremony as enrollee. */
-	val enrollHandshake: EnrollHandshakeRef? = null,
+	val enrollHandshake: EnrollHandshakeRef?,
 	/** The Router's public nonce-gated device-approval ingress. A held device stamps it into the
 	 * authorize-console QR so a fresh device can reach the Router with no creds; absent means this
 	 * network has no public ingress and the Add-a-device entry is disabled. */
-	val deviceApprovalReach: String? = null,
+	val deviceApprovalReach: String?,
 ) {
 	companion object {
-		fun parse(blob: String, store: AppStateStore): Provisioning {
-			val p = wireJson.decodeFromString<com.atelier_nyaarium.switchboard.proto.Provisioning>(blob)
-			val stored = store.load()?.let {
-				runCatching { wireJson.decodeFromString<com.atelier_nyaarium.switchboard.proto.Provisioning>(it) }.getOrNull()
-			}
-			// Transport may change freely; the credential and the Domain are what identify this console.
-			val remembered = if (stored != null && stored.appToken == p.appToken && stored.pendingTenant == p.pendingTenant) {
-				store.loadConversationId()
-			} else {
-				null
-			}
-			val conversationId = p.conversationId ?: remembered ?: UUID.randomUUID().toString()
-			store.saveConversationId(conversationId)
-			val device = (p.device ?: (android.os.Build.MODEL ?: "android"))
-				.replace(Regex("[/\\r\\n]"), "-")
-				.take(64)
-				.ifEmpty { "android" }
-			return Provisioning(
-				routerUrl = p.routerUrl?.trimEnd('/') ?: "",
-				routerCertFp = p.routerCertFp ?: "",
-				appToken = p.appToken ?: "",
-				device = device,
-				conversationId = conversationId,
-				pendingTenant = p.pendingTenant,
-				enrollHandshake = p.enrollHandshake,
-				deviceApprovalReach = p.deviceApprovalReach?.trimEnd('/'),
+		private val DEVICE_DISALLOWED = Regex("[/\\r\\n]")
+
+		/** Reads the store; [PhoneIdentity] persists what a written blob resolves to. */
+		fun parse(blob: String, store: AppStateStore): ConsoleCredentials {
+			val wire = wireJson.decodeFromString<Provisioning>(blob)
+			return ConsoleCredentials(
+				routerUrl = wire.routerUrl?.trimEnd('/') ?: "",
+				routerCertFp = wire.routerCertFp ?: "",
+				appToken = wire.appToken ?: "",
+				device = deviceNameOf(wire.device),
+				conversationId = conversationIdFor(wire, store),
+				pendingTenant = wire.pendingTenant,
+				enrollHandshake = wire.enrollHandshake,
+				deviceApprovalReach = wire.deviceApprovalReach?.trimEnd('/'),
 			)
 		}
+
+		/** Transport may change freely; the credential and the Domain are what identify this console. */
+		internal fun conversationIdFor(wire: Provisioning, store: AppStateStore): String {
+			wire.conversationId?.let { return it }
+			val stored = store.load()?.let { runCatching { wireJson.decodeFromString<Provisioning>(it) }.getOrNull() }
+			val sameConsole = stored != null && stored.appToken == wire.appToken && stored.pendingTenant == wire.pendingTenant
+			return (if (sameConsole) store.loadConversationId() else null) ?: UUID.randomUUID().toString()
+		}
+
+		private fun deviceNameOf(declared: String?): String =
+			(declared ?: (android.os.Build.MODEL ?: "android"))
+				.replace(DEVICE_DISALLOWED, "-")
+				.take(64)
+				.ifEmpty { "android" }
 	}
 }
 

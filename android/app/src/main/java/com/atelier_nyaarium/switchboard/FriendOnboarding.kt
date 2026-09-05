@@ -73,7 +73,7 @@ object FriendOnboarding {
 	 * `pendingTenant` is the only discriminator (a register reply never reports pending), so present
 	 * -> Root, absent -> NotPending. `alreadyRooted` short-circuits to NotPending so a reconnect
 	 * after a successful root does not re-POST first_root. */
-	fun decide(prov: Provisioning, alreadyRooted: Boolean): FirstRootDecision {
+	fun decide(prov: ConsoleCredentials, alreadyRooted: Boolean): FirstRootDecision {
 		val pending = prov.pendingTenant
 		if (pending == null || alreadyRooted) return FirstRootDecision.NotPending
 		return FirstRootDecision.Root(pending.domainId, pending.nonce)

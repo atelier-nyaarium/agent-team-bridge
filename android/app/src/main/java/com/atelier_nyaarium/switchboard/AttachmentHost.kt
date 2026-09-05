@@ -20,7 +20,7 @@ internal fun AttachmentHost.clientOrReject(files: List<OutgoingFile>): ConsoleCl
 }
 
 internal class ChatRepositoryAttachmentHost(private val repo: ChatRepository) : AttachmentHost {
-	override val client: ConsoleClient? get() = repo.client
+	override val client: ConsoleClient? get() = repo.clientOrNull()
 	override fun admit(uri: Uri, destination: File): Admission = OutgoingFiles.admit(repo.contentResolver, uri, destination)
 	override fun cleanup(files: List<OutgoingFile>) = files.forEach { it.source.delete() }
 	override fun report(message: String) { repo._state.update { it.copy(error = message) } }

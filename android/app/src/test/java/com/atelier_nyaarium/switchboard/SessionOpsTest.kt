@@ -58,8 +58,6 @@ class SessionOpsTest {
 		override fun cancelGoal(team: String) { goals++ }
 		override fun dropPlayback(team: String) { playback++ }
 		override fun scheduleAttachmentDelete(srcs: List<String>) = Unit
-		override fun refreshAfterAction() = Unit
-		override suspend fun reapplyCachedTeams() = Unit
 	}
 
 	@Test
@@ -78,20 +76,24 @@ class SessionOpsTest {
 	@Test
 	fun spawnRecordsProjectAndSettlesPendingState() = runBlocking {
 		val host = FakeHost()
-		SessionOps(host).spawnSession("dom.gw.project", "label", "/work")
+		val presence = RecordingPresencePort()
+		SessionOps(host, presence).spawnSession("dom.gw.project", "label", "/work")
 
 		assertEquals(listOf("dom.gw.project"), host.remembered)
 		assertEquals(listOf("dom.gw.project"), host.created)
 		assertEquals(emptySet<Pair<String, String>>(), host.state.value.pendingSpawns)
+		assertEquals(1, presence.refreshes)
 	}
 
 	@Test
 	fun wakePublishesReceiptAndClearRemovesIt() {
 		val host = FakeHost()
-		val ops = SessionOps(host)
+		val presence = RecordingPresencePort()
+		val ops = SessionOps(host, presence)
 		ops.wakeSession("dom.gw.host.session")
 
 		assertEquals(listOf("dom.gw.host.session"), host.wakes)
+		assertEquals(1, presence.reapplies)
 		val now = System.currentTimeMillis()
 		assertEquals(ActionReceipt.Outcome.ACCEPTED, ops.receiptFor("dom.gw.host.session", now)?.outcome)
 		ops.clearReceipt("dom.gw.host.session")
@@ -108,7 +110,7 @@ class SessionOpsTest {
 			labels = mapOf(team to "label"),
 			drafts = mapOf(team to Draft(text = "draft")),
 		)
-		SessionOps(host).forget(team, "cancel")
+		SessionOps(host, IdlePresencePort).forget(team, "cancel")
 
 		assertNull(host.state.value.teams.firstOrNull { it.name == team })
 		assertNull(host.state.value.threads[team])

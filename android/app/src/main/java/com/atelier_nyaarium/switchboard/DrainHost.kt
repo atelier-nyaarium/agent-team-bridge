@@ -21,7 +21,6 @@ internal interface DrainHost {
 
 	fun link(): ConsoleLink
 	fun plan(visible: Boolean, socket: Boolean, failed: Boolean): ConsoleTransportPlan
-	suspend fun restorePresence()
 	fun thisDeviceAddress(): Address?
 	fun fromCanonical(value: String): String?
 	fun advanceMailbox(result: SyncPollResult<Drained>): SyncAdvance<Drained>
@@ -53,7 +52,6 @@ internal class ChatRepositoryDrainHost(private val repo: ChatRepository) : Drain
 	override fun link() = repo.transportCoordinator.link()
 	override fun plan(visible: Boolean, socket: Boolean, failed: Boolean) =
 		repo.transportCoordinator.plan(visible, socket, failed)
-	override suspend fun restorePresence() { repo.presence.restoreLastProjection() }
 	override fun thisDeviceAddress() = repo.thisDeviceAddress()
 	override fun fromCanonical(value: String) = repo.fromCanonical(value)
 	override fun advanceMailbox(result: SyncPollResult<Drained>) = repo.mailboxSync.advance(result)

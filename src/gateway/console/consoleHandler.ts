@@ -1,31 +1,19 @@
 import crypto from "node:crypto";
-import type { BoardDisposition } from "../../shared/board-authority.js";
-import type { ConsoleOp, ConsoleOpResult, CrossDomainShareTarget } from "../../shared/console-protocol.js";
-import {
-	ALLOWED_KEYS,
-	type HostListDirsResult,
-	type HostOp,
-	type HostOpResult,
-	type HostPeekResult,
-	isSpawnWorkdirPath,
-	type TmuxTarget,
-} from "../../shared/host-op.js";
+import type { ConsoleOp, ConsoleOpResult } from "../../shared/console-protocol.js";
 import { fenced, MIGRATING } from "../../shared/migration-fence.js";
 import { ownerKeyId } from "../../shared/owner-id.js";
 import { DELIVERY_OP_KINDS, TOLERATED_DELIVERY_OP_KINDS, VALUE_OP_KINDS } from "../../shared/schemasConsoleOp.js";
-import { composeSessionName, SpawnPoint, storeKey } from "../../shared/session-id.js";
-import { sanitizeLabel } from "../../shared/session-sanitize.js";
-import type { SessionRecord } from "../../shared/session-store.js";
-import type { TeamInfo } from "../../shared/types.js";
+import { SpawnPoint, storeKey } from "../../shared/session-id.js";
 import { answerBlobOp } from "../blobOps.js";
 import { readAnchorsPlaneName } from "../readAnchors.js";
+import { createCrossDomainHandlers } from "./consoleCrossDomain.js";
+import { createSessionLifecycleHandlers } from "./consoleSessionLifecycle.js";
 import { createConsoleTargets } from "./consoleTargets.js";
+import { createTerminalHandlers } from "./consoleTerminal.js";
 import {
 	type ConsoleHandlerDeps,
 	CREATE_SESSION_BOUND_MS,
-	CreateSessionAmbiguousError,
 	FAKE_REQ,
-	friendlyPeekError,
 	SEND_BOUND_MS,
 	type SendRouteJson,
 } from "./consoleTypes.js";
@@ -42,7 +30,6 @@ export function createConsoleDispatcher({
 	isTrustedCatalogProject,
 	dropSessionResume,
 	sessionStore,
-	capabilityStore,
 	domain,
 	planeRegistry,
 	readAnchors,
@@ -60,6 +47,27 @@ export function createConsoleDispatcher({
 	durableOpStore,
 }: ConsoleHandlerDeps) {
 	const targets = createConsoleTargets({ localDomainId, localGatewayId, isTrustedCatalogProject });
+	const terminalOps = createTerminalHandlers({ targets, relayToHost, sessionStore });
+	const sessionLifecycle = createSessionLifecycleHandlers({
+		targets,
+		createSessionBoundMs,
+		relayToHost,
+		tryWakeTeam,
+		isWakeInFlight,
+		markCreateInFlight,
+		awaitRegister,
+		dropSessionResume,
+		sessionStore,
+	});
+	const crossDomainOps = createCrossDomainHandlers({
+		routes,
+		targets,
+		domain,
+		crossDomain,
+		crossDomainShare,
+		unlinkDomain,
+		untrustOwner,
+	});
 	const ownerByConversation = new Map<string, string>();
 	const appendIfLive = (
 		conversationId: string,
@@ -76,12 +84,6 @@ export function createConsoleDispatcher({
 		});
 		return delivered ? undefined : fenced() ? MIGRATING : undefined;
 	};
-	function assertDaemonDrivable(target: TmuxTarget): void {
-		const record = sessionStore?.getByTeam(composeSessionName(target.name, target.sessionName));
-		if (record?.liveTeam && record.liveTeam.team !== sessionStore!.teamOf(record)) {
-			throw new Error(`terminal view unavailable for a user-launched session; end it from your terminal`);
-		}
-	}
 
 	async function dispatch(
 		op: ConsoleOp,
@@ -217,54 +219,14 @@ export function createConsoleDispatcher({
 				return { advanced };
 			}
 
-			case "peek": {
-				if (!relayToHost) throw new Error("terminal view unavailable on this Gateway");
-				const target = targets.tmuxTarget(op.target);
-				assertDaemonDrivable(target);
-				const r = await relayToHost({ kind: "peek", target });
-				if (!r.ok) throw new Error(friendlyPeekError(r.error, r.errorKind));
-				const peek = r.result as HostPeekResult;
-				if (op.sinceHash && op.sinceHash === peek.hash) return { hash: peek.hash, unchanged: true };
-				if (peek.kind === "container-logs")
-					return { text: peek.text, hash: peek.hash, kind: "container-logs" as const };
-				return { ansi: peek.ansi, hash: peek.hash, kind: "tmux" as const };
-			}
+			case "peek":
+				return terminalOps.peek(op);
 
-			case "tmux_send": {
-				if (!relayToHost) throw new Error("terminal view unavailable on this Gateway");
-				if ((op.text == null) === (op.key == null)) {
-					throw new Error("tmux_send requires exactly one of text or key");
-				}
-				const target = targets.tmuxTarget(op.target);
-				assertDaemonDrivable(target);
-				const dedupKey = `${conversationId}:${opId}`;
-				let hostOp: HostOp;
-				if (op.key != null) {
-					if (!ALLOWED_KEYS.has(op.key)) throw new Error(`disallowed key "${op.key}"`);
-					hostOp = { kind: "sendKey", target, key: op.key, dedupKey };
-				} else {
-					hostOp = { kind: "sendText", target, text: op.text ?? "", submit: op.submit ?? true, dedupKey };
-				}
-				const r = await relayToHost(hostOp);
-				if (!r.ok) throw new Error(r.error ?? "send failed");
-				return { sent: true };
-			}
+			case "tmux_send":
+				return terminalOps.tmuxSend(op, conversationId, opId);
 
-			case "list_dirs": {
-				if (!relayToHost) throw new Error("terminal view unavailable on this Gateway");
-				// Blank names the spawn point's own default directory, which the machine spells back.
-				if (op.path.length > 0 && !isSpawnWorkdirPath(op.spawn, op.path)) {
-					throw new Error("invalid path: must be absolute, ~-rooted, or a Windows drive path");
-				}
-				const r = await relayToHost({ kind: "listDirs", path: op.path, spawn: op.spawn });
-				if (!r.ok) throw new Error(r.error ?? "list failed");
-				const listed = r.result as HostListDirsResult;
-				return {
-					entries: listed.entries,
-					...(listed.truncated ? { truncated: true } : {}),
-					...(listed.path ? { path: listed.path } : {}),
-				};
-			}
+			case "list_dirs":
+				return terminalOps.listDirs(op);
 
 			case "blob_stat":
 			case "blob_put":
@@ -272,327 +234,57 @@ export function createConsoleDispatcher({
 				// Fetch Router cache before the source machine.
 				return answerBlobOp(blobStore, op, fetchBlobFromGateway);
 
-			case "create_session": {
-				if (!relayToHost) throw new Error("terminal view unavailable on this Gateway");
-				if (!op.sessionName && !op.displayLabel) {
-					throw new Error("create_session needs a sessionName or a displayLabel");
-				}
-				const spawn = targets.localSpawn(op.target);
-				if (op.workdir != null && !isSpawnWorkdirPath(spawn, op.workdir)) {
-					throw new Error("invalid workdir: must be an absolute, ~-rooted, or Windows drive path");
-				}
-				const labelSanitized = op.displayLabel != null && sanitizeLabel(op.displayLabel) === null;
-				const dedupKey = `${conversationId}:${opId}`;
-				let sessionId: string;
-				let label: string;
-				let adopted: { record: SessionRecord; created: boolean } | null | undefined;
-				let rollbackEligible = false;
-				if (op.sessionName) {
-					sessionId = op.sessionName;
-					label = op.displayLabel ?? sessionId;
-					adopted = sessionStore?.adoptOrReattach(sessionId, {
-						spawn,
-						sessionLabel: label,
-						workdirHint: label,
-						workdirPath: op.workdir,
-						mintedFrom: dedupKey,
-					});
-					rollbackEligible = adopted?.created === true || adopted?.record.mintedFrom === dedupKey;
-				} else {
-					label = op.displayLabel as string;
-					const minted = sessionStore?.mintOrReattach({
-						spawn,
-						sessionLabel: label,
-						workdirHint: label,
-						workdirPath: op.workdir,
-						mintedFrom: dedupKey,
-					});
-					sessionId = minted?.record.id ?? label;
-					adopted = minted ?? null;
-					rollbackEligible = adopted != null;
-				}
-				if (sessionStore && !adopted) {
-					throw new Error(`cannot create session "${sessionId}": the name is reserved or a project`);
-				}
-				const mayForget = () => {
-					if (!rollbackEligible || adopted == null) return false;
-					const current = sessionStore?.getByTeam(sessionStore.teamOf(adopted.record));
-					return current === adopted.record && current.confirmedAt === undefined;
-				};
-				try {
-					const target = targets.tmuxTarget(op.target, sessionId);
-					const workdirHint =
-						sessionStore && adopted ? sessionStore.hostWorkdirHint(adopted.record) : (op.workdir ?? label);
+			case "create_session":
+				return sessionLifecycle.createSession(op, conversationId, opId);
 
-					const launchTeam = composeSessionName(target.name, target.sessionName);
-					const viaWake = target.kind === "devcontainer" && tryWakeTeam;
-					const releaseInFlight = markCreateInFlight?.(launchTeam);
-					const launch: Promise<HostOpResult> = (
-						viaWake
-							? tryWakeTeam(launchTeam).then(
-									(r): HostOpResult =>
-										r.ok
-											? { ok: true }
-											: {
-													ok: false,
-													error: `failed to wake "${sessionId}"`,
-													errorKind: r.errorKind,
-												},
-								)
-							: relayToHost({
-									kind: "createSession",
-									target,
-									workdirHint,
-									resumeSessionId: adopted?.record.claudeSessionId,
-									sessionToken: adopted ? sessionStore?.ensureBindToken(adopted.record) : undefined,
-									dedupKey,
-								})
-					).finally(() => {
-						if (viaWake || !awaitRegister) {
-							releaseInFlight?.();
-						} else {
-							void awaitRegister(launchTeam).finally(() => releaseInFlight?.());
-						}
-					});
+			case "reload_plugins":
+				return terminalOps.reloadPlugins(op, conversationId, opId);
 
-					let boundTimer: ReturnType<typeof setTimeout> | undefined;
-					const bound = new Promise<null>((resolve) => {
-						boundTimer = setTimeout(() => resolve(null), createSessionBoundMs);
-					});
-					const winner = await Promise.race([launch, bound]);
-					clearTimeout(boundTimer);
+			case "forget":
+				return sessionLifecycle.forget(op, conversationId, opId);
 
-					if (winner === null) {
-						void launch
-							.then((r) => {
-								if (!r.ok && mayForget()) sessionStore?.forget(sessionStore.teamOf(adopted!.record));
-							})
-							.catch(() => {
-								if (mayForget()) sessionStore?.forget(sessionStore.teamOf(adopted!.record));
-							});
-						return {
-							created: true,
-							id: adopted?.record.id ?? sessionId,
-							sessionLabel: adopted?.record.sessionLabel,
-							labelSanitized,
-							status: "pending" as const,
-						};
-					}
+			case "close_session":
+				return sessionLifecycle.closeSession(op, conversationId, opId);
 
-					if (!winner.ok) {
-						if (winner.errorKind === "timeout" || winner.errorKind === "disconnected") {
-							throw new CreateSessionAmbiguousError(
-								winner.error ?? "create session had no definitive answer",
-							);
-						}
-						throw new Error(winner.error ?? "create session failed");
-					}
-				} catch (e) {
-					if (mayForget() && !(e instanceof CreateSessionAmbiguousError)) {
-						sessionStore?.forget(sessionStore.teamOf(adopted!.record));
-					}
-					throw e;
-				}
-				return {
-					created: true,
-					id: adopted?.record.id ?? sessionId,
-					sessionLabel: adopted?.record.sessionLabel,
-					labelSanitized,
-				};
-			}
+			case "rename_session":
+				return sessionLifecycle.renameSession(op);
 
-			case "reload_plugins": {
-				if (!relayToHost) throw new Error("terminal view unavailable on this Gateway");
-				const target = targets.tmuxTarget(op.target);
-				assertDaemonDrivable(target);
-				const dedupKey = `${conversationId}:${opId}`;
-				const r = await relayToHost({ kind: "reloadPlugins", target, dedupKey });
-				if (!r.ok) throw new Error(r.error ?? "reload failed");
-				return { initiated: true };
-			}
+			case "wake":
+				return sessionLifecycle.wake(op);
 
-			case "forget": {
-				if (!relayToHost) throw new Error("terminal view unavailable on this Gateway");
-				const { name } = targets.requireLocalComposite(op.target, "forget");
-				if (isWakeInFlight?.(name))
-					throw new Error(`"${name}" is waking; wait for it to finish before forgetting`);
-				const dedupKey = `${conversationId}:${opId}`;
-				try {
-					const target = targets.tmuxTarget(op.target);
-					const r = await relayToHost({ kind: "killSession", target, dedupKey });
-					if (!r.ok) console.log(`[console] forget "${name}": kill failed - ${r.error ?? "unknown error"}`);
-				} catch (e) {
-					console.log(`[console] forget "${name}": kill failed - ${(e as Error).message}`);
-				}
-				const disposition: BoardDisposition = op.boardDisposition ?? "release";
-				dropSessionResume?.(name, disposition);
-				return { killed: true, boardDisposition: disposition };
-			}
+			case "cross_domain_listen":
+				return crossDomainOps.listen(op);
 
-			case "close_session": {
-				if (!relayToHost) throw new Error("terminal view unavailable on this Gateway");
-				const { name } = targets.requireLocalComposite(op.target, "close");
-				const target = targets.tmuxTarget(op.target);
-				const record = sessionStore?.getByTeam(name);
-				if (record?.liveTeam && record.liveTeam.team !== sessionStore!.teamOf(record)) {
-					throw new Error(`"${name}" is user-launched; end it from your terminal`);
-				}
-				if (isWakeInFlight?.(name)) {
-					throw new Error(`"${name}" is waking; wait for it to finish before closing`);
-				}
-				const dedupKey = `${conversationId}:${opId}`;
-				const r = await relayToHost({ kind: "killSession", target, dedupKey });
-				if (!r.ok) throw new Error(r.error ?? "close failed");
-				return { closed: true };
-			}
+			case "cross_domain_request":
+				return crossDomainOps.request(op);
 
-			case "rename_session": {
-				const { name } = targets.requireLocalComposite(op.target, "rename");
-				const applied = sessionStore?.rename(name, op.sessionLabel) ?? null;
-				return { renamed: applied !== null, sessionLabel: applied ?? undefined };
-			}
-			case "wake": {
-				if (!tryWakeTeam) throw new Error("wake is unavailable");
-				const { name, spawn, session } = targets.requireLocalComposite(op.target, "wake");
-				// The owner's button re-creates a record the gateway lost, under the session's own id, as
-				// create_session does with a typed sessionName. A send never adopts a typed name; the
-				// console may. A launch that never comes up forgets the record again.
-				const adopted =
-					sessionStore && !sessionStore.getByTeam(name)
-						? sessionStore.adoptById(session, { spawn, sessionLabel: session, workdirHint: session })
-						: null;
-				const mayForget = () => {
-					if (!adopted || !sessionStore) return false;
-					const current = sessionStore.getByTeam(name);
-					return current === adopted && current.confirmedAt === undefined;
-				};
-				// Bounded like create_session: a slow launch answers pending and finishes on its own.
-				let boundTimer: ReturnType<typeof setTimeout> | undefined;
-				const bound = new Promise<null>((resolve) => {
-					boundTimer = setTimeout(() => resolve(null), createSessionBoundMs);
-				});
-				const wake = tryWakeTeam(name);
-				const winner = await Promise.race([wake, bound]);
-				clearTimeout(boundTimer);
-				if (winner === null) {
-					void wake
-						.then((r) => {
-							if (!r.ok && mayForget()) sessionStore?.forget(name);
-						})
-						.catch(() => {
-							if (mayForget()) sessionStore?.forget(name);
-						});
-					return { ok: true, status: "pending" as const };
-				}
-				if (!winner.ok) {
-					if (mayForget()) sessionStore?.forget(name);
-					const reason =
-						winner.error ??
-						(winner.errorKind === "disconnected"
-							? "the host is not connected"
-							: winner.errorKind === "timeout"
-								? "it did not come online in time"
-								: "unknown error");
-					throw new Error(`failed to wake "${name}": ${reason}`);
-				}
-				return winner;
-			}
+			case "cross_domain_confirm":
+				return crossDomainOps.confirm(op);
 
-			case "cross_domain_listen": {
-				if (!crossDomain) throw new Error("cross-Domain linking is not available on this Gateway");
-				return crossDomain.listen();
-			}
+			case "cross_domain_listen_state":
+				return crossDomainOps.listenState(op);
 
-			case "cross_domain_request": {
-				if (!crossDomain) throw new Error("cross-Domain linking is not available on this Gateway");
-				// The Domain root, not the device.
-				const root = domain?.()?.snapshot.ownerSignPub;
-				if (!root) throw new Error("this Gateway has no Domain owner yet");
-				return crossDomain.request({
-					listeningToken: op.listeningToken,
-					pin: op.pin,
-					requesterOwnerSignPub: root,
-					requesterDomainId: op.requesterDomainId,
-					requesterGatewayId: op.requesterGatewayId,
-				});
-			}
+			case "cross_domain_cancel":
+				return crossDomainOps.cancel(op);
 
-			case "cross_domain_confirm": {
-				if (!crossDomain) throw new Error("cross-Domain linking is not available on this Gateway");
-				return crossDomain.confirm({
-					pin: op.pin,
-					mySignedLink: op.mySignedLink,
-				});
-			}
+			case "cross_domain_share":
+				return crossDomainOps.share(op);
 
-			case "cross_domain_listen_state": {
-				if (!crossDomain) throw new Error("cross-Domain linking is not available on this Gateway");
-				return crossDomain.listenState(op.listeningToken);
-			}
+			case "cross_domain_unshare":
+				return crossDomainOps.unshare(op);
 
-			case "cross_domain_cancel": {
-				if (!crossDomain) throw new Error("cross-Domain linking is not available on this Gateway");
-				return { cancelled: crossDomain.cancel({ listeningToken: op.listeningToken, pin: op.pin }) };
-			}
+			case "cross_domain_list_shares":
+				return crossDomainOps.listShares(op);
 
-			case "cross_domain_share": {
-				if (!crossDomainShare) throw new Error("cross-Domain sharing is not available on this Gateway");
-				const canonicalTarget = await assertShareable(op.sessionTarget, op.target);
-				crossDomainShare.share(canonicalTarget, op.target);
-				return { ok: true };
-			}
+			case "cross_domain_list_peers":
+				return crossDomainOps.listPeers(op);
 
-			case "cross_domain_unshare": {
-				if (!crossDomainShare) throw new Error("cross-Domain sharing is not available on this Gateway");
-				const canonicalTarget = canonicalShareTarget(op.sessionTarget);
-				const removed = crossDomainShare.unshare(canonicalTarget, op.target);
-				if (removed) crossDomainShare.expireSessionJobsForTarget(canonicalTarget, op.target);
-				return { ok: true };
-			}
+			case "cross_domain_unlink":
+				return crossDomainOps.unlink(op);
 
-			case "cross_domain_list_shares": {
-				if (!crossDomainShare) throw new Error("cross-Domain sharing is not available on this Gateway");
-				return { shares: crossDomainShare.listShares() };
-			}
-
-			case "cross_domain_list_peers": {
-				if (!crossDomain) throw new Error("cross-Domain linking is not available on this Gateway");
-				return crossDomain.listPeers();
-			}
-
-			case "cross_domain_unlink": {
-				if (!unlinkDomain) throw new Error("cross-Domain linking is not available on this Gateway");
-				return unlinkDomain(op.domainId);
-			}
-
-			case "cross_domain_untrust": {
-				if (!untrustOwner) throw new Error("cross-Domain linking is not available on this Gateway");
-				return untrustOwner(op.ownerSignPub);
-			}
+			case "cross_domain_untrust":
+				return crossDomainOps.untrust(op);
 		}
-	}
-
-	function canonicalShareTarget(sessionTarget: string): string {
-		return targets.shareTarget(
-			sessionTarget,
-			() => new Error(`cannot unshare "${sessionTarget}": only local sessions have shares`),
-		).canonical;
-	}
-
-	async function assertShareable(sessionTarget: string, target: CrossDomainShareTarget): Promise<string> {
-		if (target.kind === "domain" && !crossDomainShare?.isLinkedDomain(target.domainId)) {
-			throw new Error(`cannot share to "${target.domainId}": not a linked Domain`);
-		}
-		const { name, canonical } = targets.shareTarget(
-			sessionTarget,
-			() => new Error(`cannot share "${sessionTarget}": only local sessions can be shared`),
-		);
-		const teams = (await routes.teams().json()) as TeamInfo[];
-		const team = teams.find((t) => t.team === name);
-		if (!team || (team.kind !== "devcontainer" && team.kind !== "loose")) {
-			throw new Error(`cannot share "${name}": only devcontainer and loose sessions can be shared`);
-		}
-		return canonical;
 	}
 
 	function durableOpKey(kind: string, opId: string): string {

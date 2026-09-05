@@ -35,7 +35,7 @@ internal class ChatRepositoryDeviceApprovalCollaborators(private val repo: ChatR
 		domainId: String?,
 	) = repo.identity.installApproved(blob, domainJson, domainVersion, gatewayId, contentKeys, domainId)
 	override fun invalidateClients() {
-		repo.client = null
+		repo.invalidateClient()
 		repo.sttsClient = null
 	}
 	override suspend fun submitOwnerAdmission(signed: SignedAdmission) =
@@ -95,7 +95,7 @@ internal class ChatRepositoryScheduledSendCollaborators(private val repo: ChatRe
 }
 
 internal class ChatRepositoryAttachmentCollaborators(private val repo: ChatRepository) : AttachmentOpsCollaborators {
-	override fun clientOrNull() = repo.client
+	override fun clientOrNull() = repo.clientOrNull()
 	override suspend fun routerBlobRange(domainId: String, blobId: String, offset: Long, originGateway: String?) =
 		repo.routerBlobRange(domainId, blobId, offset, originGateway)
 	override fun attachmentBuckets() = repo.boardOps.attachmentBuckets()
@@ -109,7 +109,7 @@ internal class ChatRepositoryBoardCollaborators(private val repo: ChatRepository
 	override fun boardSealing() = repo.boardSealing()
 	override fun admitPicked(uris: List<Uri>, name: String) = repo.admitPicked(uris, name)
 	override fun localDomain() = repo.localDomain()
-	override val client: ConsoleClient? get() = repo.client
+	override val client: ConsoleClient? get() = repo.clientOrNull()
 	override fun command(block: () -> Unit) = repo.command { block() }
 }
 

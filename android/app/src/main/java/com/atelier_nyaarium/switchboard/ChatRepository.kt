@@ -2,18 +2,9 @@ package com.atelier_nyaarium.switchboard
 
 import android.content.ContentResolver
 import com.atelier_nyaarium.switchboard.board.BoardRouterWriter
-import com.atelier_nyaarium.switchboard.crypto.openSealedBlobRange
-import com.atelier_nyaarium.switchboard.crypto.opResultAadKind
-import com.atelier_nyaarium.switchboard.crypto.scheduledBodyAadKind
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.serialization.json.put
 import com.atelier_nyaarium.switchboard.crypto.ownerKeyId
 import com.atelier_nyaarium.switchboard.proto.Address
 import com.atelier_nyaarium.switchboard.proto.BoardWriteResult
-import com.atelier_nyaarium.switchboard.proto.ContentEnvelope
 import com.atelier_nyaarium.switchboard.proto.MailboxEntry
 import com.atelier_nyaarium.switchboard.proto.SyncEntry
 import com.atelier_nyaarium.switchboard.proto.Protocol
@@ -136,9 +127,6 @@ class ChatRepository(
 
 	internal val provisioningHost: RepositoryProvisioningHost = ChatRepositoryProvisioningHost(this)
 	internal val attachmentHost: AttachmentHost = ChatRepositoryAttachmentHost(this)
-	internal var client: ConsoleClient?
-		get() = provisioningHost.client
-		set(value) { provisioningHost.client = value }
 	internal val mailboxSync = MailboxSync(store)
 	val pushback = IdlePushbackManager(store, System.currentTimeMillis()) { ZoneId.systemDefault() }
 
@@ -238,199 +226,6 @@ class ChatRepository(
 			},
 	)
 
-	private suspend fun reportConsumerCapabilities() {
-		val plugins = enabledPlugins?.invoke() ?: return
-		val op = buildJsonObject {
-			put("kind", "capabilities_report")
-			put("clientVersion", "${BuildConfig.VERSION_NAME}+${BuildConfig.BUILD_SHA}")
-			put("capabilities", wireJson.encodeToJsonElement(kotlinx.serialization.builtins.ListSerializer(com.atelier_nyaarium.switchboard.proto.EnabledPlugin.serializer()), plugins))
-		}
-		val signed = ownerOps.sign(op) ?: return
-		client().postOwnerOp(signed)
-	}
-
-	internal suspend fun applyPlane(name: String, payload: kotlinx.serialization.json.JsonElement?): Boolean {
-		// Board pushes carry revisions only.
-		if (name == "taskBoard") {
-			boardOps.refreshBoard()
-			return true
-		}
-		if (name != "presence" || payload == null) return false
-		val projection = runCatching {
-			wireJson.decodeFromJsonElement(com.atelier_nyaarium.switchboard.proto.OwnerPresenceProjection.serializer(), payload)
-		}.getOrNull() ?: return false
-		presence.applyOwnerProjection(projection)
-		return true
-	}
-
-	private suspend fun dispatchKeyRows(rows: List<com.atelier_nyaarium.switchboard.proto.InboxRow>) {
-		for (row in rows) {
-			when (row.envelope.kind) {
-				Protocol.Wire.KeyOpKind.KEY_REQUEST -> runCatching {
-					keyDelivery.onKeyRequest(wireJson.decodeFromJsonElement(com.atelier_nyaarium.switchboard.proto.KeyRequest.serializer(), row.body))
-				}.onFailure { DebugLog.log("KeyDelivery", "row parse failed kind=${Protocol.Wire.KeyOpKind.KEY_REQUEST}") }
-				Protocol.Wire.KeyOpKind.KEY_GRANT -> runCatching {
-					keyDelivery.onKeyGrant(wireJson.decodeFromJsonElement(com.atelier_nyaarium.switchboard.proto.KeyGrant.serializer(), row.body))
-				}.onFailure { DebugLog.log("KeyDelivery", "row parse failed kind=${Protocol.Wire.KeyOpKind.KEY_GRANT}") }
-			}
-		}
-	}
-
-	private fun unavailableEntry(row: com.atelier_nyaarium.switchboard.proto.InboxRow): MailboxEntry =
-		MailboxEntry(
-			seq = row.seq,
-			at = row.acceptedAt,
-			kind = row.envelope.kind,
-			session_id = row.envelope.opKey.conversationId,
-			body = "Unavailable on this device",
-			status = "error",
-			title = "Unavailable",
-		)
-
-	internal suspend fun dispatchInboxRows(rows: List<com.atelier_nyaarium.switchboard.proto.InboxRow>) {
-		val entries = mutableListOf<MailboxEntry>()
-		for (row in rows) {
-			val epochText = (row.envelope.epoch as? JsonPrimitive)?.content
-			if (epochText == "clear" && row.envelope.kind in setOf("scheduled_result", "board_observation")) {
-				when (row.envelope.kind) {
-					"scheduled_result" -> runCatching {
-						wireJson.decodeFromJsonElement(com.atelier_nyaarium.switchboard.proto.ScheduledResultRow.serializer(), row.body)
-					}.onSuccess(onScheduledResult).onFailure {
-						DebugLog.log("Inbox", "scheduled result parse failed seq=${row.seq}")
-						entries += unavailableEntry(row)
-					}
-					"board_observation" -> runCatching {
-						wireJson.decodeFromJsonElement(com.atelier_nyaarium.switchboard.proto.BoardObservationRow.serializer(), row.body)
-					}.onSuccess(onBoardObservation).onFailure {
-						DebugLog.log("Inbox", "board observation parse failed seq=${row.seq}")
-						entries += unavailableEntry(row)
-					}
-				}
-				continue
-			}
-			if (row.envelope.kind == Protocol.Wire.OWNER_OP_OP_RESULT) {
-				val result = runCatching {
-					val body = wireJson.decodeFromJsonElement(
-						com.atelier_nyaarium.switchboard.proto.ContentEnvelope.serializer(),
-						row.body,
-					)
-					val epoch = body.epoch.toInt()
-					val key = federation.contentKeyring().keyFor(epoch) ?: return@runCatching null
-					val plain = com.atelier_nyaarium.switchboard.crypto.Crypto.openContent(
-						body,
-						key,
-						com.atelier_nyaarium.switchboard.crypto.Crypto.ContentAad(
-							localDomain(),
-							federation.ownerSignPub(),
-							epoch,
-							opResultAadKind(row.envelope.opKey.conversationId, row.envelope.opKey.opId),
-						),
-					)
-					wireJson.parseToJsonElement(plain.toString(Charsets.UTF_8))
-					}.onFailure { DebugLog.log("Inbox", "op_result open failed opId=${row.envelope.opKey.opId}") }.getOrNull()
-					val completed = transportCoordinator.completeOpResult(row.envelope.opKey.opId, result)
-					// An unopened result, an absent waiter, or a refusal each strand the caller.
-					val failure = (result as? kotlinx.serialization.json.JsonObject)?.takeIf { it["ok"]?.toString() == "false" }
-					if (result == null || !completed || failure != null) {
-						DebugLog.log(
-							"Inbox",
-							"op_result opId=${row.envelope.opKey.opId} opened=${result != null} waiter=$completed error=${failure?.get("error")?.toString()?.take(120)}",
-						)
-					}
-					continue
-				}
-				if (row.envelope.kind == Protocol.Wire.KeyOpKind.KEY_REQUEST || row.envelope.kind == Protocol.Wire.KeyOpKind.KEY_GRANT) {
-					dispatchKeyRows(listOf(row))
-					continue
-				}
-				val entry = runCatching {
-					val envelope = wireJson.decodeFromJsonElement(ContentEnvelope.serializer(), row.body)
-					val epoch = envelope.epoch.toInt()
-					val key = federation.contentKeyring().keyFor(epoch) ?: run {
-						keyDelivery.requestMissing(epoch)
-						return@runCatching unavailableEntry(row)
-					}
-					val plain = com.atelier_nyaarium.switchboard.crypto.Crypto.openContent(
-						envelope,
-						key,
-						com.atelier_nyaarium.switchboard.crypto.Crypto.ContentAad(
-							localDomain(),
-							federation.ownerSignPub(),
-							epoch,
-							scheduledBodyAadKind(
-								row.envelope.opKey.conversationId,
-								row.envelope.opKey.opId,
-							),
-						),
-					)
-					wireJson.decodeFromString(MailboxEntry.serializer(), plain.toString(Charsets.UTF_8)).copy(seq = row.seq, kind = row.envelope.kind)
-				}.onFailure {
-					DebugLog.log("Inbox", "row open failed seq=${row.seq}")
-					(row.envelope.epoch as? JsonPrimitive)?.content?.toIntOrNull()?.let { keyDelivery.requestMissing(it) }
-					entries += unavailableEntry(row)
-				}.getOrNull()
-				entry?.let { entries += it }
-		}
-		val last = rows.maxByOrNull { it.seq } ?: return
-		drain.processEntries(entries, last.seq, transportCoordinator.cursorEpoch(), 0L)
-	}
-
-	/** Read one opened Router blob chunk. */
-	internal suspend fun routerBlobRange(
-		domainId: String,
-		blobId: String,
-		offset: Long,
-		originGateway: String? = null,
-	): Pair<ByteArray, Boolean>? {
-		val op = buildJsonObject {
-				put("kind", JsonPrimitive(Protocol.Wire.OWNER_OP_BLOB_FETCH))
-			put("opId", JsonPrimitive(java.util.UUID.randomUUID().toString()))
-			put("blobId", JsonPrimitive(blobId))
-			put(
-				"range",
-				buildJsonObject {
-					put("offset", JsonPrimitive(offset))
-					put("length", JsonPrimitive(Protocol.BLOB_CHUNK_BYTES))
-				},
-			)
-			// Permit forwarding on cache miss.
-			if (originGateway != null) {
-				put(
-					"origin",
-					buildJsonObject {
-						put("domainId", JsonPrimitive(domainId))
-						put("gatewayId", JsonPrimitive(originGateway))
-					},
-				)
-			}
-		}
-		val signed = ownerOps.sign(op) ?: return null
-		val answer = runCatching { client().postOwnerOp(signed)?.jsonObject }.getOrNull() ?: return null
-		if (answer["outcome"]?.jsonPrimitive?.content != "fetched") return null
-		val bytes = answer["bytes"]?.jsonPrimitive?.content
-			?.let { android.util.Base64.decode(it, android.util.Base64.DEFAULT) } ?: return null
-		val eof = answer["eof"]?.jsonPrimitive?.content == "true"
-		if (answer["sealed"]?.jsonPrimitive?.content != "true") return bytes to eof
-		val epoch = answer["epoch"]?.jsonPrimitive?.content?.toIntOrNull() ?: return null
-		val size = answer["size"]?.jsonPrimitive?.content?.toLongOrNull() ?: return null
-		val at = answer["offset"]?.jsonPrimitive?.content?.toLongOrNull() ?: return null
-		val key = federation.contentKeyring().keyFor(epoch) ?: return null
-		return runCatching {
-			openSealedBlobRange(
-				bytes,
-				at,
-				size,
-				epoch,
-				offset,
-				Protocol.BLOB_CHUNK_BYTES.toLong(),
-				key,
-				domainId,
-				federation.ownerSignPub(),
-				blobId,
-			)
-		}.getOrNull()
-	}
-
 	/** Board Router writer. */
 	val boardRouter = BoardRouterWriter(
 		board = board,
@@ -472,57 +267,16 @@ class ChatRepository(
 	internal fun refreshAdmittedGateways() = provisioningHost.refreshAdmittedGateways()
 	internal val ownerFacts = OwnerFacts(this)
 	internal val gatewayEnroll = GatewayEnrollment(this)
+	internal val connector = ConnectCoordinator(identity, ::transport, _state, ChatRepositoryConnectHost(this))
 	init {
-		cursorTranslation = CursorTranslationOps(
-			coordinator = transportCoordinator,
-			journal = mutationJournal,
-			address = { "owner:${localDomain()}/${federation.ownerSignPub()}" },
-			heldCursor = { mailboxSync.pollParams().epoch to mailboxSync.pollParams().cursor },
-			sign = { op, opId -> ownerOps.sign(op, opId) },
-			send = { client().postOwnerOp(it) },
-			reportError = { message -> _state.update { it.copy(error = message) } },
-			commit = { gen, cursor, epoch -> socket.commitTranslation(gen, cursor, epoch) },
-			ambient = ambient,
-			)
-		selfMigration = SelfMigration(
-			records = { _state.value.scheduledSends },
-			readAnchors = { _state.value.readAnchors },
-			journal = mutationJournal,
-			domainId = { localDomain() },
-			ownerSignPub = { federation.ownerSignPub() },
-			conversationId = { client().transport.prov.conversationId },
-			contentKeyring = { federation.contentKeyring() },
-			target = { team, _ ->
-				val parsed = parseTarget(team, localDomain(), homeGatewayId) as com.atelier_nyaarium.switchboard.proto.Address
-				com.atelier_nyaarium.switchboard.proto.ScheduledTarget(parsed.domain, parsed.gateway, parsed.spawn + "." + parsed.session)
-			},
-			uploadFile = { file -> client().uploadBlob(Attachments.fileFor(filesDir, file.src) ?: error("missing scheduled file")) },
-			sign = { op, opId -> ownerOps.sign(op, opId) },
-			send = { client().postOwnerOp(it) },
-				reportRead = { team, anchor ->
-				val signed = ownerOps.sign(composeReportRead(team, anchor, System.currentTimeMillis()))
-					if (signed == null) null else client().postOwnerOp(signed)
-				},
-				reportError = { message -> _state.update { it.copy(error = message) } },
-				releaseLocal = { team, opId ->
-				scheduled.releaseMigrated(
-					team,
-					opId,
-					{ scheduled.scheduledSendScheduler?.cancelNext() },
-					{ target ->
-						_state.update { it.copy(scheduledSends = it.scheduledSends - target) }
-						persistence.persistScheduledSends(_state.value.scheduledSends)
-						scheduled.rearmAfterMigration()
-					},
-				)
-			},
-		)
+		wireMigration()
 	}
+	internal val ports = ChatRepositoryPorts(this)
 	internal val drainGate = DrainGate()
 	internal val drainHost: DrainHost = ChatRepositoryDrainHost(this)
 	internal val presenceHost: PresenceHost = ChatRepositoryPresenceHost(this)
 	internal val presence = PresenceOps(presenceHost)
-	internal val sessions = SessionOps(ChatRepositorySessionHost(this))
+	internal val sessions = SessionOps(ChatRepositorySessionHost(this), ports)
 	internal val renameOps = RenameOps(ChatRepositoryRenameHost(this))
 	// Keep staged invite secrets in memory only.
 	internal val enrollInvites = java.util.concurrent.ConcurrentHashMap<String, EnrollInvite>()
@@ -536,7 +290,7 @@ class ChatRepository(
 
 	/** Clear this class's state. */
 	override suspend fun clearInMemory() {
-		client = null
+		invalidateClient()
 		sttsClient = null
 		ownerOpsBoot = null
 		ownerOpsValue = null
@@ -563,7 +317,7 @@ class ChatRepository(
 		set(value) { focusHost.currentFocus = value }
 
 	/** Poll loop and mailbox drain. */
-	internal val drain = PollDrain(drainHost)
+	internal val drain = PollDrain(drainHost, ports)
 
 	// The held roster, before the first poll or welcome. Without it a restart shows nothing until the
 	// Router's presence version moves, and an unchanged version is skipped as stale.
@@ -571,8 +325,6 @@ class ChatRepository(
 		repoScope.launch(Dispatchers.IO) { presence.restoreLastProjection() }
 	}
 
-	/** Armed session goals. */
-	internal val ports = ChatRepositoryPorts(this)
 	private val ceremonyCollaborators = ChatRepositoryEnrollCeremonyCollaborators(this)
 	private val deviceApprovalCollaborators = ChatRepositoryDeviceApprovalCollaborators(this)
 	private val domainAdminCollaborators = ChatRepositoryDomainAdminCollaborators(this)
@@ -665,6 +417,10 @@ class ChatRepository(
 	internal fun declareFocus(focus: FocusIntent) = focusHost.declareFocus(focus)
 
 	internal fun client(): ConsoleClient = provisioningHost.client()
+
+	internal fun clientOrNull(): ConsoleClient? = provisioningHost.clientOrNull()
+
+	internal fun invalidateClient() = provisioningHost.invalidateClient()
 
 	/** Capabilities reported at register. */
 	@Volatile var enabledPlugins: (() -> List<com.atelier_nyaarium.switchboard.proto.EnabledPlugin>)? = null

@@ -21,17 +21,22 @@ internal interface ConsoleSocketTransport {
 	fun unreachable(base: String): Boolean = false
 }
 
+/** The Router preflight a connect attempt opens with. */
+internal interface ConsoleReach {
+	suspend fun apiReachable(): RouterReach?
+}
+
 /** Posts OwnerOps to the Router console surface with reach failover and pinning. */
 internal class ConsoleRouterTransport(
-	internal val prov: Provisioning,
+	internal val credentials: ConsoleCredentials,
 	internal val store: AppStateStore,
 	private val homeGatewayId: (() -> String?)?,
 	private val saveProvisioning: (String) -> Unit,
-) : ConsoleSocketTransport {
-	internal val client = ConsoleHttp.buildLeafPinnedClient(prov.routerCertFp)
+) : ConsoleSocketTransport, ConsoleReach {
+	internal val client = ConsoleHttp.buildLeafPinnedClient(credentials.routerCertFp)
 
 	private val candidates: List<String> =
-		reachCandidates(RouterReach.decode(store.loadRouterReach()), prov.routerUrl, DEFAULT_ROUTER_PORT)
+		reachCandidates(RouterReach.decode(store.loadRouterReach()), credentials.routerUrl, DEFAULT_ROUTER_PORT)
 
 	@Volatile
 	private var current = 0
@@ -40,7 +45,7 @@ internal class ConsoleRouterTransport(
 		get() = candidates[current]
 
 	override val appToken: String
-		get() = prov.appToken
+		get() = credentials.appToken
 
 	override fun clientFor(base: String): okhttp3.OkHttpClient {
 		val host = runCatching { java.net.URI(base).host }.getOrNull() ?: return client
@@ -108,7 +113,7 @@ internal class ConsoleRouterTransport(
 	}
 
 	/** Leaf-pinned Router preflight; answers the reach, which may name the Domain. */
-	suspend fun apiReachable(): RouterReach? {
+	override suspend fun apiReachable(): RouterReach? {
 		// Only the preflight may fail over.
 		withReachFailover { base ->
 			val req = buildHealthRequest(base)
@@ -143,7 +148,7 @@ internal class ConsoleRouterTransport(
 		}.toString()
 		return Request.Builder()
 			.url(base + Protocol.Wire.ROUTER_PATH_CONSOLE)
-			.header(Protocol.Wire.CONSOLE_TOKEN_HEADER, Protocol.Wire.BEARER_PREFIX + prov.appToken)
+			.header(Protocol.Wire.CONSOLE_TOKEN_HEADER, Protocol.Wire.BEARER_PREFIX + credentials.appToken)
 			.post(body.toRequestBody(ConsoleHttp.JSON))
 			.build()
 	}
@@ -155,7 +160,7 @@ internal class ConsoleRouterTransport(
 		logBody: Boolean,
 		fail: (String) -> R,
 	): R = withReachFailover { base ->
-		ConsoleHttp.postRouterDirect(clientFor(base), base + Protocol.Wire.ROUTER_PATH_CONSOLE, prov.appToken, tag, describe, body, logBody, fail)
+		ConsoleHttp.postRouterDirect(clientFor(base), base + Protocol.Wire.ROUTER_PATH_CONSOLE, credentials.appToken, tag, describe, body, logBody, fail)
 	}
 
 	internal suspend fun postOwnerOp(ownerOp: OwnerOp): JsonElement =
@@ -167,7 +172,7 @@ internal class ConsoleRouterTransport(
 		}
 
 	internal fun buildOwnerOpRequest(base: String, ownerOp: OwnerOp): Request =
-		buildOwnerOpRequest(base, ownerOp, prov.appToken)
+		buildOwnerOpRequest(base, ownerOp, credentials.appToken)
 
 	internal inline fun <reified T> resultOf(body: OwnerOpAnswer, op: String): T {
 		if (!body.ok) error("$op failed: ${body.error ?: "unknown error"}")

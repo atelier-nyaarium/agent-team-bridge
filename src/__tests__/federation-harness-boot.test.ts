@@ -29,7 +29,7 @@ describe("federation harness cold start", () => {
 		expect(before.gateways).toEqual([]);
 
 		const gateway = h.composeGateway();
-		await h.waitFor(() => gateway.federation()?.routerClient.isRegistered() || undefined, "gateway registration");
+		await h.waitFor(() => gateway.faults.routerRegistered() || undefined, "gateway registration");
 		const after = await h.phone.reach();
 		expect(after.gateways).toHaveLength(1);
 		expect(after.gateways[0]?.gatewayId).toBe(h.set.gateway.id);
@@ -89,8 +89,8 @@ describe("federation harness cold start", () => {
 			}),
 		);
 		expect(response.status).toBe(200);
-		expect(gateway.contentKeyStore.epochs()).toEqual([2, 3, 4]);
-		await h.waitFor(() => gateway.federation()?.routerClient.isRegistered() || undefined, "gateway registration");
+		expect(gateway.faults.heldEpochs()).toEqual([2, 3, 4]);
+		await h.waitFor(() => gateway.faults.routerRegistered() || undefined, "gateway registration");
 		const request = await h.waitFor(async () => {
 			const rows = await h.phone.inboxRead();
 			const row = rows.find((candidate) => candidate.envelope.kind === "key_request");
@@ -114,8 +114,8 @@ describe("federation harness cold start", () => {
 			},
 		});
 		expect(grant).toMatchObject({ outcome: "accepted" });
-		await h.waitFor(() => gateway.contentKeyStore.epochs().includes(1) || undefined, "installed epoch 1");
-		expect(gateway.contentKeyStore.epochs()).toEqual([1, 2, 3, 4]);
+		await h.waitFor(() => gateway.faults.heldEpochs().includes(1) || undefined, "installed epoch 1");
+		expect(gateway.faults.heldEpochs()).toEqual([1, 2, 3, 4]);
 		await gateway.close();
 	});
 });
@@ -137,10 +137,10 @@ describe("federation harness routing and restart", () => {
 			conversationId: "conv-restart",
 		});
 		await session.ready();
-		const before = h.gateway.federation()?.routerClient.incarnation();
-		if (before === null || before === undefined) throw new Error("gateway incarnation is unavailable");
+		const before = h.gateway.faults.routerIncarnation();
+		if (before === null) throw new Error("gateway incarnation is unavailable");
 		await h.restartRouter();
-		const after = await h.waitFor(() => h.gateway.federation()?.routerClient.incarnation(), "new incarnation");
+		const after = await h.waitFor(() => h.gateway.faults.routerIncarnation(), "new incarnation");
 		expect(after).toBeGreaterThan(before);
 		const reach = await h.waitFor(async () => {
 			const answer = await h.phone.reach();

@@ -14,7 +14,12 @@ import kotlinx.coroutines.withContext
 /** A session's life beyond its transcript: the terminal view, spawn/wake/relaunch, and the forget
  * that ends one. Owns the spawn idempotency map, which is why it is a held delegate rather than
  * extensions the way the voice settings and the drafts are. */
-internal class SessionOps(private val host: SessionHost) {
+internal class SessionOps(private val host: SessionHost, private val presence: PresencePort) {
+	/** Fire and forget; a session action never waits on the roster. */
+	private fun refreshAfterAction() {
+		host.launchInBackground { presence.refreshAfterAction() }
+	}
+
 	/** Capture an agent's tmux pane for the terminal view. Returns a Result so the caller can keep
 	 * the last frame on a transient failure yet surface the backend's reason (container/host offline)
 	 * when the pane never loaded. */
@@ -97,7 +102,7 @@ internal class SessionOps(private val host: SessionHost) {
 							} else it.transientMessages,
 						)
 					}
-					host.refreshAfterAction()
+					refreshAfterAction()
 				}
 				.onFailure { e ->
 					val reason = e.message ?: "Failed to create \"$label\""
@@ -222,12 +227,12 @@ internal class SessionOps(private val host: SessionHost) {
 		noteReceipt(team, ActionReceipt(opId, System.currentTimeMillis()))
 		// Republish immediately so the terminal's gate sees the receipt on THIS frame rather than on
 		// the next poll.
-		host.launchInBackground { host.reapplyCachedTeams() }
+		host.launchInBackground { presence.reapplyCachedTeams() }
 		host.launchInBackground {
 			runCatchingCancellable { host.wake(target, opId) }
 				.onSuccess {
 					settleReceipt(team, opId, ActionReceipt.Outcome.ACCEPTED)
-					host.refreshAfterAction()
+					refreshAfterAction()
 				}
 				.onFailure { e ->
 					DebugLog.log("Wake", "wake $team failed: ${e.javaClass.simpleName}: ${e.message?.take(160)}")
@@ -235,7 +240,7 @@ internal class SessionOps(private val host: SessionHost) {
 					// must stop saying "waking" the moment we know nothing is coming, and the reason
 					// is already on its way to the user as a transient message.
 					settleReceipt(team, opId, ActionReceipt.Outcome.FAILED)
-					host.reapplyCachedTeams()
+					presence.reapplyCachedTeams()
 					host.state.update { it.copy(transientMessages = it.transientMessages + (e.message ?: "wake failed")) }
 				}
 		}
@@ -256,7 +261,7 @@ internal class SessionOps(private val host: SessionHost) {
 			// terminal would stop peeking exactly while the replacement is coming up.
 			val opId = UUID.randomUUID().toString()
 			noteReceipt(team, ActionReceipt(opId, System.currentTimeMillis()))
-			host.reapplyCachedTeams()
+			presence.reapplyCachedTeams()
 			try {
 				host.closeSession(team)
 				// Qualified, matching closeSession's own routing - a bare spawn re-created the session on
@@ -268,11 +273,11 @@ internal class SessionOps(private val host: SessionHost) {
 			} catch (e: Throwable) {
 				e.rethrowIfCancellation()
 				settleReceipt(team, opId, ActionReceipt.Outcome.FAILED)
-				host.reapplyCachedTeams()
+				presence.reapplyCachedTeams()
 				throw e
 			}
 			settleReceipt(team, opId, ActionReceipt.Outcome.ACCEPTED)
-			host.refreshAfterAction()
+			refreshAfterAction()
 		}
 	}
 
@@ -342,7 +347,7 @@ internal class SessionOps(private val host: SessionHost) {
 					// spawnSession, none of which nudge the poll loop either) - no client-side action
 					// needed on success.
 					.onSuccess { applied ->
-						host.refreshAfterAction()
+						refreshAfterAction()
 						// A Gateway that predates the field strips the request's copy and answers
 						// without one, so it RELEASED work the owner asked to cancel. Say so; the
 						// session is gone either way and there is nothing left to retry against.

@@ -557,5 +557,7 @@ export function createWebSocketHandlers({
 		pong,
 		findPendingHandshakeId: (team: string, subId: string) => handshakeGate.pendingIdFor(team, subId),
 		repushHandshake,
+		// Only a catalog project may be proxied, which is what keeps the proxy off arbitrary hosts.
+		isConnectorProject: (project: string) => offlineCatalog.has(project),
 	};
 }

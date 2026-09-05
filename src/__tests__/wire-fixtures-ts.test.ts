@@ -33,14 +33,12 @@ describe("TS wire fixtures", () => {
 	for (const entry of frames) {
 		it(entry.file, async () => {
 			const fixture = load(entry.file);
-			const client = h.gateway.federation()!.routerClient;
+			const live = h.gateway.faults.routerIncarnation();
 			const incarnation = fixture.frame.params.incarnation;
-			if (incarnation !== undefined && incarnation !== client.incarnation())
-				throw new Error(
-					`fixture incarnation ${String(incarnation)} differs from live ${String(client.incarnation())}`,
-				);
+			if (incarnation !== undefined && incarnation !== live)
+				throw new Error(`fixture incarnation ${String(incarnation)} differs from live ${String(live)}`);
 			// The transport stamps the incarnation.
-			const answer = await client.callInboxTool(fixture.frame.name, fixture.frame.params);
+			const answer = await h.gateway.faults.routerInboxCall(fixture.frame.name, fixture.frame.params);
 			expect(answer.result ?? answer).toMatchObject(fixture.expect);
 			if (fixture.frame.name === "inbox_append" && fixture.phone) {
 				const opId = (fixture.frame.params.row as { envelope: { opKey: { opId: string } } }).envelope.opKey
@@ -55,10 +53,9 @@ describe("TS wire fixtures", () => {
 	for (const entry of registrations) {
 		it(`${entry.file} registers once and refuses its own replay`, async () => {
 			const fixture = load(entry.file);
-			const client = h.gateway.federation()!.routerClient;
-			const first = await client.callTool(fixture.frame.name, fixture.frame.params);
+			const first = await h.gateway.faults.routerCall(fixture.frame.name, fixture.frame.params);
 			expect(first.result ?? first).toMatchObject(fixture.expect);
-			const replay = await client.callTool(fixture.frame.name, fixture.frame.params);
+			const replay = await h.gateway.faults.routerCall(fixture.frame.name, fixture.frame.params);
 			expect(replay.result ?? replay).toMatchObject({ ok: false });
 		});
 	}

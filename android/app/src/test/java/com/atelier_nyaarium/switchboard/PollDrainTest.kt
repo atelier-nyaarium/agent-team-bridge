@@ -31,7 +31,6 @@ class PollDrainTest {
 		var dispatched = 0
 		override fun link() = ConsoleLink.POLL
 		override fun plan(visible: Boolean, socket: Boolean, failed: Boolean): ConsoleTransportPlan = error("unused")
-		override suspend fun restorePresence() = Unit
 		override fun thisDeviceAddress() = null
 		override fun fromCanonical(value: String) = value
 		override fun advanceMailbox(result: SyncPollResult<Drained>): SyncAdvance<Drained> = error("unused")
@@ -62,7 +61,7 @@ class PollDrainTest {
 	@Test
 	fun nestedPlaneApplicationDoesNotBlockFollowingRows() = runBlocking {
 		val host = FakeHost(emptyMap())
-		val drain = PollDrain(host)
+		val drain = PollDrain(host, IdlePresencePort)
 		val row = InboxRow(RowEnvelope(RowOrigin("owner", "domain"), OpKey("team", "op"), JsonPrimitive("clear"), "kind", emptyList()), "sig", JsonPrimitive("body"), 1L, 1L, 1L)
 		drain.withDrainMutex {
 			drain.applyPlane("presence", 1L, JsonPrimitive("payload"))
@@ -80,7 +79,7 @@ class PollDrainTest {
 				"taskBoard" to PlaneRead("taskBoard", 1L, JsonPrimitive("board")),
 			),
 		)
-		val drain = PollDrain(host)
+		val drain = PollDrain(host, IdlePresencePort)
 		drain.applyWelcomePlanes(buildJsonObject { put("presence", 2L); put("taskBoard", 1L) })
 		drain.applyWelcomePlanes(buildJsonObject { put("presence", 2L); put("taskBoard", 0L) })
 		assertEquals(listOf(buildJsonObject {}), host.reads)

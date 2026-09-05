@@ -1,12 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 import {
 	CrossDomainPresenceConsumer,
-	createCoalescedPresencePusher,
-	createCrossDomainPresenceReconciler,
-	createCrossDomainPresenceSource,
 	crossDomainPresencePlaneName,
+} from "../gateway/federation/crossDomainPresenceConsumer.js";
+import { createCoalescedPresencePusher } from "../gateway/federation/crossDomainPresencePusher.js";
+import { createCrossDomainPresenceReconciler } from "../gateway/federation/crossDomainPresenceReconciler.js";
+import {
+	createCrossDomainPresenceSource,
 	crossDomainPresenceSourcePlaneName,
-} from "../gateway/federation/crossDomainPresence.js";
+} from "../gateway/federation/crossDomainPresenceSource.js";
 import { type CrossDomainPresenceSession, MAX_CROSSDOMAIN_PRESENCE_SESSIONS } from "../shared/federation-protocol.js";
 import { PlaneRegistry } from "../shared/plane-registry.js";
 import { presenceForDomain, toCrossDomainPresenceSession } from "../shared/presence-projection.js";

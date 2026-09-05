@@ -20,12 +20,11 @@ import { MAX_POLL_HOLD_MS } from "../../shared/schemas.js";
 import type { SessionStore } from "../../shared/session-store.js";
 import type { GatewaySpawnPoints, TeamInfo } from "../../shared/types.js";
 import type { DeliverToOwner } from "../consolePushOps.js";
-import type { CrossDomainPresenceConsumer } from "../federation/crossDomainPresence.js";
+import type { CrossDomainPresenceConsumer } from "../federation/crossDomainPresenceConsumer.js";
 import type { IntentTracker } from "../intent.js";
 import type { ReadAnchors } from "../readAnchors.js";
 import type { WakeResult } from "../wake.js";
 import type { ConversationRegistry, TeamRegistry } from "../websocket.js";
-import type { CapabilityStore } from "./capabilityStore.js";
 import type { DurableOpStore } from "./durableOpStore.js";
 
 ////////////////////////////////
@@ -85,8 +84,6 @@ export interface ConsoleHandlerDeps {
 	/** Drop a session's durable resume record (the console's Forget), so it stops listing as
 	 * an available asleep session. */
 	dropSessionResume?: (team: string, boardDisposition: BoardDisposition) => void;
-	/** What plugins this owner's consoles have enabled. Absent in harnesses that do not exercise it. */
-	capabilityStore?: Pick<CapabilityStore, "report" | "touch" | "forget">;
 	/** Session access. create_session mints/adopts a record here (the minted id is the tmux session
 	 * name); rename_session relabels one; forget drops one. Production wires the presence facade
 	 * (so these writes announce themselves on the presence plane); a narrow Pick, not the full
@@ -225,6 +222,12 @@ export interface CrossDomainConsoleHandlers {
  * so the handler stays mockable and never imports the store class. `sessionTarget` is the
  * canonical `domain.gateway.spawn.session` of a LOCAL session; `domainId` is a linked friend Domain. */
 export interface CrossDomainShareHandlers {
+	/** Writes the Router's own share record. A refusal throws, so no mirror follows it. */
+	postRecord: (
+		action: "cross_domain_share" | "cross_domain_unshare",
+		sessionTarget: string,
+		target: CrossDomainShareTarget,
+	) => Promise<void>;
 	share: (sessionTarget: string, target: CrossDomainShareTarget) => void;
 	/** Withdraw a session's share from an audience, returning whether a record was removed
 	 * (so the handler only expires in-flight jobs when the share actually changed). */

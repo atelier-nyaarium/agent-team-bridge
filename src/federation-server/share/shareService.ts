@@ -1,6 +1,5 @@
 import {
 	CrossDomainShareValueSchema,
-	CrossDomainUnlinkValueSchema,
 	CrossDomainUnshareValueSchema,
 	ShareJobLiveParamsSchema,
 } from "../../shared/schemasShare.js";
@@ -22,6 +21,7 @@ import {
 import type { WriteOutcome } from "../../shared/write-result.js";
 import { foldWriteResult } from "../../shared/write-result.js";
 import type { GatewayRegistration } from "../gatewayBridge.js";
+import { OwnerOpRefused } from "../inbox/ownerOpIntake.js";
 import type { OwnerStoreRegistry } from "../inbox/ownerStoreRegistry.js";
 import type { OwnerStateStore } from "../owner/ownerStateStore.js";
 import type { OwnerServiceHooks } from "../ownerServiceHooks.js";
@@ -76,6 +76,12 @@ export interface ShareService {
 
 function state(records: ShareRecord[], unlinkedDomains: UnlinkedDomainMark[] = []): ShareState {
 	return { shares: records, ...(unlinkedDomains.length ? { unlinkedDomains } : {}) };
+}
+
+/** A gateway names only sessions on itself. */
+function ownSession(reg: GatewayRegistration, sessionTarget: string): string {
+	if (!sessionTarget.startsWith(`${reg.domainId}.${reg.gatewayId}.`)) throw new OwnerOpRefused("session");
+	return sessionTarget;
 }
 
 export function createShareService(deps: ShareServiceDeps): ShareService {
@@ -337,19 +343,23 @@ export function createShareService(deps: ShareServiceDeps): ShareService {
 		},
 		register(hooks) {
 			registeredHooks = hooks;
-			hooks.ownerOp("cross_domain_share", (_op, value) => {
-				const parsed = CrossDomainShareValueSchema.parse(value);
-				return this.share(_op.domainId, parsed.sessionTarget, parsed.target);
-			});
-			hooks.ownerOp("cross_domain_unshare", (_op, value) => {
-				const parsed = CrossDomainUnshareValueSchema.parse(value);
-				return this.unshare(_op.domainId, parsed.sessionTarget, parsed.target);
-			});
-			hooks.ownerOp("cross_domain_unlink", (_op, value) =>
-				this.unlink(_op.domainId, CrossDomainUnlinkValueSchema.parse(value).domainId),
+			hooks.ownerOp("cross_domain_share", (op, value) =>
+				this.share(op.domainId, value.sessionTarget, value.target),
 			);
+			hooks.ownerOp("cross_domain_unshare", (op, value) =>
+				this.unshare(op.domainId, value.sessionTarget, value.target),
+			);
+			hooks.ownerOp("cross_domain_unlink", (op, value) => this.unlink(op.domainId, value.domainId));
 			hooks.ownerOp("cross_domain_list_shares", (op) => this.listShares(op.domainId));
 			hooks.gatewayFrame("share_job_live", (reg, params) => this.attest(reg, params));
+			hooks.gatewayFrame("cross_domain_share", (reg, params) => {
+				const value = CrossDomainShareValueSchema.parse(params);
+				return this.share(reg.domainId, ownSession(reg, value.sessionTarget), value.target);
+			});
+			hooks.gatewayFrame("cross_domain_unshare", (reg, params) => {
+				const value = CrossDomainUnshareValueSchema.parse(params);
+				return this.unshare(reg.domainId, ownSession(reg, value.sessionTarget), value.target);
+			});
 			// A dropped gateway attests nothing until its next incarnation.
 			hooks.onGatewayDropped((reg) => {
 				const prefix = attestationsOf(reg);

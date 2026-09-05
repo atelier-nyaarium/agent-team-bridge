@@ -6,6 +6,7 @@ import { InboxService } from "../federation-server/inbox/inboxService.js";
 import { OwnerOpIntake } from "../federation-server/inbox/ownerOpIntake.js";
 import { OwnerStoreRegistry } from "../federation-server/inbox/ownerStoreRegistry.js";
 import { DomainQuota } from "../federation-server/owner/domainQuota.js";
+import { OWNER_OP_KIND_LIST, OwnerOpValueUnion } from "../federation-server/ownerOpRegistry.js";
 import { signAdmission } from "../shared/admission.js";
 import { fingerprint, generateIdentity } from "../shared/crypto.js";
 import { FEDERATION_VALUE_PROTOCOL_VERSION } from "../shared/router-protocol.js";
@@ -106,34 +107,37 @@ describe("OwnerOp intake", () => {
 		const fixture = localIntake({ maxCachedAnswers: 2 });
 		let runs = 0;
 		let release: ((value: unknown) => void) | undefined;
-		fixture.intake.register("slow", () => {
+		fixture.intake.register("hello", () => {
 			runs++;
 			return new Promise((resolve) => {
 				release = resolve;
 			});
 		});
-		const first = fixture.intake.handle(signedOp(fixture, { kind: "slow" }, { opId: "same" }));
-		const second = fixture.intake.handle(signedOp(fixture, { kind: "slow" }, { opId: "same" }));
+		const first = fixture.intake.handle(signedOp(fixture, { kind: "hello" }, { opId: "same" }));
+		const second = fixture.intake.handle(signedOp(fixture, { kind: "hello" }, { opId: "same" }));
 		release?.({ run: 1 });
 		expect(await Promise.all([first, second])).toEqual([{ run: 1 }, { run: 1 }]);
 		expect(runs).toBe(1);
 
 		let attempts = 0;
-		fixture.intake.register("flaky", () => {
+		fixture.intake.register("board_read", () => {
 			attempts++;
 			if (attempts === 1) throw new Error("transient");
 			return { run: attempts };
 		});
-		await expect(fixture.intake.handle(signedOp(fixture, { kind: "flaky" }, { opId: "flaky" }))).rejects.toThrow();
-		expect(await fixture.intake.handle(signedOp(fixture, { kind: "flaky" }, { opId: "flaky" }))).toEqual({
+		await expect(
+			fixture.intake.handle(signedOp(fixture, { kind: "board_read" }, { opId: "flaky" })),
+		).rejects.toThrow();
+		expect(await fixture.intake.handle(signedOp(fixture, { kind: "board_read" }, { opId: "flaky" }))).toEqual({
 			run: 2,
 		});
 
-		fixture.intake.register("count", () => ({ run: ++runs }));
-		expect(await fixture.intake.handle(signedOp(fixture, { kind: "count" }, { opId: "a" }))).toEqual({ run: 2 });
-		expect(await fixture.intake.handle(signedOp(fixture, { kind: "count" }, { opId: "b" }))).toEqual({ run: 3 });
-		expect(await fixture.intake.handle(signedOp(fixture, { kind: "count" }, { opId: "c" }))).toEqual({ run: 4 });
-		expect(await fixture.intake.handle(signedOp(fixture, { kind: "count" }, { opId: "a" }))).toEqual({ run: 5 });
+		fixture.intake.register("presence_read", () => ({ run: ++runs }));
+		const counted = { kind: "presence_read" };
+		expect(await fixture.intake.handle(signedOp(fixture, counted, { opId: "a" }))).toEqual({ run: 2 });
+		expect(await fixture.intake.handle(signedOp(fixture, counted, { opId: "b" }))).toEqual({ run: 3 });
+		expect(await fixture.intake.handle(signedOp(fixture, counted, { opId: "c" }))).toEqual({ run: 4 });
+		expect(await fixture.intake.handle(signedOp(fixture, counted, { opId: "a" }))).toEqual({ run: 5 });
 	});
 
 	it("refuses a foreign Domain, foreign device, clear row, and an old gateway protocol", async () => {
@@ -229,6 +233,18 @@ describe("OwnerOp intake", () => {
 			outcome: "durability_uncertain",
 		});
 		reopened.close();
+	});
+
+	it("catalogues every served kind and refuses one it does not", () => {
+		const fixture = localIntake();
+		const register = (kind: string, handler: () => null) =>
+			(fixture.intake.register as (k: string, h: () => null) => void).call(fixture.intake, kind, handler);
+		register("board_read", () => null);
+		expect(() => register("board_read", () => null)).toThrow(/already registered/);
+		expect(() => register("nope", () => null)).toThrow(/not in the catalog/);
+		// Each schema names its own kind, or the union would not build.
+		expect(OwnerOpValueUnion.options).toHaveLength(OWNER_OP_KIND_LIST.length);
+		expect(new Set(OWNER_OP_KIND_LIST).size).toBe(OWNER_OP_KIND_LIST.length);
 	});
 
 	it("requires each ConsoleOp kind's fields", () => {

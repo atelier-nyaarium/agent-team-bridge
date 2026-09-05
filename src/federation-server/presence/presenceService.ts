@@ -14,7 +14,6 @@ import { type Address, isValidSessionName, parseTarget } from "../../shared/sess
 import type { TeamInfo } from "../../shared/types.js";
 import { type FoldedWrite, foldWriteResult } from "../../shared/write-result.js";
 import type { GatewayRegistration } from "../gatewayBridge.js";
-import type { OwnerOpHandler } from "../inbox/ownerOpIntake.js";
 import type { OwnerStoreRegistry } from "../inbox/ownerStoreRegistry.js";
 import { OwnerQuarantined } from "../owner/ownerStateStore.js";
 import type { OwnerServiceHooks } from "../ownerServiceHooks.js";
@@ -322,16 +321,16 @@ export function createPresenceService(deps: {
 				throw error;
 			}
 		});
-		hooks.ownerOp("presence_read", ((op) => {
+		hooks.ownerOp("presence_read", (op) => {
 			if (!deps.projection) return { outcome: "refused", reason: "projection unavailable" };
 			return ownerProjection(op.domainId, deps.projection);
-		}) as OwnerOpHandler);
-		hooks.ownerOp("presence_read_friend", ((op, value) => {
-			const friendDomainId = String(value.toDomainId);
+		});
+		hooks.ownerOp("presence_read_friend", (op, value) => {
+			const friendDomainId = value.toDomainId;
 			if (!deps.friend || !deps.projection?.linkedDomains(op.domainId).includes(friendDomainId))
 				return { outcome: "refused", reason: "not linked" };
 			return friendProjection(friendDomainId, op.domainId, deps.friend);
-		}) as OwnerOpHandler);
+		});
 	};
 
 	return {

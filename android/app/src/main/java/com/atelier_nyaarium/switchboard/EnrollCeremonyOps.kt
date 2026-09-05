@@ -42,7 +42,7 @@ internal class EnrollCeremonyOps(
 	 * Domain id is taken from the blob's pendingTenant (the EXACT Domain this device just rooted), NOT
 	  */
 	fun enrolleeEnrollContext(): EnrollCeremonyContext? {
-		val prov = runCatching { store.load()?.let { Provisioning.parse(it, store) } }.getOrNull() ?: return null
+		val prov = runCatching { store.load()?.let { ConsoleCredentials.parse(it, store) } }.getOrNull() ?: return null
 		val hs = prov.enrollHandshake ?: return null
 		val myDomainId = prov.pendingTenant?.domainId ?: return null
 		val boot = identity.readyOrNull() ?: return null

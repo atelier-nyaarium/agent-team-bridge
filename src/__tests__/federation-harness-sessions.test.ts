@@ -173,7 +173,7 @@ describe("sessions, bindings, and console operations", () => {
 		const opsBefore = h.host.ops.length;
 		const sent = await live.post("/send", { from: live.team, to: "host.invented", body: "open a shell" });
 		expect(sent.status).toBe(404);
-		expect(h.gateway.sessionStore.getByTeam("host.invented")).toBeUndefined();
+		expect(h.gateway.faults.sessionRecord("host.invented")).toBeUndefined();
 		expect(h.host.ops.length).toBe(opsBefore);
 
 		const wakes = h.host.wakes.length;
@@ -211,11 +211,11 @@ describe("sessions, bindings, and console operations", () => {
 		const closed = await dispatch(owned.team, { kind: "close_session", target: owned.team });
 		expect(closed.result, JSON.stringify(closed)).toMatchObject({ closed: true });
 		expect(h.host.ops.at(-1)).toMatchObject({ kind: "killSession" });
-		expect(h.gateway.sessionStore.getByTeam(owned.team)).toBeDefined();
+		expect(h.gateway.faults.sessionRecord(owned.team)).toBeDefined();
 
 		// The answer has no session address left to land on; the record's absence is the result.
 		await dispatch(owned.team, { kind: "forget", target: owned.team });
-		expect(h.gateway.sessionStore.getByTeam(owned.team)).toBeUndefined();
+		expect(h.gateway.faults.sessionRecord(owned.team)).toBeUndefined();
 		expect(h.host.ops.at(-1)).toMatchObject({ kind: "killSession" });
 		bound = undefined;
 

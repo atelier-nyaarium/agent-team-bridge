@@ -10,29 +10,6 @@ export const ROUTER_PATHS = {
 export const CONSOLE_TOKEN_HEADER = "x-console-bridge-token";
 export const BEARER_PREFIX = "Bearer ";
 
-export const OWNER_OP_KINDS = {
-	deliver: "deliver",
-	consumerRegister: "consumer_register",
-	inboxRead: "inbox_read",
-	inboxAdvance: "inbox_advance",
-	opResult: "op_result",
-	hello: "hello",
-	blobFetch: "blob_fetch",
-	gatewayValue: "gateway_value",
-	planesRead: "planes_read",
-	reportRead: "report_read",
-	keyRequest: "key_request",
-	keyGrant: "key_grant",
-	keyReceipt: "key_receipt",
-	keyReceiptsRead: "key_receipts_read",
-	boardRead: "board_read",
-	boardWrite: "board_write",
-	presenceRead: "presence_read",
-	scheduleSend: "schedule_send",
-	capabilitiesRead: "capabilities_read",
-	cursorTranslate: "cursor_translate",
-} as const;
-
 export const OP_OUTCOME_ACCEPTED = "accepted";
 export const BOARD_OUTCOME_APPLIED = "applied";
 export const CONSOLE_REASON_CURSOR_STALE = "cursor_stale";

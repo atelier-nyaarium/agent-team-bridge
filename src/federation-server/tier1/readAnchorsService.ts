@@ -1,6 +1,5 @@
 import { mintEpoch } from "../../shared/epoch.js";
 import { MAX_TEAMS_PER_OWNER, mergeReadAnchor, type ReadAnchorEntry } from "../../shared/read-anchor-rules.js";
-import { ReadAnchorsReadSchema, ReportReadSchema } from "../../shared/schemasTier1.js";
 import { foldWriteResult } from "../../shared/write-result.js";
 import { OwnerOpRefused } from "../inbox/ownerOpIntake.js";
 import type { OwnerStoreRegistry } from "../inbox/ownerStoreRegistry.js";
@@ -85,16 +84,11 @@ export function createReadAnchorsService(deps: ReadAnchorsServiceDeps) {
 		read,
 		register(hooks: OwnerServiceHooks): void {
 			hooks.ownerOp("report_read", async (op, value) => {
-				const parsed = ReportReadSchema.safeParse(value);
-				if (!parsed.success) throw new OwnerOpRefused("malformed");
 				// Router stamps time; epochs use equality, never ordering.
 				const at = deps.registry.now();
-				return reportResult(op.domainId, parsed.data.team, { ...parsed.data, at });
+				return reportResult(op.domainId, value.team, { ...value, at });
 			});
-			hooks.ownerOp("read_anchors_read", async (op, value) => {
-				if (!ReadAnchorsReadSchema.safeParse(value).success) throw new OwnerOpRefused("malformed");
-				return read(op.domainId);
-			});
+			hooks.ownerOp("read_anchors_read", async (op) => read(op.domainId));
 		},
 	};
 }

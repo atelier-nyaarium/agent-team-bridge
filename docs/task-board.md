@@ -78,4 +78,4 @@ the Router's reference-held store already holds; a write naming anything else is
 
 - `src/gateway/awarenessBank.ts` - subscriber bank, flush deadline, liveness.
 - `src/gateway/boardAwareness.ts` - board recipients and net-change classification.
-- `src/gateway/routes.ts` - awareness delivery on channel pushes.
+- `src/gateway/routes/routesSend.ts` - awareness delivery on channel pushes.

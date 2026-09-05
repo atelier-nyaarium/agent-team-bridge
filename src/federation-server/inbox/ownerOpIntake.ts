@@ -13,9 +13,16 @@ import {
 	parseInboxAddress,
 	verifyOwnerOp,
 } from "../../shared/schemasInbox.js";
-import { OWNER_OP_KINDS } from "../../shared/wire-vocabulary.js";
 import { type LeaseService, readRouterMigrationWindow } from "../migration/leaseService.js";
 import { OwnerQuarantined } from "../owner/ownerStateStore.js";
+import {
+	type OwnerOpCatalogEntry,
+	type OwnerOpHandler,
+	type OwnerOpKind,
+	OwnerOpRegistry,
+	type OwnerOpValue,
+	ownerOpEntry,
+} from "../ownerOpRegistry.js";
 import type { InboxService } from "./inboxService.js";
 
 export interface OwnerOpIntakeParams {
@@ -30,28 +37,7 @@ export interface OwnerOpIntakeParams {
 	maxCachedAnswers?: number;
 }
 
-/** Verified, admitted, fresh operation. */
-export type OwnerOpHandler = (op: OwnerOp, value: Record<string, unknown>) => unknown | Promise<unknown>;
 type DurableNonceStore = Pick<InboxService, "ownerOpNonce" | "acceptOwnerOpNonce">;
-
-const BUILT_IN_KINDS = new Set<string>([
-	OWNER_OP_KINDS.deliver,
-	OWNER_OP_KINDS.consumerRegister,
-	OWNER_OP_KINDS.inboxRead,
-	OWNER_OP_KINDS.inboxAdvance,
-	OWNER_OP_KINDS.opResult,
-]);
-export const OWNER_STATE_MUTATION_KINDS = new Set([
-	"board_write",
-	"schedule_send",
-	"schedule_cancel",
-	"cross_domain_share",
-	"cross_domain_unshare",
-	"cross_domain_unlink",
-	"report_read",
-	"capabilities_report",
-	OWNER_OP_KINDS.deliver,
-]);
 
 const isMigrating = (result: unknown): boolean =>
 	!!result && typeof result === "object" && (result as { reason?: unknown }).reason === "migrating";
@@ -71,7 +57,7 @@ export class OwnerOpRefused extends Error {
 
 export class OwnerOpIntake {
 	private readonly nonces = new Map<string, { at: number; answer: Promise<unknown> }>();
-	private readonly handlers = new Map<string, OwnerOpHandler>();
+	private readonly registry = new OwnerOpRegistry();
 	private readonly now: () => number;
 	private readonly maxCachedAnswers: number;
 	private gatewayProtocol: ((domainId: string, gatewayId: string) => number | null) | undefined;
@@ -79,13 +65,35 @@ export class OwnerOpIntake {
 	constructor(private readonly params: OwnerOpIntakeParams) {
 		this.now = params.now ?? Date.now;
 		this.maxCachedAnswers = params.maxCachedAnswers ?? 5000;
+		this.registerInboxOps();
 	}
 
-	/** Register one non-built-in handler per operation kind. */
-	register(kind: string, handler: OwnerOpHandler): void {
-		if (this.handlers.has(kind) || BUILT_IN_KINDS.has(kind))
-			throw new Error(`owner op "${kind}" already registered`);
-		this.handlers.set(kind, handler);
+	/** Register one handler per catalogued kind. */
+	register<Kind extends OwnerOpKind>(kind: Kind, handler: OwnerOpHandler<Kind>): void {
+		this.registry.register(kind, handler);
+	}
+
+	/** The inbox's own kinds land through the same registry as every service. */
+	private registerInboxOps(): void {
+		this.register("deliver", (op, value) => this.deliver(op, value));
+		this.register("consumer_register", (op, value) =>
+			this.params.inbox.registerConsumer(op.domainId, op.signerSignPub, value.incarnation ?? 0),
+		);
+		this.register("inbox_read", (op, value) =>
+			this.params.inbox.readOwner(
+				op.domainId,
+				op.signerSignPub,
+				value.fromSeq ?? 1,
+				Math.min(value.limit ?? 100, 500),
+				value.cursorEpoch,
+			),
+		);
+		this.register("inbox_advance", (op, value) =>
+			this.params.inbox.advanceCursor(op.domainId, op.signerSignPub, value.cursor, value.cursorEpoch),
+		);
+		this.register("op_result", (op, value) =>
+			this.params.inbox.opResult(op.domainId, { conversationId: value.conversationId, opId: value.opId }),
+		);
 	}
 
 	setGatewayProtocol(gatewayProtocol: (domainId: string, gatewayId: string) => number | null): void {
@@ -147,11 +155,12 @@ export class OwnerOpIntake {
 			opKey: { conversationId: op.conversationId, opId: op.opId },
 			outcome: "durability_uncertain" as const,
 		});
+		const entry = ownerOpEntry(String(op.op.kind));
 		try {
-			const result = await this.dispatch(op, refused);
+			const result = await this.dispatch(op, entry, refused);
 			if (isMigrating(result)) return result;
 			if (
-				op.op.kind !== OWNER_OP_KINDS.deliver &&
+				entry?.mutation !== "delivery" &&
 				nonceStore.acceptOwnerOpNonce &&
 				!nonceStore.acceptOwnerOpNonce(op.domainId, op.signerSignPub, op.nonce, op.at)
 			)
@@ -166,51 +175,23 @@ export class OwnerOpIntake {
 		}
 	}
 
-	private dispatch(op: OwnerOp, refused: (reason: string) => OpResultEnvelope): unknown | Promise<unknown> {
-		const value = op.op;
-		if (readRouterMigrationWindow().fenced && OWNER_STATE_MUTATION_KINDS.has(String(value.kind))) {
+	private dispatch(
+		op: OwnerOp,
+		entry: OwnerOpCatalogEntry | null,
+		refused: (reason: string) => OpResultEnvelope,
+	): unknown | Promise<unknown> {
+		if (readRouterMigrationWindow().fenced && entry && entry.mutation !== "read") {
 			if (!this.params.leases?.ready(op.domainId)) return refused("migrating");
 		}
-		const handler = this.handlers.get(String(value.kind));
-		if (handler) return handler(op, value);
-		switch (value.kind) {
-			case OWNER_OP_KINDS.deliver:
-				return this.deliver(op, value, refused);
-			case OWNER_OP_KINDS.consumerRegister:
-				return this.params.inbox.registerConsumer(
-					op.domainId,
-					op.signerSignPub,
-					Number(value.incarnation ?? 0),
-				);
-			case OWNER_OP_KINDS.inboxRead:
-				return this.params.inbox.readOwner(
-					op.domainId,
-					op.signerSignPub,
-					Number(value.fromSeq ?? 1),
-					Math.min(Number(value.limit ?? 100), 500),
-					value.cursorEpoch === undefined ? undefined : Number(value.cursorEpoch),
-				);
-			case OWNER_OP_KINDS.inboxAdvance:
-				return this.params.inbox.advanceCursor(
-					op.domainId,
-					op.signerSignPub,
-					Number(value.cursor),
-					Number(value.cursorEpoch),
-				);
-			case OWNER_OP_KINDS.opResult:
-				return this.params.inbox.opResult(op.domainId, {
-					conversationId: String(value.conversationId),
-					opId: String(value.opId),
-				});
-			default:
-				return refused("unsupported");
-		}
+		const handler = entry && this.registry.handler(entry.kind);
+		if (!entry || !handler) return refused("unsupported");
+		return handler(op, entry.value.parse(op.op) as Record<string, unknown>);
 	}
 
 	/** Console writes stay in their Domain and use their opKey. */
-	private deliver(op: OwnerOp, value: Record<string, unknown>, refused: (reason: string) => OpResultEnvelope) {
-		const address = parseInboxAddress(String(value.address));
-		if (!address || address.domainId !== op.domainId) return refused("domain");
+	private deliver(op: OwnerOp, value: OwnerOpValue<"deliver">) {
+		const address = parseInboxAddress(value.address);
+		if (!address || address.domainId !== op.domainId) throw new OwnerOpRefused("domain");
 		const row = InboxRowInputSchema.safeParse(value.row);
 		if (
 			!row.success ||
@@ -221,14 +202,14 @@ export class OwnerOpIntake {
 			row.data.envelope.origin.domainId !== op.domainId ||
 			row.data.envelope.origin.device !== op.device
 		)
-			return refused("row");
+			throw new OwnerOpRefused("row");
 		if (
 			address.kind === "session" &&
 			row.data.envelope.kind === "console_op" &&
 			(this.gatewayProtocol?.(op.domainId, address.gatewayId) ?? 0) < FEDERATION_VALUE_PROTOCOL_VERSION
 		) {
 			// Remove-by: every registered gateway reports protocol 2.
-			return refused("unsupported");
+			throw new OwnerOpRefused("unsupported");
 		}
 		const result = this.params.inbox.appendRow({
 			address,

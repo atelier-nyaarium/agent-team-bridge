@@ -47,7 +47,7 @@ class ConsoleClient internal constructor(
 	private val coordinator: ConsoleTransportCoordinator? = null,
 	private val collaborators: ConsoleClientCollaborators,
 ) {
-	internal val transport = ConsoleRouterTransport(boot.provisioning, store, collaborators.homeGatewayId, collaborators.saveProvisioning)
+	internal val transport = ConsoleRouterTransport(boot.credentials, store, collaborators.homeGatewayId, collaborators.saveProvisioning)
 
 	/** Content-addressed blob staging. */
 	internal val blobs = BlobStore(BlobStore.root(store.filesDir))
@@ -119,7 +119,7 @@ class ConsoleClient internal constructor(
 		opId: String = ambient.newOpId(),
 		timeoutMs: Long = ConsoleHttp.DEFAULT_OWNER_OP_TIMEOUT_MS,
 	): JsonElement? {
-		val conversationId = transport.prov.conversationId
+		val conversationId = transport.credentials.conversationId
 		val sealed = sealOwnerPayload(
 			wireJson.encodeToString(ConsoleOp.serializer(), op).toByteArray(Charsets.UTF_8),
 			opPayloadAadKind(),
@@ -127,7 +127,7 @@ class ConsoleClient internal constructor(
 		val (epoch, body) = sealed
 		val domain = boot.domainId
 		val envelope = RowEnvelope(
-			origin = RowOrigin("console", domain, device = transport.prov.device),
+			origin = RowOrigin("console", domain, device = transport.credentials.device),
 			opKey = OpKey(conversationId, opId),
 			epoch = kotlinx.serialization.json.JsonPrimitive(epoch),
 			kind = "console_op",
@@ -273,7 +273,7 @@ internal suspend fun sendValueOp(gatewayId: String, op: ConsoleOp, opId: String 
 
 	internal fun buildConnectedGatewaysRequest(base: String): Request = Request.Builder()
 		.url(base + Protocol.Wire.ROUTER_PATH_CONSOLE)
-		.header(Protocol.Wire.CONSOLE_TOKEN_HEADER, Protocol.Wire.BEARER_PREFIX + transport.prov.appToken)
+		.header(Protocol.Wire.CONSOLE_TOKEN_HEADER, Protocol.Wire.BEARER_PREFIX + transport.credentials.appToken)
 		.post("""{"gateways":{}}""".toRequestBody(ConsoleHttp.JSON))
 		.build()
 

@@ -3,10 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayFrameHandler } from "../federation-server/gatewayBridge.js";
-import { type OwnerOpHandler, OwnerOpRefused } from "../federation-server/inbox/ownerOpIntake.js";
+import { OwnerOpRefused } from "../federation-server/inbox/ownerOpIntake.js";
 import { OwnerStoreRegistry } from "../federation-server/inbox/ownerStoreRegistry.js";
 import { DomainQuota } from "../federation-server/owner/domainQuota.js";
 import { OwnerQuarantined } from "../federation-server/owner/ownerStateStore.js";
+import type { ErasedOwnerOpHandler, OwnerOpHandler, OwnerOpKind } from "../federation-server/ownerOpRegistry.js";
 import type { OwnerServiceHooks } from "../federation-server/ownerServiceHooks.js";
 import { createCapabilitiesService } from "../federation-server/tier1/capabilitiesService.js";
 import { createReadAnchorsService } from "../federation-server/tier1/readAnchorsService.js";
@@ -27,13 +28,15 @@ const make = () => {
 };
 
 const makeHooks = () => {
-	const ownerOps = new Map<string, OwnerOpHandler>();
+	const ownerOps = new Map<string, ErasedOwnerOpHandler>();
 	const gatewayFrames = new Map<string, GatewayFrameHandler>();
 	return {
 		ownerOps,
 		gatewayFrames,
 		hooks: {
-			ownerOp: (name: string, handler: OwnerOpHandler) => ownerOps.set(name, handler),
+			ownerOp: <Kind extends OwnerOpKind>(name: Kind, handler: OwnerOpHandler<Kind>) => {
+				ownerOps.set(name, handler as ErasedOwnerOpHandler);
+			},
 			gatewayFrame: (name: string, handler: GatewayFrameHandler) => gatewayFrames.set(name, handler),
 			onGatewayRegistered: () => {},
 			onGatewayDropped: () => {},
@@ -165,7 +168,7 @@ describe("Router tier 1 services", () => {
 		const anchors = createReadAnchorsService({ registry });
 		const { hooks, ownerOps } = makeHooks();
 		anchors.register(hooks);
-		const op = { domainId: "a", conversationId: "phone" } as Parameters<OwnerOpHandler>[0];
+		const op = { domainId: "a", conversationId: "phone" } as Parameters<ErasedOwnerOpHandler>[0];
 
 		await ownerOps.get("report_read")?.(op, {
 			kind: "report_read",
@@ -201,7 +204,7 @@ describe("Router tier 1 services", () => {
 			"read_anchors_read",
 		]);
 		expect([...gatewayFrames.keys()]).toEqual(["capabilities_read"]);
-		const op = { domainId: "a", conversationId: "phone" } as Parameters<OwnerOpHandler>[0];
+		const op = { domainId: "a", conversationId: "phone" } as Parameters<ErasedOwnerOpHandler>[0];
 		await ownerOps.get("capabilities_report")?.(op, { kind: "capabilities_report", capabilities: [] });
 		await ownerOps.get("report_read")?.(op, { kind: "report_read", team: "team", epoch: 1, seq: 1, at: 1 });
 		expect(await ownerOps.get("capabilities_read")?.(op, { kind: "capabilities_read" })).toMatchObject({
@@ -225,7 +228,7 @@ describe("Router tier 1 services", () => {
 		capabilities.register(hooks);
 		anchors.register(hooks);
 		vi.spyOn(registry.for("a"), "put").mockReturnValue({ kind: "durability_failure", reason: "full" });
-		const op = { domainId: "a", conversationId: "phone" } as Parameters<OwnerOpHandler>[0];
+		const op = { domainId: "a", conversationId: "phone" } as Parameters<ErasedOwnerOpHandler>[0];
 		expect(
 			await ownerOps.get("capabilities_report")?.(op, { kind: "capabilities_report", capabilities: [] }),
 		).toEqual({

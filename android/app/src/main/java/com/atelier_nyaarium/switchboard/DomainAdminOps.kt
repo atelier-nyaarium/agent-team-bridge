@@ -59,7 +59,7 @@ internal class DomainAdminOps(
 	 * call site, mirroring revoke/admit. */
 	suspend fun deleteDomain(): DeleteDomainOutcome = withContext(Dispatchers.IO) {
 		val domainId = identity.readyOrNull()?.domainId
-			?: runCatching { store.load()?.let { Provisioning.parse(it, store).pendingTenant?.domainId } }.getOrNull()
+			?: runCatching { store.load()?.let { ConsoleCredentials.parse(it, store).pendingTenant?.domainId } }.getOrNull()
 		// No resolvable Domain id means nothing was ever rooted server-side; just wipe locally.
 		if (domainId.isNullOrEmpty()) {
 			collaborators.clearAll()
@@ -152,7 +152,7 @@ internal class DomainAdminOps(
 	suspend fun buildInviteBlob(tenant: HostedTenant): Result<String> = withContext(Dispatchers.IO) {
 		runCatching {
 			val blob = store.load() ?: error("This device is not provisioned. Re-import your setup blob first.")
-			val prov = Provisioning.parse(blob, store)
+			val prov = ConsoleCredentials.parse(blob, store)
 			// Mint (once per tenant) the enroll-handshake secrets that seed the in-person compare and
 			// embed them in the QR alongside this admin's owner keys + Domain. The pin rides the QR OUT
 			// OF BAND (never sent to the Router); the handshakeId keys the broker window the admin's leg polls.

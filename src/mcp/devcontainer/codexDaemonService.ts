@@ -1,6 +1,4 @@
-import type { AgentResolvedTarget } from "../../shared/agent-execution-target.js";
 import {
-	CODEX_DEFAULT_MODEL,
 	CodexAppServerTurnCompletedSchema,
 	type CodexDaemonCommand,
 	CodexDaemonCommandSchema,
@@ -9,21 +7,15 @@ import {
 	CodexDaemonHelloSchema,
 	type CodexDaemonReceipt,
 	CodexDaemonReceiptSchema,
-	type CodexServiceTier,
 	isReliableCodexMessage,
 	sanitizeCodexErrorText,
 } from "../../shared/codex-agent.js";
 import { AgentDaemonCore, type AgentEventAck } from "./agentDaemonCore.js";
-import { resolveAgentTarget } from "./agentTargetResolve.js";
-import type { AppServerSession } from "./codexAppServerSession.js";
-import { defaultOpenClient } from "./codexAppServerSession.js";
+import { type CommandDispatchHost, describe, dispatchCodexCommand } from "./codexCommandDispatch.js";
 import type { CodexDaemonDeps, TargetSession, TurnBinding } from "./codexDaemonTypes.js";
-import { CodexLiveTurns } from "./codexLiveTurns.js";
-import type { TargetLease } from "./codexTargets.js";
-import { inspectRead, type PoisonReason } from "./codexThreadLifecycle.js";
-import type { ReadOutcome, TerminalOutcome } from "./codexTurnOutcome.js";
-import { outcomeFromRead, terminalOf } from "./codexTurnOutcome.js";
-import { CodexTurnTracker } from "./codexTurnTracker.js";
+import { CodexSessionLifecycle, type SessionLifecycleHost } from "./codexSessionLifecycle.js";
+import { outcomeFromRead, type ReadOutcome, type TerminalOutcome, terminalOf } from "./codexTurnOutcome.js";
+import { CodexWatchdog, type WatchdogHost } from "./codexWatchdog.js";
 
 export { agentTargetIdFor, resolveAgentTarget } from "./agentTargetResolve.js";
 export type { AppServerSession } from "./codexAppServerSession.js";
@@ -33,35 +25,11 @@ export type { CodexDaemonEvent, CodexDaemonReceipt };
 ////////////////////////////////
 //  Constants
 
-/** How long a completed turn waits for the final item the tracker holds it for. */
-const HELD_TERMINAL_MS = 10_000;
-
-/** How long an active turn may go without progress before the watchdog asks App Server about it. */
-// A reasoning stretch streams no frame; ten minutes tells that from a hang.
-const NO_PROGRESS_MS = 600_000;
 /** A frame this long after the last one is logged, since it is the silence the watchdog acts on. */
 const FRAME_GAP_LOG_MS = 60_000;
 
-/** How often the watchdog and the reaper look. */
-const SWEEP_MS = 30_000;
-
-/** Quiet time before an idle target is released, past the 240s wait budget and 300s reconcile guard. */
-const REAP_QUIET_MS = 600_000;
-
-/** Bindings kept past the live ones. */
-const THREAD_MEMORY = 256;
-
 ////////////////////////////////
 //  Functions & Helpers
-
-function describe(error: unknown): string {
-	const text = error instanceof Error ? error.message : String(error);
-	return sanitizeCodexErrorText(text) || `codex command failed`;
-}
-
-function causeOf(reason: PoisonReason): string {
-	return reason.kind === "failure" ? reason.failure.kind : `archive refused ${reason.attempts} times`;
-}
 
 /** A completed turn the tracker is holding for its final item, from the frame that announced it. */
 function heldTurn(message: unknown): { threadId: string; turnId: string } | null {
@@ -94,12 +62,11 @@ function framedTurn(message: { params?: unknown }): { threadId: string; turnId: 
  */
 export class CodexDaemonService {
 	private readonly core: AgentDaemonCore<TargetSession>;
-	/** Not a registry: whose deadlines to clear. `AgentDaemonCore` owns which generation serves. */
-	private readonly deadlineSessions = new Set<TargetSession>();
+	private readonly sessions: CodexSessionLifecycle;
+	private readonly watchdog: CodexWatchdog;
+	private readonly dispatchHost: CommandDispatchHost;
 	private stopped = false;
-	private sweeper?: ReturnType<typeof setInterval>;
 	private inFlight = 0;
-	private sweeping = false;
 	/** The DAEMON's quiet, stamped by commands alone. Not a session's `usedAt`; never merge them. */
 	private quietSince = 0;
 
@@ -112,6 +79,44 @@ export class CodexDaemonService {
 			isReliable: isReliableCodexMessage,
 			helloSchema: CodexDaemonHelloSchema,
 		});
+		const sessionHost: SessionLifecycleHost = {
+			deps: this.deps,
+			core: this.core,
+			now: () => this.now(),
+			isStopped: () => this.stopped,
+			startSweeping: () => this.watchdog.start(),
+			lease: (run) => this.lease(run),
+			onServerEvent: (session, message) => this.onServerEvent(session, message),
+			onCommentary: (session, item) => this.onCommentary(session, item),
+			publishTerminal: (session, threadId, turnId, terminal) =>
+				this.publishTerminal(session, threadId, turnId, terminal),
+			settleHeld: (session, threadId, turnId) => this.settleHeld(session, threadId, turnId),
+		};
+		this.sessions = new CodexSessionLifecycle(sessionHost);
+		const watchdogHost: WatchdogHost = {
+			deps: this.deps,
+			now: () => this.now(),
+			lease: (run) => this.lease(run),
+			live: (session) => this.core.live(session),
+			sessions: () => this.sessions.liveSessions(),
+			readOutcome: (session, threadId, turnId) => this.readOutcome(session, threadId, turnId),
+			dropDeadline: (session, turnId) => this.sessions.dropDeadline(session, turnId),
+			settle: (session, threadId, turnId, terminal) => this.settle(session, threadId, turnId, terminal),
+			release: (session, verb, cause) => this.sessions.release(session, verb, cause),
+			inFlight: () => this.inFlight,
+			quietSince: () => this.quietSince,
+		};
+		this.watchdog = new CodexWatchdog(watchdogHost);
+		this.dispatchHost = {
+			resolveHostCwd: (hint) => this.deps.resolveHostCwd(hint),
+			acquireSession: (target) => this.sessions.acquire(target),
+			bindThread: (session, threadId, binding) => this.sessions.bindThread(session, threadId, binding),
+			readOutcome: (session, threadId, turnId) => this.readOutcome(session, threadId, turnId),
+			dropDeadline: (session, turnId) => this.sessions.dropDeadline(session, turnId),
+			settle: (session, threadId, turnId, terminal) => this.settle(session, threadId, turnId, terminal),
+			emitReceipt: (session, command, receipt) => this.emitReceipt(session, command, receipt),
+			reject: (command, error) => this.reject(command, error),
+		};
 	}
 
 	private now(): number {
@@ -184,339 +189,13 @@ export class CodexDaemonService {
 	/** Retired before the clients close, so nothing a close settles still counts as live. */
 	shutdown(): void {
 		this.stopped = true;
-		if (this.sweeper !== undefined) (this.deps.clearSweep ?? clearInterval)(this.sweeper);
-		this.sweeper = undefined;
-		for (const session of this.deadlineSessions) this.clearDeadlines(session);
-		this.deadlineSessions.clear();
+		this.watchdog.stop();
+		this.sessions.shutdown();
 		this.core.shutdown();
 	}
 
-	private async dispatch(command: CodexDaemonCommand): Promise<void> {
-		switch (command.kind) {
-			case "start":
-				return this.runStart(command);
-			case "message":
-				return this.runMessage(command);
-			case "interrupt":
-				return this.runInterrupt(command);
-			case "reconcile":
-				return this.runReconcile(command);
-			default:
-				// An unmodelled kind must not reach a branch that starts work.
-				return this.reject(command as CodexDaemonCommand, `unsupported command`);
-		}
-	}
-
-	private async runStart(command: Extract<CodexDaemonCommand, { kind: "start" }>): Promise<void> {
-		const resolved = resolveAgentTarget(command.target, this.deps.resolveHostCwd);
-		const session = await this.session(resolved);
-		if (!session) return this.reject(command, `execution target is unavailable`);
-
-		// startThread checks both against the server's own list.
-		const threadId = await session.client.startThread({
-			cwd: resolved.cwd,
-			model: command.model,
-			serviceTier: command.serviceTier,
-		});
-		const binding: TurnBinding = { ownerKey: command.ownerKey, agentId: command.agentId, threadId };
-		this.bindThread(session, threadId, binding);
-		// The thread already carries the tier, so its first turn does not restate it.
-		const turnId = await this.beginTurn(session, binding, command.prompt);
-		// A refusal marks the agent unavailable with nothing to reconcile, so it is only reached after
-		// asking App Server whether a turn exists.
-		if (!turnId) return this.reject(command, `codex thread produced no turn`);
-		this.emitReceipt(session, command, {
-			kind: "accepted",
-			requestId: command.requestId,
-			ownerKey: command.ownerKey,
-			agentId: command.agentId,
-			operationId: command.operationId,
-			resolvedTarget: resolved,
-			threadId,
-			turnId,
-			delivery: "started",
-		});
-	}
-
-	/**
-	 * Start a turn, and if that call fails, ask App Server whether one started anyway.
-	 *
-	 * A lost reply looks identical to a write that never landed, and only the server can tell them
-	 * apart. Reporting a live turn as a refusal strands it: a refused start is never reconciled.
-	 */
-	private async beginTurn(
-		session: TargetSession,
-		binding: TurnBinding,
-		prompt: string,
-		turn: { model?: string; serviceTier?: CodexServiceTier } = {},
-	): Promise<string | undefined> {
-		let bound: string | undefined;
-		try {
-			// Bound from inside the start, before a terminal buffered for this turn can be published.
-			return await session.client.startTurn(
-				binding.threadId,
-				prompt,
-				(turnId) => {
-					bound = turnId;
-					session.turns.bind(turnId, binding);
-				},
-				turn,
-			);
-		} catch {
-			// A start that failed after binding holds a turn that is not ours; whatever runs is below.
-			if (bound !== undefined) session.turns.forget(bound);
-			const running = await this.runningTurn(session, binding.threadId);
-			if (running.known !== "running") return undefined;
-			session.turns.bind(running.turnId, binding);
-			return running.turnId;
-		}
-	}
-
-	/**
-	 * Three answers, like `outcomeFromRead`. "There is no turn" and "I could not ask" send callers in
-	 * opposite directions, and one of those starts a second turn on a thread still working.
-	 */
-	private async runningTurn(
-		session: TargetSession,
-		threadId: string,
-	): Promise<{ known: "running"; turnId: string } | { known: "none" } | { known: "unknown" }> {
-		try {
-			// `inspectRead` owns what a thread read means; this asks only whether work is still going.
-			const seen = inspectRead(await session.client.readThread(threadId), threadId);
-			if (seen.known === "running") return { known: "running", turnId: seen.turnId };
-			return seen.known === "unknown" ? { known: "unknown" } : { known: "none" };
-		} catch {
-			return { known: "unknown" };
-		}
-	}
-
-	private async runMessage(command: Extract<CodexDaemonCommand, { kind: "message" }>): Promise<void> {
-		const session = await this.session(command.target);
-		if (!session) return this.reject(command, `execution target is unavailable`);
-
-		const binding: TurnBinding = {
-			ownerKey: command.ownerKey,
-			agentId: command.agentId,
-			threadId: command.threadId,
-		};
-		this.bindThread(session, command.threadId, binding);
-		// A turn this session no longer holds has settled, which is the one case that becomes a new turn.
-		const expectedTurnId = command.expectedTurnId;
-		if (expectedTurnId !== undefined && session.turns.has(expectedTurnId)) {
-			try {
-				await session.client.steerTurn(command.threadId, expectedTurnId, command.prompt);
-				// A "steered" receipt for a turn whose terminal published leaves the gateway waiting on a
-				// turn that has already ended.
-				if (session.turns.has(expectedTurnId)) {
-					this.emitReceipt(session, command, {
-						kind: "accepted",
-						requestId: command.requestId,
-						ownerKey: command.ownerKey,
-						agentId: command.agentId,
-						operationId: command.operationId,
-						resolvedTarget: command.target,
-						threadId: command.threadId,
-						turnId: expectedTurnId,
-						delivery: "steered",
-					});
-					return;
-				}
-				// That terminal may have carried this prompt with it, so the same rule as a failed steer
-				// applies: only App Server saying nothing runs makes it a new turn.
-				const ended = await this.runningTurn(session, command.threadId);
-				if (ended.known !== "none") return this.reject(command, `codex could not account for the steered turn`);
-			} catch (error) {
-				// Only App Server saying the turn ended makes this a new turn. Otherwise the prompt could
-				// run twice concurrently, with write and network access.
-				const running = await this.runningTurn(session, command.threadId);
-				if (running.known !== "none") return this.reject(command, describe(error));
-				session.turns.forget(expectedTurnId);
-			}
-		}
-
-		await session.client.resumeThread(command.threadId);
-		const turnId = await this.beginTurn(session, binding, command.prompt, {
-			model: command.model,
-			serviceTier: command.serviceTier,
-		});
-		if (!turnId) return this.reject(command, `codex thread produced no turn`);
-		this.emitReceipt(session, command, {
-			kind: "accepted",
-			requestId: command.requestId,
-			ownerKey: command.ownerKey,
-			agentId: command.agentId,
-			operationId: command.operationId,
-			resolvedTarget: command.target,
-			threadId: command.threadId,
-			turnId,
-			delivery: "started",
-		});
-	}
-
-	private async runInterrupt(command: Extract<CodexDaemonCommand, { kind: "interrupt" }>): Promise<void> {
-		const session = await this.session(command.target);
-		if (!session) return this.reject(command, `execution target is unavailable`);
-		const shared = {
-			requestId: command.requestId,
-			ownerKey: command.ownerKey,
-			agentId: command.agentId,
-			operationId: command.operationId,
-			threadId: command.threadId,
-			turnId: command.turnId,
-		};
-		console.error(`[codex-daemon] interrupt requested for turn ${command.turnId} by ${command.agentId}`);
-		try {
-			await session.client.interruptTurn(command.threadId, command.turnId);
-		} catch (error) {
-			this.emitReceipt(session, command, {
-				kind: "interruptFailed",
-				...shared,
-				ok: false,
-				error: describe(error),
-			});
-			return;
-		}
-		// Delivered, not ended: the turn's own terminal says how it finished.
-		this.emitReceipt(session, command, { kind: "interruptResult", ...shared, ok: true });
-	}
-
-	private async runReconcile(command: Extract<CodexDaemonCommand, { kind: "reconcile" }>): Promise<void> {
-		const session = await this.session(command.target);
-		if (!session) return this.reject(command, `execution target is unavailable`);
-		const binding: TurnBinding = {
-			ownerKey: command.ownerKey,
-			agentId: command.agentId,
-			threadId: command.threadId,
-		};
-		this.bindThread(session, command.threadId, binding);
-
-		// Silence is reported as silence: no turn state on the receipt, so the record stays askable.
-		let observed: ReadOutcome = { known: "unknown" };
-		if (command.turnId) {
-			try {
-				const adopted = await session.client.adoptThread(command.threadId);
-				if (adopted.known === "running" || adopted.known === "settled") {
-					if (adopted.turnId !== command.turnId) {
-						// The thread moved on to another turn; this one is asked about by name.
-						observed = await this.readOutcome(session, command.threadId, command.turnId);
-					} else if (adopted.known === "running") {
-						observed = { known: "running" };
-					} else {
-						observed = { known: "settled", outcome: adopted.outcome };
-					}
-				}
-			} catch {
-				observed = { known: "unknown" };
-			}
-		}
-		// Rebound, so its events correlate under the new generation.
-		if (observed.known === "running" && command.turnId) session.turns.bind(command.turnId, binding);
-
-		// The receipt installs the fence FIRST, so the terminal after it is measured against this
-		// generation, not the dead one.
-		this.emitReceipt(session, command, {
-			kind: "reconciled",
-			requestId: command.requestId,
-			ownerKey: command.ownerKey,
-			agentId: command.agentId,
-			resolvedTarget: command.target,
-			threadId: command.threadId,
-			turnId: command.turnId,
-			turnState:
-				observed.known === "running"
-					? "inProgress"
-					: observed.known === "settled"
-						? observed.outcome.status
-						: undefined,
-		});
-		if (observed.known === "settled" && command.turnId) {
-			this.dropDeadline(session, command.turnId);
-			this.settle(session, command.threadId, command.turnId, observed.outcome);
-		}
-	}
-
-	/**
-	 * Opened on first use. Null means unreachable, which the caller reports as a refusal.
-	 *
-	 * Commands serialize per AGENT, so two agents sharing a target arrive concurrently. The open is
-	 * shared per target: two clients over one child would give it two stdout readers, two colliding
-	 * JSON-RPC id spaces, and two event counters both starting at zero on one fenced stream.
-	 */
-	private async session(target: AgentResolvedTarget): Promise<TargetSession | null> {
-		const opened = await this.core.acquireSession(target, (resolved, lease) => this.open(resolved, lease));
-		// One place stamps the reaper's clock for a command, whichever command it was.
-		if (opened) opened.usedAt = this.now();
-		return opened;
-	}
-
-	/** A client that will never serve: closed, its lease handed back, and the reason named. */
-	private discard(client: AppServerSession, target: AgentResolvedTarget, lease: TargetLease, why: string): null {
-		console.error(`[codex-daemon] discarding ${target.targetId} generation ${lease.generation}: ${why}`);
-		try {
-			client.close();
-		} catch {
-			// The lease release is what retires this child; a close that throws must not skip it.
-		}
-		this.deps.targets.release(target.targetId, lease.generation);
-		return null;
-	}
-
-	private async open(target: AgentResolvedTarget, lease: TargetLease): Promise<TargetSession | null> {
-		// A new generation is a different child, so nothing is carried over.
-		const opened = this.deps.openClient ?? defaultOpenClient;
-		let client: AppServerSession;
-		// Named before it exists: the hooks serve the session built from the client they open.
-		let session: TargetSession | undefined;
-		// A poison this early has no session to retire, and losing it would leak the child it condemns.
-		const early: Array<{ threadId: string; reason: PoisonReason }> = [];
-		try {
-			// Used only when a start names no model. One child serves threads that may each want a
-			// different one, so the choice belongs on the call.
-			client = await opened(lease.child, CODEX_DEFAULT_MODEL, {
-				onTerminal: (threadId, turnId, terminal) => {
-					if (session) this.publishTerminal(session, threadId, turnId, terminal);
-				},
-				onPoisoned: (threadId, reason) => {
-					if (session) this.retireGeneration(session, threadId, reason);
-					else early.push({ threadId, reason });
-				},
-			});
-		} catch {
-			this.deps.targets.release(target.targetId, lease.generation);
-			return null;
-		}
-
-		const poisoned = early[0];
-		if (poisoned) return this.discard(client, target, lease, `${poisoned.threadId} ${causeOf(poisoned.reason)}`);
-		// A shutdown that landed while this was opening owns no ledger this child could be added to.
-		if (this.stopped) return this.discard(client, target, lease, `daemon shut down`);
-
-		session = {
-			targetId: target.targetId,
-			generation: lease.generation,
-			client,
-			tracker: new CodexTurnTracker((item) => {
-				if (session) this.onCommentary(session, item);
-			}),
-			// Restarts from zero with the child, hence the generation on every fence.
-			nextEventId: 0,
-			turns: new CodexLiveTurns(() => this.now()),
-			threads: new Map(),
-			held: new Map(),
-			usedAt: this.now(),
-		};
-		const opening = session;
-		client.onEvent((message) => this.onServerEvent(opening, message));
-		this.startSweeping();
-		// Older generations of this target keep no deadline running. A newer one outranks this open.
-		for (const previous of this.deadlineSessions) {
-			if (previous.targetId !== opening.targetId) continue;
-			if (previous.generation > opening.generation) continue;
-			this.clearDeadlines(previous);
-			this.deadlineSessions.delete(previous);
-		}
-		this.deadlineSessions.add(opening);
-		return session;
+	private dispatch(command: CodexDaemonCommand): Promise<void> {
+		return dispatchCodexCommand(this.dispatchHost, command);
 	}
 
 	/** The thread id parks the thread whether a binding is held or not; `onTerminal` reaches the gateway. */
@@ -538,7 +217,7 @@ export class CodexDaemonService {
 			);
 		}
 		if (outcome) {
-			this.dropDeadline(session, outcome.turnId);
+			this.sessions.dropDeadline(session, outcome.turnId);
 			this.settle(session, outcome.threadId, outcome.turnId, terminalOf(outcome));
 			return;
 		}
@@ -548,29 +227,8 @@ export class CodexDaemonService {
 		const held = heldTurn(message);
 		// Only a terminal actually waiting here; a redelivered one is already settled.
 		if (held && session.tracker.holding(held.threadId, held.turnId)) {
-			this.holdDeadline(session, held.threadId, held.turnId);
+			this.sessions.holdDeadline(session, held.threadId, held.turnId);
 		}
-	}
-
-	/** The tracker waits for a final item that may never arrive, so the wait is bounded. */
-	private holdDeadline(session: TargetSession, threadId: string, turnId: string): void {
-		if (session.held.has(turnId)) return;
-		const setTimer = this.deps.setTimer ?? ((run, ms) => setTimeout(run, ms));
-		session.held.set(
-			turnId,
-			setTimer(() => {
-				session.held.delete(turnId);
-				if (!this.core.live(session)) return;
-				void this.lease(() => this.settleHeld(session, threadId, turnId));
-			}, HELD_TERMINAL_MS),
-		);
-	}
-
-	private dropDeadline(session: TargetSession, turnId: string): void {
-		const timer = session.held.get(turnId);
-		if (timer === undefined) return;
-		(this.deps.clearTimer ?? clearTimeout)(timer);
-		session.held.delete(turnId);
 	}
 
 	/** One read decides it; only a read that says nothing settles on what the tracker holds. */
@@ -587,85 +245,6 @@ export class CodexDaemonService {
 		this.settle(session, threadId, turnId, terminal);
 	}
 
-	/** One timer for the daemon's life, started with its first session. */
-	private startSweeping(): void {
-		if (this.sweeper !== undefined || this.stopped) return;
-		const setSweep = this.deps.setSweep ?? ((run, ms) => setInterval(run, ms));
-		this.sweeper = setSweep(() => void this.sweep(), SWEEP_MS);
-		(this.sweeper as { unref?: () => void }).unref?.();
-	}
-
-	/** Overdue turns first, since settling one is what makes its target reapable. */
-	private async sweep(): Promise<void> {
-		// A sweep still reading when the next one fires would double every read it has not finished.
-		if (this.sweeping) return;
-		this.sweeping = true;
-		try {
-			for (const session of [...this.deadlineSessions]) {
-				if (this.core.live(session)) await this.lease(() => this.watchTurns(session));
-			}
-			this.reapIdle();
-		} finally {
-			this.sweeping = false;
-		}
-	}
-
-	/**
-	 * Ask App Server about a turn that has gone quiet, and act on the answer rather than the silence.
-	 *
-	 * Progress is a frame the turn produced. Another identical `inProgress` is not progress: a turn
-	 * that hangs reports it forever, which is exactly the case this exists to end.
-	 */
-	private async watchTurns(session: TargetSession): Promise<void> {
-		for (const { turnId, binding, warned } of session.turns.overdue(NO_PROGRESS_MS)) {
-			const observed = await this.readOutcome(session, binding.threadId, turnId);
-			if (!this.core.live(session)) return;
-			// Settled or rebound while the read was in flight: that thread is not this turn's any more.
-			if (session.turns.bindingOn(binding.threadId, turnId) === undefined) continue;
-			if (observed.known === "settled") {
-				this.dropDeadline(session, turnId);
-				this.settle(session, binding.threadId, turnId, observed.outcome);
-				continue;
-			}
-			if (!warned) {
-				session.turns.warn(turnId);
-				console.error(
-					`[codex-daemon] ${session.targetId} interrupting turn ${turnId}: no frame from ${binding.threadId} in ${NO_PROGRESS_MS / 1000}s`,
-				);
-				void this.lease(() => session.client.interruptTurn(binding.threadId, turnId)).catch(() => undefined);
-				continue;
-			}
-			// Interrupted once and still silent, so this child answers for nothing any more.
-			this.release(session, `retiring`, `${binding.threadId} made no progress on ${turnId}`);
-			return;
-		}
-	}
-
-	/**
-	 * Release a target nobody is using, which is the only thing that ends a codex child's life here.
-	 *
-	 * Every condition is checked at the instant of the reap: an in-flight lease anywhere, a turn this
-	 * daemon still holds, a terminal still on its deadline, or a thread the owner has not parked.
-	 */
-	private reapIdle(): void {
-		if (this.inFlight > 0) return;
-		const now = this.now();
-		if (now - this.quietSince < REAP_QUIET_MS) return;
-		for (const session of [...this.deadlineSessions]) {
-			if (!this.core.live(session)) continue;
-			if (session.turns.size > 0 || session.held.size > 0) continue;
-			if (now - session.usedAt < REAP_QUIET_MS) continue;
-			// Mid-operation, not merely unparked: nothing parks a thread that never ran a turn, so
-			// waiting for `parked` alone would leave an idle one blocking the reap for the daemon's life.
-			const busy = [...session.threads.keys()].some((threadId) => {
-				const phase = session.client.stateOf(threadId)?.phase;
-				return phase === "active" || phase === "parking";
-			});
-			if (busy) continue;
-			this.release(session, `reaping`, `idle for ${Math.round((now - session.usedAt) / 1_000)}s`);
-		}
-	}
-
 	private async readOutcome(session: TargetSession, threadId: string, turnId: string): Promise<ReadOutcome> {
 		try {
 			return outcomeFromRead(await session.client.readThread(threadId), threadId, turnId);
@@ -678,21 +257,6 @@ export class CodexDaemonService {
 		void this.lease(() => session.client.settleTurn(threadId, turnId, terminal)).catch((error) => {
 			console.error(`[codex-daemon] settling ${turnId} on ${threadId}: ${describe(error)}`);
 		});
-	}
-
-	/** Binds a thread, evicting oldest settled bindings past the bound. */
-	private bindThread(session: TargetSession, threadId: string, binding: TurnBinding): void {
-		session.threads.delete(threadId);
-		session.threads.set(threadId, binding);
-		if (session.threads.size <= THREAD_MEMORY) return;
-		// Never the binding just made.
-		for (const oldest of [...session.threads.keys()]) {
-			if (session.threads.size <= THREAD_MEMORY) return;
-			if (oldest === threadId) continue;
-			const phase = session.client.stateOf(oldest)?.phase;
-			if (phase === "active" || phase === "parking") continue;
-			session.threads.delete(oldest);
-		}
 	}
 
 	/**
@@ -717,30 +281,6 @@ export class CodexDaemonService {
 		if (owned) session.turns.forget(turnId);
 		if (!binding) return;
 		this.emitTerminal(session, binding, turnId, terminal);
-	}
-
-	/**
-	 * A request whose fate is unknown may still land, so this child is never asked again.
-	 *
-	 * The release IS the retirement: the next command acquires a new generation, and the gateway
-	 * reconciles its own stale records against that one.
-	 */
-	private retireGeneration(session: TargetSession, threadId: string, reason: PoisonReason): void {
-		this.release(session, `retiring`, `${threadId} ${causeOf(reason)}`);
-	}
-
-	/** The one way a generation ends here, whether it was condemned or merely finished. */
-	private release(session: TargetSession, verb: string, cause: string): void {
-		console.error(`[codex-daemon] ${verb} ${session.targetId} generation ${session.generation}: ${cause}`);
-		this.core.retire(session);
-		this.clearDeadlines(session);
-		this.deadlineSessions.delete(session);
-		this.deps.targets.release(session.targetId, session.generation);
-	}
-
-	private clearDeadlines(session: TargetSession): void {
-		for (const timer of session.held.values()) (this.deps.clearTimer ?? clearTimeout)(timer);
-		session.held.clear();
 	}
 
 	private onCommentary(

@@ -8,6 +8,7 @@ import { OwnerOpIntake } from "../federation-server/inbox/ownerOpIntake.js";
 import { OwnerStoreRegistry } from "../federation-server/inbox/ownerStoreRegistry.js";
 import { createKeyDeliveryService } from "../federation-server/keyDeliveryService.js";
 import { DomainQuota } from "../federation-server/owner/domainQuota.js";
+import { type ErasedOwnerOpHandler, ownerOpEntry } from "../federation-server/ownerOpRegistry.js";
 import { type DomainSnapshot, signAdmission } from "../shared/admission.js";
 import { keyReceiptSigningBytes, signKeyReceipt, signKeyRequest, wrapContentKey } from "../shared/content-envelope.js";
 import { generateIdentity, sign } from "../shared/crypto.js";
@@ -72,7 +73,7 @@ function make() {
 		push: () => false,
 		now: () => now,
 	});
-	const ownerOps = new Map<string, (op: never, value: Record<string, unknown>) => unknown>();
+	const ownerOps = new Map<string, ErasedOwnerOpHandler>();
 	const frames = new Map<string, (reg: GatewayRegistration, value: Record<string, unknown>) => unknown>();
 	createKeyDeliveryService({
 		registry,
@@ -84,7 +85,7 @@ function make() {
 	}).register({
 		ownerOp: (kind, handler) => {
 			intake.register(kind, handler);
-			ownerOps.set(kind, handler as (op: never, value: Record<string, unknown>) => unknown);
+			ownerOps.set(kind, handler as ErasedOwnerOpHandler);
 		},
 		gatewayFrame: (name, handler) => frames.set(name, handler),
 		onGatewayRegistered: () => undefined,
@@ -294,8 +295,8 @@ describe("key delivery", () => {
 		badRequest.signature = Buffer.from("bad").toString("base64");
 		const badReceipt = ctx.receipt(1000, "bad");
 		badReceipt.signature = Buffer.from("bad").toString("base64");
+		expect(ownerOpEntry("key_request")!.value.safeParse({ kind: "key_request" }).success).toBe(false);
 		const cases = [
-			["key_request", "malformed", {}, "malformed"],
 			[
 				"key_grant",
 				"bad-grant-signer",

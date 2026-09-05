@@ -166,6 +166,11 @@ export const InboxRowSchema = z
 export type InboxRowInput = z.infer<typeof InboxRowInputSchema>;
 export type InboxRow = z.infer<typeof InboxRowSchema>;
 
+/** A named operation whose other fields stay exactly as they were signed. */
+export const OwnerOpValueSchema = z
+	.record(z.string(), z.unknown())
+	.refine((value) => typeof value.kind === "string" && value.kind.length > 0);
+
 export const OwnerOpSchema = z
 	.object({
 		v: z.literal(1),
@@ -176,7 +181,7 @@ export const OwnerOpSchema = z
 		opId: opIdField,
 		at: z.number().int().nonnegative(),
 		nonce: b64Field(),
-		op: z.record(z.string(), z.unknown()),
+		op: OwnerOpValueSchema,
 		signature: b64Field(),
 	})
 	.meta({ id: "OwnerOp" });

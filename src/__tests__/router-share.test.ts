@@ -3,9 +3,14 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayFrameHandler, GatewayRegistration } from "../federation-server/gatewayBridge.js";
-import type { OwnerOpHandler } from "../federation-server/inbox/ownerOpIntake.js";
 import { OwnerStoreRegistry } from "../federation-server/inbox/ownerStoreRegistry.js";
 import { DomainQuota } from "../federation-server/owner/domainQuota.js";
+import {
+	type ErasedOwnerOpHandler,
+	type OwnerOpHandler,
+	type OwnerOpKind,
+	ownerOpEntry,
+} from "../federation-server/ownerOpRegistry.js";
 import { createShareService, type ShareServiceDeps } from "../federation-server/share/shareService.js";
 import { generateIdentity } from "../shared/crypto.js";
 
@@ -22,7 +27,7 @@ const make = () => {
 	const edgeIds = new Map<string, string>();
 	const retired: string[][] = [];
 	const pushed: Array<{ domainId: string; gatewayId: string; frame: Record<string, unknown> }> = [];
-	const ownerOps = new Map<string, OwnerOpHandler>();
+	const ownerOps = new Map<string, ErasedOwnerOpHandler>();
 	const gatewayFrames = new Map<string, GatewayFrameHandler>();
 	let gatewayDropped: ((reg: GatewayRegistration) => void) | undefined;
 	const gateways = new Map([
@@ -61,7 +66,9 @@ const make = () => {
 		dropGateway: (reg: GatewayRegistration) => gatewayDropped?.(reg),
 		setNow: (value: number) => (now = value),
 		hooks: {
-			ownerOp: (kind: string, handler: OwnerOpHandler) => ownerOps.set(kind, handler),
+			ownerOp: <Kind extends OwnerOpKind>(kind: Kind, handler: OwnerOpHandler<Kind>) => {
+				ownerOps.set(kind, handler as ErasedOwnerOpHandler);
+			},
 			gatewayFrame: (name: string, handler: GatewayFrameHandler) => gatewayFrames.set(name, handler),
 			onGatewayRegistered: () => undefined,
 			onGatewayDropped: (listener: (reg: GatewayRegistration) => void) => {
@@ -295,16 +302,38 @@ describe("ShareService", () => {
 	it("accepts canonical OwnerOp targets and rejects separators", () => {
 		const ctx = make();
 		ctx.service.register(ctx.hooks);
-		const op = { domainId: "a" } as Parameters<OwnerOpHandler>[0];
+		const op = { domainId: "a" } as Parameters<ErasedOwnerOpHandler>[0];
 		const share = ctx.ownerOps.get("cross_domain_share")!;
-		share(op, { sessionTarget: "a.gw.spawn.main", target: { kind: "domain", domainId: "b" } });
-		expect(() =>
-			share(op, { sessionTarget: "a|gw.spawn.main", target: { kind: "domain", domainId: "b" } }),
-		).toThrow();
-		expect(() =>
-			share(op, { sessionTarget: "a/gw/spawn/main", target: { kind: "domain", domainId: "b" } }),
-		).toThrow();
+		const value = ownerOpEntry("cross_domain_share")!.value;
+		const target = { kind: "domain", domainId: "b" };
+		share(op, value.parse({ kind: "cross_domain_share", sessionTarget: "a.gw.spawn.main", target }));
+		expect(value.safeParse({ kind: "cross_domain_share", sessionTarget: "a|gw.spawn.main", target }).success).toBe(
+			false,
+		);
+		expect(value.safeParse({ kind: "cross_domain_share", sessionTarget: "a/gw/spawn/main", target }).success).toBe(
+			false,
+		);
 		expect(ctx.service.listShares("a").shares).toHaveLength(1);
+		ctx.registry.close();
+	});
+
+	it("shares and unshares from a gateway frame, for that gateway's own sessions only", () => {
+		const ctx = make();
+		ctx.links.add("a|b");
+		ctx.service.register(ctx.hooks);
+		const reg: GatewayRegistration = { domainId: "a", gatewayId: "gw", signPub: "p", incarnation: 1 };
+		const target = { kind: "domain" as const, domainId: "b" };
+		const share = ctx.gatewayFrames.get("cross_domain_share")!;
+		const unshare = ctx.gatewayFrames.get("cross_domain_unshare")!;
+		expect(share(reg, { sessionTarget: "a.gw.spawn.main", target })).toEqual({ ok: true });
+		expect(ctx.service.isSharedTo("a", "a.gw.spawn.main", "b")).toBe(true);
+		// The registration names the Domain and the gateway, so a session on neither is refused.
+		expect(() => share(reg, { sessionTarget: "a.other.spawn.main", target })).toThrow(/session/);
+		expect(() => share(reg, { sessionTarget: "z.gw.spawn.main", target })).toThrow(/session/);
+		expect(() => share(reg, { sessionTarget: "a.gw.spawn.main" })).toThrow();
+		expect(unshare(reg, { sessionTarget: "a.gw.spawn.main", target })).toEqual({ ok: true });
+		expect(ctx.service.isSharedTo("a", "a.gw.spawn.main", "b")).toBe(false);
+		expect(() => unshare(reg, { sessionTarget: "a.other.spawn.main", target })).toThrow(/session/);
 		ctx.registry.close();
 	});
 
@@ -348,8 +377,8 @@ describe("ShareService", () => {
 			"cross_domain_unlink",
 			"cross_domain_list_shares",
 		]);
-		expect([...ctx.gatewayFrames.keys()]).toEqual(["share_job_live"]);
-		const op = { domainId: "a" } as Parameters<OwnerOpHandler>[0];
+		expect([...ctx.gatewayFrames.keys()]).toEqual(["share_job_live", "cross_domain_share", "cross_domain_unshare"]);
+		const op = { domainId: "a" } as Parameters<ErasedOwnerOpHandler>[0];
 		ctx.ownerOps.get("cross_domain_share")!(op, {
 			sessionTarget: "a.g.spawn.main",
 			target: { kind: "domain", domainId: "b" },

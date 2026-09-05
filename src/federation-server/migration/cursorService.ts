@@ -22,10 +22,10 @@ export function createCursorService(deps: CursorDeps) {
 
 		register(hooks: OwnerServiceHooks): void {
 			hooks.ownerOp("cursor_translate", async (op, value) => {
-				const input = value as { address?: unknown; epoch?: unknown; seq?: unknown };
-				if (typeof input?.address !== "string") return { translation: { kind: "unmapped" } };
-				const cursor = { epoch: Number(input.epoch ?? 0), seq: Number(input.seq ?? 0) };
-				const translation = translateCursor(cursor, deps.migrationEpoch(), mapFor(op.domainId, input.address));
+				const address = value.address;
+				if (address === undefined) return { translation: { kind: "unmapped" } };
+				const cursor = { epoch: value.epoch ?? 0, seq: value.seq ?? 0 };
+				const translation = translateCursor(cursor, deps.migrationEpoch(), mapFor(op.domainId, address));
 				return { translation };
 			});
 		},

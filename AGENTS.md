@@ -6,8 +6,31 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
 
 - `src/main-mcp.ts` / `main-gateway.ts` / `main-host-daemon.ts` / `main-federation.ts` - four entry points
 - `src/gateway/` - Docker-side HTTP and WS router
-- `src/gateway/composeGateway.ts` - the whole gateway graph behind `GatewayDeps`, with `close()`; `index.ts` is the Bun process adapter
-- `src/gateway/boot.ts` - `GatewayBootstrap.resolve`, the boot phase decision, and the federation slice types
+- `src/gateway/composeGateway.ts` - calls the thirteen compose stages in order and owns the cycles between them; `index.ts` is the Bun process adapter
+- `src/gateway/compose/gatewayTypes.ts` - `GatewayConfig`, `GatewayDeps`, `GatewayGraph`, and the `GatewayFaultPort` the harness drives
+- `src/gateway/compose/federationContext.ts` - the one federation reader; activation publishes boot, Domain id, and slice together, and it posts the Router share record
+- `src/gateway/compose/composeBootstrap.ts` - directories, identity, keyring, boot decision, schema wipe
+- `src/gateway/compose/composeStores.ts` - every durable writer and the restored session-resume payload
+- `src/gateway/compose/composeSessions.ts` - registries, `SessionStore`, planes, presence, session authority
+- `src/gateway/compose/composePersistence.ts` - the flush every writer takes part in, and its tick
+- `src/gateway/compose/composeHost.ts` - the host socket, wake service, host relay, presence watch
+- `src/gateway/compose/composeAgents.ts` - Codex and Copilot services, relays, and HTTP routes
+- `src/gateway/compose/composeAwareness.ts` - the awareness bank and its tick
+- `src/gateway/compose/composeFederation.ts` - `buildSlice`, the Router client, and the share sweep
+- `src/gateway/compose/composeEnrollment.ts` - the enrollment window, its TLS door, and the install
+- `src/gateway/compose/composeWebSockets.ts` - session sockets and held-delivery handover
+- `src/gateway/compose/composeRoutes.ts` - the route surface, rebuilt when federation activates
+- `src/gateway/compose/composeRouterFrames.ts` - Router frame dispatch and the console dispatcher
+- `src/gateway/compose/composeRouterPresence.ts` - cross-Domain presence pipeline, unlink and untrust teardown
+- `src/gateway/compose/composeListener.ts` - the HTTP entry point and the shutdown flush
+- `src/gateway/compose/composeFaults.ts` - the fault port's construction
+- `src/gateway/httpRouter.ts` - HTTP dispatch, the enrollment routes, and the blob routes
+- `src/gateway/routes.ts` - `RoutesDeps`, `RoutesCarryOver`, and the composer that wires the route modules
+- `src/gateway/routes/addressing.ts` / `callerGuards.ts` / `relay.ts` - local address minting, the refusal gates, cross-Gateway relay
+- `src/gateway/routes/routesStatus.ts` / `routesCapabilities.ts` / `routesPresence.ts` - health, pending and teams; the capability fold; discovery
+- `src/gateway/routes/routesSend.ts` / `routesRespond.ts` / `routesBoard.ts` - the send, the reply and its poll, the task board
+- `src/gateway/routes/routesHumanNotify.ts` / `routesBlob.ts` / `routesFederationPresence.ts` - console push, blob fetch, and presence exchange bindings
+- `src/gateway/boot.ts` - `GatewayBootstrap.resolve`, the boot phase decision, the federation slice types, and `RouterHandlers` split into frames and presence
 - `src/gateway/router/registerAuth.ts` / `valueResult.ts` - the `gateway_register` frame and the `value_result` settlement, pure
 - `src/gateway/wake.ts` - container/session wake decisions
 - `src/gateway/sessionAuthority.ts` - sole owner of credential-field access; residue-tested
@@ -18,7 +41,20 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
 - `src/gateway/daemonCapabilities.ts` - daemon capability answer
 - `src/gateway/federation/contentKeyStore.ts` - gateway keyring, sole rule owner, sole writer of `content-keys.json`
 - `src/gateway/federation/bootstrapInstall.ts` - staged bootstrap install and re-enrollment merge
-- `src/gateway/codexAgentService.ts` / `codexRelay.ts` / `codexRoute.ts` - Codex catalog, relay folding, authenticated route
+- `src/gateway/federation/crossDomainPresenceSource.ts` - source-side change detection and its outbound plane
+- `src/gateway/federation/crossDomainPresencePusher.ts` - per-destination push coalescing and retry
+- `src/gateway/federation/crossDomainPresenceConsumer.ts` - landed state from a linked friend's push
+- `src/gateway/federation/crossDomainPresenceReconciler.ts` - backstop pull, decoupled from the console poll loop
+- `src/gateway/codexAgentService.ts` / `codexRelay.ts` / `codexRoute.ts` - Codex catalog orchestration, relay folding, authenticated route
+- `src/gateway/codexAgentReducers.ts` - Codex pure decision functions: acceptance verdicts, activity and terminal folds
+- `src/gateway/codexAgentApply.ts` - Codex daemon event and receipt folding, with its fence checks
+- `src/gateway/codexAgentPersistence.ts` - Codex catalog reads, replay, and commits
+- `src/gateway/codexAgentTypes.ts` - Codex service deps, transition results, and the application union
+- `src/gateway/copilotAgentService.ts` / `copilotRelay.ts` / `copilotRoute.ts` - Copilot catalog orchestration, relay folding, authenticated route
+- `src/gateway/copilotAgentReducers.ts` - Copilot pure decision functions: target matching, activity append
+- `src/gateway/copilotAgentApply.ts` - Copilot daemon event and receipt folding, with its fence checks
+- `src/gateway/copilotAgentPersistence.ts` - Copilot catalog reads, replay, and commits
+- `src/gateway/copilotAgentTypes.ts` - Copilot service deps, transition results, and the application union
 - `src/gateway/router/` - Router WS client; `pinnedSocket.ts` owns certificate pinning
 - `src/gateway/router/inboxDeliveryPump.ts` / `inboxClaims.ts` / `sessionRegistryReporter.ts` - inbox drain with durable claims, and session registry reporting
 - `src/gateway/router/presenceReporter.ts` / `presenceProtocol.ts` - presence pump and pure protocol; `applyAnswer` cannot reach the sender, so answers do not start frames
@@ -43,7 +79,8 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
 - `android/.../GoalOps.kt` / `Goal.kt` - armed goals and `/goal` line production
 - `android/.../PresenceOps.kt` - team presence and read-anchor reporting
 - `android/.../SessionOps.kt` - terminal and session controls
-- `android/.../ChatRepositorySend.kt` / `ChatRepositoryThreads.kt` / `ChatRepositoryDomainLink.kt` / `ChatRepositoryStts.kt` / `ChatRepositoryDrafts.kt` - stateless repository extensions
+- `android/.../ChatRepositorySend.kt` / `ChatRepositoryThreads.kt` / `ChatRepositoryDomainLink.kt` / `ChatRepositoryInbox.kt` / `ChatRepositoryMigration.kt` / `ChatRepositoryStts.kt` / `ChatRepositoryDrafts.kt` - stateless repository extensions
+- `android/.../ConnectCoordinator.kt` - the connect sequence over the identity door and the Router reach; `ChatRepository.connect()` delegates to it
 - `android/.../RouterReach.kt` / `ConsoleRouterTransport.kt` / `ConsoleSocketMode` - Router addresses, the OwnerOp post with reach failover and pinning, socket mode
 - `android/.../OwnerFacts.kt` / `GatewayEnrollment.kt` / `EnrollCeremonyOps.kt` / `DeviceApprovalOps.kt` / `DomainAdminOps.kt` / `TrustOps.kt` - federation delegates
 - `android/.../SasExchange.kt` / `EnrollCeremony.kt` - shared SAS exchange and commitment core for FLOW-1 and FLOW-2
@@ -70,12 +107,21 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
 - `src/mcp/devcontainer/codexLiveTurns.ts` - live-turn bindings, clocks, and warnings
 - `src/mcp/devcontainer/agentDaemonCore.ts` - shared daemon registry, generation fence, serialization, numbering, and outbox
 - `src/mcp/devcontainer/codexDaemonService.ts` / `copilotDaemonService.ts` - daemon relay services
+- `src/mcp/devcontainer/codexCommandDispatch.ts` - one command kind per run: session acquire, turn start and steer
+- `src/mcp/devcontainer/codexSessionLifecycle.ts` - session open, retire, and held-terminal deadlines
+- `src/mcp/devcontainer/codexWatchdog.ts` - silent-turn interrupt and idle-target reap
 - `src/mcp/local/` - daemonless agent backend
+- `src/mcp/local/localAgentRuntime.ts` - the lease, the operation claim, and the dispatch to a request kind
+- `src/mcp/local/localAgentHandlers.ts` - per-kind request handlers and turn bookkeeping
+- `src/mcp/local/localChildSession.ts` - the one child: open, idle reap, shutdown
+- `src/mcp/local/localOperationLedger.ts` - operation identity claim and release
 - `src/mcp/agentDispatch.ts` - agent tool serving seam
 - `src/mcp/codex/codexTools.ts` - five Codex tools and per-invocation replay ids
 - `src/mcp/capabilities.ts` / `capabilitiesTool.ts` - capability gating and guidance
 - `src/federation-server/` - live self-hosted federation Router
-- `src/federation-server/routerServer.ts` - public `handle(Request)` over `preflight` and `dispatch`; sole `serve()` adapter; residue-tested
+- `src/federation-server/routerServer.ts` - public `handle(Request)` over `preflight` and `dispatch`; sole `serve()` adapter and sole owner of the node HTTP types; residue-tested
+- `src/federation-server/routerBody.ts` - body cap, the too-large, aborted and bodyless-method refusals, and the request both surfaces settle into
+- `src/federation-server/ownerOpRegistry.ts` - the owner-op catalog: kind, value schema, mutation class, answer schema; sole kind list for the codegen and the fences
 - `src/federation-server/routerDomainBootstrap.ts` - what the Router constructor builds, assembled once
 - `src/federation-server/fileSecretStore.ts` - durable federation state and bounded atomic CAS
 - `src/federation-server/owner/` - per-owner state layer: fsync'd journal, CAS records, per-address rows, quarantine, lock, Domain quota
@@ -110,12 +156,13 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
     missing the epoch cannot re-seal it.
 - `src/shared/schemasContentKey.ts` - content key wire shapes
 - `src/shared/codex-agent.ts` / `codexAgent*.ts` - Codex delegation wire truth; excluded from Kotlin codegen
+- `src/shared/copilot-agent.ts` / `copilotAgent*.ts` - Copilot delegation wire truth; excluded from Kotlin codegen
 - `src/shared/channel-file.ts` - declared ChannelFile metadata; receivers do not infer it from bytes or position
 - `src/shared/session-id.ts` - sole address grammar owner
 - `src/shared/host-spawn.ts` - sole host-shell spawn-segment and command owner
 - `src/shared/crypto.ts` / `admission.ts` / `router-protocol.ts` / `federation-lifecycle.ts` - federation trust wire vocabulary
 - `src/shared/notice.ts` - shared notice tiers
-- `src/shared/wire-vocabulary.ts` - sole TS declaration of Router paths, the console header, dispatched owner-op kinds, signing tags, nonce lengths; generated into `Protocol.Wire`; residue-fenced on both runtimes
+- `src/shared/wire-vocabulary.ts` - sole TS declaration of Router paths, the console header, signing tags, nonce lengths; generated into `Protocol.Wire` beside the owner-op kinds the registry catalogues; residue-fenced on both runtimes
 - `src/shared/fixture-identity.ts` - the committed test signing keys; shipping entry points refuse them without `ALLOW_FIXTURE_IDENTITY=1`
 - `src/shared/atomic-write.ts` - sole write-then-rename and temp-suffix owner; residue-tested
 - `src/shared/durable-store.ts` - atomic snapshots and per-file quarantine boundaries
@@ -128,7 +175,7 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
   - **`limitNotice` searches in two passes:** whole-line matches precede welded-rule matches.
   - **The composer glyph has two members:** Linux uses U+276F; Windows uses U+003E. Whitespace is explicit because JS and JVM `\s` differ for U+00A0.
   - **The last-two-lines fallback is uniform:** readers scope it to the final region.
-- `src/shared/schemasConsoleOp.ts` - OwnerOp schema, `DELIVERY_OP_KINDS`, and `VALUE_OP_KINDS`
+- `src/shared/schemasConsoleOp.ts` - ConsoleOp schema, `DELIVERY_OP_KINDS`, and `VALUE_OP_KINDS`
 - `src/shared/pending-job-store.ts` / `plane-registry.ts` / `reconnect.ts` / `process-guards.ts` - shared jobs, planes, reconnect, and process guards
 - `android/` - Gradle/Kotlin console app; `proto/Protocol.kt` generated
 - `scripts/` - build, Kotlin codegen, leaf sync, setup, federation start, residue checks, and voice import

@@ -42,10 +42,12 @@ function socket() {
 }
 
 describe("Router owner state residue", () => {
-	// The Router stores ciphertext and never accesses content keys.
+	// The Router stores ciphertext and never accesses content keys. The relay and the operation
+	// catalog name the sealed envelopes they carry; neither opens one.
 	it("federation-server imports no content-key symbol", () => {
+		const relays = ["keyDeliveryService.ts", "ownerOpRegistry.ts"];
 		const offenders = sources(path.join(REPO_ROOT, "src", "federation-server")).filter((file) =>
-			file.endsWith("keyDeliveryService.ts")
+			relays.some((relay) => file.endsWith(relay))
 				? false
 				: /from\s+["'][^"']*(content-envelope|contentKeyStore|schemasContentKey)\.js["']/.test(
 						fs.readFileSync(file, "utf8").replace(/import type[^;]*;/g, ""),

@@ -1,8 +1,8 @@
 import type { GatewayFrameHandler, GatewayRegistration } from "./gatewayBridge.js";
-import type { OwnerOpHandler } from "./inbox/ownerOpIntake.js";
+import type { OwnerOpHandler, OwnerOpKind } from "./ownerOpRegistry.js";
 
 export interface OwnerServiceHooks {
-	ownerOp(kind: string, handler: OwnerOpHandler): void;
+	ownerOp<Kind extends OwnerOpKind>(kind: Kind, handler: OwnerOpHandler<Kind>): void;
 	gatewayFrame(name: string, handler: GatewayFrameHandler): void;
 	onGatewayRegistered(listener: (reg: GatewayRegistration) => void): void;
 	onGatewayDropped(listener: (reg: GatewayRegistration) => void): void;

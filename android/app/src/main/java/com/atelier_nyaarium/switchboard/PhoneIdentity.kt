@@ -4,6 +4,7 @@ import com.atelier_nyaarium.switchboard.crypto.ContentKeyring
 import com.atelier_nyaarium.switchboard.crypto.Keyring
 import com.atelier_nyaarium.switchboard.proto.DomainSnapshot
 import com.atelier_nyaarium.switchboard.proto.KeyEnvelope
+import com.atelier_nyaarium.switchboard.proto.Provisioning
 import com.atelier_nyaarium.switchboard.proto.SignedAdmission
 import com.atelier_nyaarium.switchboard.proto.SignedRevocation
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -24,9 +25,15 @@ internal class PhoneIdentity(private val store: AppStateStore, private val feder
 	fun blob(): String? = store.load()
 
 	/** One commit forgets the gateway, the Domain, and the admission latches. */
-	fun provision(blob: String): Boolean = write { store.replaceProvisioning(blob) }
+	fun provision(blob: String): Boolean = write {
+		rememberConversationId(blob)
+		store.replaceProvisioning(blob)
+	}
 
-	fun saveBlob(blob: String) = write { store.save(blob) }
+	fun saveBlob(blob: String) = write {
+		rememberConversationId(blob)
+		store.save(blob)
+	}
 
 	fun learnDomainId(domainId: String, forBlob: String): Boolean = write {
 		if (domainId.isEmpty() || store.load() != forBlob) return@write false
@@ -50,6 +57,7 @@ internal class PhoneIdentity(private val store: AppStateStore, private val feder
 		contentKeys: Map<Int, ByteArray>,
 		domainId: String?,
 	): Boolean = write {
+		rememberConversationId(blob)
 		domainId?.takeIf { it.isNotEmpty() }?.let(store::saveDomainId)
 		store.installApprovedDevice(blob, domainJson, domainVersion, gatewayId, contentKeys)
 	}
@@ -81,6 +89,12 @@ internal class PhoneIdentity(private val store: AppStateStore, private val feder
 	}
 
 	fun clear() = write { store.clearProvisioning() }
+
+	/** Resolved against the blob still on disk, so it must run before the new one lands. */
+	private fun rememberConversationId(blob: String) {
+		val wire = runCatching { wireJson.decodeFromString<Provisioning>(blob) }.getOrNull() ?: return
+		store.saveConversationId(ConsoleCredentials.conversationIdFor(wire, store))
+	}
 
 	private fun <T> write(block: () -> T): T = synchronized(lock) {
 		val result = block()

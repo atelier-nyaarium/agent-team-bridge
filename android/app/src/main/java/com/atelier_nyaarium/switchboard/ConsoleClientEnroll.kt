@@ -29,7 +29,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
  * EnrollResult directly. A bounce (offline, 501, malformed) is surfaced as a failed
  * EnrollResult. */
 suspend fun ConsoleClient.enroll(op: EnrollOp): EnrollResult {
-	val envelope = EnrollEnvelope(transport.prov.device, transport.prov.conversationId, UUID.randomUUID().toString(), op)
+	val envelope = EnrollEnvelope(transport.credentials.device, transport.credentials.conversationId, UUID.randomUUID().toString(), op)
 	return transport.postRouterDirect(
 		tag = "Enroll",
 		describe = "op=${op::class.simpleName}",
@@ -128,8 +128,8 @@ suspend fun ConsoleClient.trustPending(req: TrustPendingRequest): TrustPendingRe
  * only the richer result decode differs, since the wire EnrollResult omits the nonce. */
 suspend fun ConsoleClient.provisionTenant(signed: SignedProvisionTenant): ProvisionTenantResult {
 	val envelope = EnrollEnvelope(
-		transport.prov.device,
-		transport.prov.conversationId,
+		transport.credentials.device,
+		transport.credentials.conversationId,
 		UUID.randomUUID().toString(),
 		EnrollOp.ProvisionTenant(signed),
 	)

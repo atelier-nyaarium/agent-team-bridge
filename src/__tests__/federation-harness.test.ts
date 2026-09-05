@@ -262,7 +262,7 @@ describe("federation harness", () => {
 		await h.phone.deliver(late.team, { kind: "send", to: late.team, body: "ping" });
 		const push = await h.waitFor(() => late.inbound.find((frame) => frame.body === "ping"), "channel push");
 
-		h.gateway.federation()?.routerClient.stop();
+		h.gateway.faults.dropRouterLink();
 		expect((await late.reply(String(push.session_id), "pong")).status).toBe(200);
 
 		await h.restartGateway();
@@ -332,7 +332,7 @@ describe("federation harness with an empty keyring", () => {
 			},
 		});
 		expect(grant).toMatchObject({ outcome: "accepted" });
-		await h.waitFor(() => h.gateway.contentKeyStore.epochs().includes(1) || undefined, "installed epoch");
+		await h.waitFor(() => h.gateway.faults.heldEpochs().includes(1) || undefined, "installed epoch");
 
 		const after = await h.phone.value({ kind: "list_dirs", path: "" });
 		expect(after.result).toMatchObject({ entries: ["projects"] });

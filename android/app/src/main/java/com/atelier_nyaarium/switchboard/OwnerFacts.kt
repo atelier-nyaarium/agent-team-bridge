@@ -20,7 +20,7 @@ internal class OwnerFacts(private val repo: ChatRepository) {
 	 * does not self-heal). Idempotent: the firstRooted latch skips the round-trip on later connects. */
 	suspend fun firstRootIfPending(): Boolean {
 		val blob = repo.identity.blob() ?: return true
-		val prov = runCatching { Provisioning.parse(blob, repo.store) }.getOrNull() ?: return true
+		val prov = runCatching { ConsoleCredentials.parse(blob, repo.store) }.getOrNull() ?: return true
 		return when (val decision = FriendOnboarding.decide(prov, repo.store.firstRooted)) {
 			is FirstRootDecision.NotPending -> true
 			is FirstRootDecision.Root -> {

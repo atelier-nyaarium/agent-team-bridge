@@ -37,6 +37,7 @@ import { OwnerQuarantined } from "./owner/ownerStateStore.js";
 import { createOwnerServices } from "./ownerServices.js";
 import { PublicApproval } from "./publicApproval.js";
 import { buildRoster, type RosterDomain } from "./roster.js";
+import { type BodyRead, bodyCapFor, readFetchRequest, settleRequest } from "./routerBody.js";
 import { RouterDomainBootstrap } from "./routerDomainBootstrap.js";
 import type { RouterTls } from "./routerTls.js";
 import { TenantAdmin } from "./tenantAdmin.js";
@@ -52,15 +53,6 @@ export interface RouterServerParams {
 	/** Reach requires app token. */
 	reach?: RouterReachAnswer;
 	now?: () => number;
-}
-
-/** Body cap per path; zero means the body is never read. */
-function bodyCapFor(pathname: string): number {
-	if (pathname === ROUTER_PATHS.deviceApproval || pathname.startsWith(`${ROUTER_PATHS.deviceApproval}/`))
-		return 8 * 1024;
-	if (pathname === ROUTER_PATHS.ingest) return 512 * 1024;
-	if (pathname === ROUTER_PATHS.console) return 67_108_864;
-	return 0;
 }
 
 export class RouterServer {
@@ -392,17 +384,8 @@ export class RouterServer {
 		const url = new URL(request.url);
 		const early = this.preflight(request.method, url, (name) => request.headers.get(name));
 		if (early) return early;
-		const cap = bodyCapFor(url.pathname);
-		const bytes = cap === 0 ? Buffer.alloc(0) : Buffer.from(await request.arrayBuffer());
-		if (bytes.length > cap) return new Response("Payload Too Large", { status: 413 });
-		return this.dispatch(
-			url,
-			new Request(url, {
-				method: request.method,
-				headers: request.headers,
-				body: bytes.length ? new Uint8Array(bytes) : undefined,
-			}),
-		);
+		const read = await readFetchRequest(request, url);
+		return read instanceof Response ? read : this.dispatch(url, read);
 	}
 
 	private async resolve(request: IncomingMessage): Promise<Response> {
@@ -412,19 +395,12 @@ export class RouterServer {
 			return Array.isArray(value) ? (value[0] ?? null) : (value ?? null);
 		});
 		if (early) return early;
-		const body = await readBody(request, bodyCapFor(url.pathname));
-		if (body.outcome === "too-large") return new Response("Payload Too Large", { status: 413 });
-		if (body.outcome === "aborted") return new Response(null, { status: 499 });
 		const headers = new Headers();
 		for (const [key, value] of Object.entries(request.headers)) {
 			if (typeof value === "string") headers.set(key, value);
 		}
-		const webRequest = new Request(url, {
-			method: request.method,
-			headers,
-			body: body.bytes.length ? new Uint8Array(body.bytes) : undefined,
-		});
-		return this.dispatch(url, webRequest);
+		const read = settleRequest(url, request.method ?? "GET", headers, await readBody(request, url));
+		return read instanceof Response ? read : this.dispatch(url, read);
 	}
 
 	/** Health and the token gate, answered before any body is read. */
@@ -600,9 +576,8 @@ export class RouterServer {
 	}
 }
 
-type BodyResult = { outcome: "ok"; bytes: Buffer } | { outcome: "too-large" } | { outcome: "aborted" };
-
-function readBody(request: IncomingMessage, maxBytes: number): Promise<BodyResult> {
+function readBody(request: IncomingMessage, url: URL): Promise<BodyRead> {
+	const maxBytes = bodyCapFor(url.pathname);
 	if (maxBytes === 0) return Promise.resolve({ outcome: "ok", bytes: Buffer.alloc(0) });
 	return new Promise((resolve) => {
 		const chunks: Buffer[] = [];

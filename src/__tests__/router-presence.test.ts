@@ -3,10 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayFrameHandler, GatewayRegistration } from "../federation-server/gatewayBridge.js";
-import type { OwnerOpHandler } from "../federation-server/inbox/ownerOpIntake.js";
 import { OwnerStoreRegistry } from "../federation-server/inbox/ownerStoreRegistry.js";
 import { DomainQuota } from "../federation-server/owner/domainQuota.js";
 import { OwnerQuarantined } from "../federation-server/owner/ownerStateStore.js";
+import type { ErasedOwnerOpHandler, OwnerOpHandler, OwnerOpKind } from "../federation-server/ownerOpRegistry.js";
 import { createPresenceService } from "../federation-server/presence/presenceService.js";
 import { TeamInfoSchema } from "../shared/schemasPresence.js";
 
@@ -469,9 +469,11 @@ describe("router presence slice", () => {
 				spawnPoints: { gatewayId: "gw", hostSpawns: [] },
 			},
 		);
-		const handlers = new Map<string, OwnerOpHandler>();
+		const handlers = new Map<string, ErasedOwnerOpHandler>();
 		service.register({
-			ownerOp: (kind, handler) => handlers.set(kind, handler),
+			ownerOp: <Kind extends OwnerOpKind>(kind: Kind, handler: OwnerOpHandler<Kind>) => {
+				handlers.set(kind, handler as ErasedOwnerOpHandler);
+			},
 			gatewayFrame: () => undefined,
 			onGatewayRegistered: () => undefined,
 			onGatewayDropped: () => undefined,
@@ -480,7 +482,7 @@ describe("router presence slice", () => {
 			gatewayIncarnation: () => 1,
 			connectedGateways: () => [],
 		});
-		const op = { domainId: "a" } as Parameters<OwnerOpHandler>[0];
+		const op = { domainId: "a" } as Parameters<ErasedOwnerOpHandler>[0];
 		expect(handlers.get("presence_read_friend")!(op, { toDomainId: "c" })).toEqual({
 			outcome: "refused",
 			reason: "not linked",

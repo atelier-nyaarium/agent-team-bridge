@@ -10,9 +10,11 @@ internal fun selectHomeGateway(current: String, admitted: List<String>): String 
 	current.takeIf { it in admitted } ?: admitted.firstOrNull().orEmpty()
 
 internal interface RepositoryProvisioningHost {
-	var client: ConsoleClient?
 	fun transport(): ConsoleRouterTransport
 	fun client(): ConsoleClient
+	/** The held client, without building one. */
+	fun clientOrNull(): ConsoleClient?
+	fun invalidateClient()
 	fun applyDomainSync(snapshot: DomainSnapshot, version: String)
 	fun refreshAdmittedGateways()
 	fun localDomain(): String
@@ -22,26 +24,27 @@ internal interface RepositoryProvisioningHost {
 internal class ChatRepositoryProvisioningHost(private val repo: ChatRepository) : RepositoryProvisioningHost {
 	@Volatile private var clientBoot: PhoneBootstrap? = null
 	@Volatile private var cachedTransport: ConsoleRouterTransport? = null
-	@Volatile override var client: ConsoleClient? = null
-		set(value) {
-			field = value
-			if (value == null) {
-				clientBoot = null
-				cachedTransport = null
-			}
-		}
+	@Volatile private var held: ConsoleClient? = null
+
+	override fun clientOrNull(): ConsoleClient? = held
+
+	override fun invalidateClient() {
+		held = null
+		clientBoot = null
+		cachedTransport = null
+	}
 
 	override fun transport(): ConsoleRouterTransport {
 		cachedTransport?.let { return it }
 		val blob = repo.store.load() ?: error("not provisioned")
-		return ConsoleRouterTransport(Provisioning.parse(blob, repo.store), repo.store, { repo.homeGatewayId }, repo.identity::saveBlob).also {
+		return ConsoleRouterTransport(ConsoleCredentials.parse(blob, repo.store), repo.store, { repo.homeGatewayId }, repo.identity::saveBlob).also {
 			cachedTransport = it
 		}
 	}
 
 	override fun client(): ConsoleClient {
 		val boot = repo.readyOrNull() ?: error("Domain not yet confirmed")
-		if (clientBoot === boot) client?.let { return it }
+		if (clientBoot === boot) held?.let { return it }
 		return ConsoleClient(
 			boot,
 			repo.ambient,
@@ -54,13 +57,13 @@ internal class ChatRepositoryProvisioningHost(private val repo: ChatRepository) 
 			),
 		).also {
 			clientBoot = boot
-			client = it
+			held = it
 		}
 	}
 
 	override fun applyDomainSync(snapshot: DomainSnapshot, version: String) {
 		repo.identity.applyDomainSync(snapshot, version)
-		client = null
+		invalidateClient()
 		refreshAdmittedGateways()
 	}
 

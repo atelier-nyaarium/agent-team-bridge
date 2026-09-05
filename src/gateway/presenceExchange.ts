@@ -17,7 +17,9 @@ export interface PresenceExchangeDeps {
 	presence?: { snapshot(): TeamInfo[] };
 	sharesFor?: ((domainId: string) => string[]) | null;
 	crossDomainPeers?: import("./federation/crossDomainPeers.js").CrossDomainPeers | null;
-	crossDomainPresenceConsumer?: import("./federation/crossDomainPresence.js").CrossDomainPresenceConsumer | null;
+	crossDomainPresenceConsumer?:
+		| import("./federation/crossDomainPresenceConsumer.js").CrossDomainPresenceConsumer
+		| null;
 	tryLocalAddress: (name: string) => Address | null;
 	relayToGateway: (
 		dstGateway: string,

@@ -19,13 +19,9 @@ describe("cross-Domain gateway admission and relay", () => {
 		sessions.push(attached);
 		return attached;
 	};
+	/** One value op; the gateway writes the Router record and its own mirror. */
 	const share = async (peer: DomainPeer, team: string, domainId: string) => {
 		const target = { kind: "domain" as const, domainId };
-		expect(
-			await peer.phone.send({ kind: "cross_domain_share", sessionTarget: remote(peer, team), target }),
-		).toMatchObject({
-			ok: true,
-		});
 		expect(await peer.phone.value({ kind: "cross_domain_share", sessionTarget: team, target })).toMatchObject({
 			result: { ok: true },
 		});
@@ -84,6 +80,29 @@ describe("cross-Domain gateway admission and relay", () => {
 		]);
 	});
 
+	it("writes the Router share record from a gateway frame, for that gateway's own sessions only", async () => {
+		const owned = session(bob, "fixture-app.framed");
+		await owned.ready();
+		const target = { kind: "domain" as const, domainId: h.set.domain.id };
+		const sessionTarget = remote(bob, owned.team);
+		expect(
+			(await bob.gateway.faults.routerInboxCall("cross_domain_share", { sessionTarget, target })).result,
+		).toMatchObject({ ok: true });
+		expect(await bob.phone.send({ kind: "cross_domain_list_shares" })).toMatchObject({
+			shares: [{ sessionTarget, target }],
+		});
+		const foreign = `${bob.set.domain.id}.not-this-gateway.fixture-app.framed`;
+		const refused = await bob.gateway.faults.routerInboxCall("cross_domain_share", {
+			sessionTarget: foreign,
+			target,
+		});
+		expect(refused.error).toMatch(/session/);
+		expect(
+			(await bob.gateway.faults.routerInboxCall("cross_domain_unshare", { sessionTarget, target })).result,
+		).toMatchObject({ ok: true });
+		expect(await bob.phone.send({ kind: "cross_domain_list_shares" })).toMatchObject({ shares: [] });
+	});
+
 	it("rejects a cross-Domain wake for an unshared session before it reaches the session", async () => {
 		const shared = session(bob, "fixture-app.wake");
 		await shared.ready();
@@ -105,40 +124,26 @@ describe("cross-Domain gateway admission and relay", () => {
 		const carol = await h.addDomain({ domainId: "carol", gatewayId: "third" });
 		await h.link(h, carol);
 		await h.link(bob, carol);
-		const carolFederation = carol.gateway.federation();
-		if (!carolFederation) throw new Error("Carol federation is unavailable");
-		const forged = await carolFederation.routerClient.callTool("gateway_relay", {
-			relayId: randomUUID(),
-			srcGateway: carol.set.gateway.id,
-			dstGateway: h.set.gateway.id,
-			srcDomain: carol.set.domain.id,
-			payload: {
-				sealed: carolFederation.sealer.seal(
-					{ domainId: h.set.domain.id, gatewayId: h.set.gateway.id },
-					{
-						kind: "response_push",
-						session_id: String(push.session_id),
-						status: "completed",
-						response: "forged",
-					},
-				),
-			},
+		const carolFaults = carol.gateway.faults;
+		const forgeTo = (peer: DomainPeer, op: Record<string, unknown>) => {
+			const target = { domainId: peer.set.domain.id, gatewayId: peer.set.gateway.id };
+			return carolFaults.routerCall("gateway_relay", {
+				relayId: randomUUID(),
+				srcGateway: carol.set.gateway.id,
+				dstGateway: target.gatewayId,
+				srcDomain: carol.set.domain.id,
+				payload: { sealed: carolFaults.sealForPeer(target, op) },
+			});
+		};
+		const forged = await forgeTo(h, {
+			kind: "response_push",
+			session_id: String(push.session_id),
+			status: "completed",
+			response: "forged",
 		});
 		expect(forged.result).toMatchObject({ ok: false });
 		await share(bob, target.team, carol.set.domain.id);
-		const relay = (op: Record<string, unknown>) =>
-			carolFederation.routerClient.callTool("gateway_relay", {
-				relayId: randomUUID(),
-				srcGateway: carol.set.gateway.id,
-				dstGateway: bob.set.gateway.id,
-				srcDomain: carol.set.domain.id,
-				payload: {
-					sealed: carolFederation.sealer.seal(
-						{ domainId: bob.set.domain.id, gatewayId: bob.set.gateway.id },
-						op,
-					),
-				},
-			});
+		const relay = (op: Record<string, unknown>) => forgeTo(bob, op);
 		const malformedRoute = await relay({
 			kind: "send",
 			from: "carol.third.app.dev",

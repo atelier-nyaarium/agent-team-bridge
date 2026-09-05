@@ -2,7 +2,6 @@ package com.atelier_nyaarium.switchboard
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
@@ -19,7 +18,7 @@ suspend fun ChatRepository.reportEnabledPlugins() = withContext(Dispatchers.IO) 
 }
 
 /** Report once to the Router. */
-private suspend fun ChatRepository.reportCapabilitiesToRouter() {
+internal suspend fun ChatRepository.reportCapabilitiesToRouter() {
 	val plugins = enabledPlugins?.invoke() ?: return
 	val op = composeCapabilitiesReport(plugins)
 	val signed = ownerOps.sign(op) ?: error("cannot sign capabilities report")
@@ -30,14 +29,14 @@ private suspend fun ChatRepository.reportCapabilitiesToRouter() {
 suspend fun ChatRepository.provision(blob: String) = withContext(Dispatchers.IO) {
 	// Reject malformed blobs before persisting.
 	val prov = try {
-		Provisioning.parse(blob, store)
+		ConsoleCredentials.parse(blob, store)
 	} catch (e: Exception) {
 		_state.update { it.copy(error = "Invalid provisioning blob: ${e.message?.take(160) ?: "unparseable"}") }
 		return@withContext
 	}
 	identity.provision(blob)
 	homeGatewayId = ""
-	client = null
+	invalidateClient()
 	sttsClient = null
 	// Mirror the reset in UI state.
 	_state.update {
@@ -96,119 +95,21 @@ suspend fun ChatRepository.setEndpoint(host: String, port: Int, certFp: String) 
 		put("routerCertFp", fp)
 	}.toString()
 	try {
-		Provisioning.parse(edited, store)
+		ConsoleCredentials.parse(edited, store)
 	} catch (e: Exception) {
 		_state.update { it.copy(error = "Invalid endpoint: ${e.message?.take(160) ?: "unparseable"}") }
 		return@withContext
 	}
 	identity.saveBlob(edited)
-	client = null
+	invalidateClient()
 	sttsClient = null
 	_state.update { it.copy(error = null) }
 }
 
-suspend fun ChatRepository.connect() = withContext(Dispatchers.IO) {
-	// Attach debug ingest before enrollment.
-	runCatching { store.load()?.let { DebugLog.attachIngest(Provisioning.parse(it, store)) { client().transport.proxyBase } } }
-	DebugLog.log("Connect", "start gateway=${homeGatewayId.ifEmpty { "?" }} admitted=${store.consoleAdmitted}")
-	// Facts learned here belong to this blob.
-	val blob = identity.blob() ?: return@withContext
-	try {
-		// The token-only reach can learn the Domain id.
-		val reach = runCatchingCancellable { transport().apiReachable() }.getOrElse { e ->
-			val (cause, kind) = classifyConnError(e)
-			_state.update {
-				if (kind == ConnKind.TERMINAL) {
-					it.copy(status = "error", error = "Cluster: $cause", connected = false, enrollingSince = 0L)
-				} else {
-					it.copy(status = "connecting", error = cause, connected = false, enrollingSince = 0L)
-				}
-			}
-			return@withContext
-		}
-		DebugLog.log("Connect", "apiReachable ok")
-		reach?.domainId?.let { identity.learnDomainId(it, blob) }
-		// Root pending invites before admission.
-		if (!ownerFacts.firstRootIfPending()) return@withContext
-		// Reflect first-root state in the UI.
-		if (store.firstRooted && !_state.value.firstRooted) _state.update { it.copy(firstRooted = true) }
-		// Submit admission before sealed register.
-		runCatchingCancellable { ownerFacts.submitConsoleAdmission() }.onFailure { e ->
-			val (cause, kind) = classifyConnError(e)
-			_state.update {
-				it.copy(
-					status = if (kind == ConnKind.TERMINAL) "error" else "connecting",
-					error = cause,
-					connected = false,
-					enrollingSince = 0L,
-				)
-			}
-			return@withContext
-		}
-		val admitted = sessions.keyringGateways()
-		val id = _state.value.homeGatewayId.takeIf { it in admitted } ?: admitted.firstOrNull().orEmpty()
-		if (id != homeGatewayId) {
-			homeGatewayId = id
-			store.saveGatewayId(id)
-		}
-		pluginReportPending = false
-		repoScope.launch { reportCapabilitiesToRouter() }
-		val teams = _state.value.teams
-		_state.update {
-			it.copy(
-				teams = teams.withoutTombstoned(),
-				status = "connected",
-				error = null,
-				connected = true,
-				pollFailStreak = 0,
-				homeGatewayId = homeGatewayId,
-				enrollingSince = 0L,
-				// Publish sessions and roster together.
-				admittedGateways = sessions.keyringGateways(),
-			)
-		}
-		rosterDomainId()?.let { identity.learnDomainId(it, blob) }
-		val boot = readyOrNull()
-		val domain = boot?.domainId
-		boot?.let(identity::ensureContentEpochs)
-		presence.refreshDisplayNameFromTeams()
-		DebugLog.log("Connect", "connected gateway=${homeGatewayId.ifEmpty { "?" }} domain=${domain ?: "none"}")
-	} catch (e: Exception) {
-		// Rethrow cancellation before connection handling.
-		e.rethrowIfCancellation()
-		val (cause, kind) = classifyConnError(e)
-		// Retry stale admission state.
-		if (kind == ConnKind.ENROLLING) identity.setConsoleAdmitted(false, blob)
-		_state.update { s ->
-			when (kind) {
-				// Allow post-enrollment sync lag.
-				ConnKind.ENROLLING -> {
-					val (override, since) = enrollFold(s.enrollingSince)
-					s.copy(
-						status = if (override != null) "error" else "connecting",
-						error = override ?: cause,
-						connected = false,
-						enrollingSince = since,
-					)
-				}
-				ConnKind.TERMINAL -> s.copy(status = "error", error = cause, connected = false, enrollingSince = 0L)
-				ConnKind.TRANSIENT -> s.copy(status = "connecting", error = cause, connected = false, enrollingSince = 0L)
-			}
-		}
-	} finally {
-		// Flush debug ingest on exit.
-		DebugLog.flushToIngest()
-	}
-}
+suspend fun ChatRepository.connect() = withContext(Dispatchers.IO) { connector.connect() }
 
 /** This owner's display name. */
 fun ChatRepository.displayName(): String = state.value.displayName.ifEmpty { readyOrNull()?.domainId.orEmpty() }
-
-/** The home gateway's Domain, as the signed roster reports it. */
-private fun ChatRepository.rosterDomainId(): String? {
-	val gw = homeGatewayId
-	return _state.value.teams.firstOrNull { (it.gatewayId.ifEmpty { gw }) == gw && !it.domainId.isNullOrEmpty() }?.domainId
-}
 
 /** True when the local session owns the admin Domain. */
 fun ChatRepository.isAdmin(): Boolean {
@@ -232,13 +133,13 @@ suspend fun ChatRepository.setDeviceName(name: String) = withContext(Dispatchers
 			return@withContext
 		}
 	identity.saveBlob(updated)
-	client = null
+	invalidateClient()
 	_state.update { it.copy(deviceName = name) }
 	connect()
 }
 
 internal fun ChatRepository.currentDeviceName(): String =
-	store.load()?.let { runCatching { Provisioning.parse(it, store).device }.getOrNull() } ?: ""
+	store.load()?.let { runCatching { ConsoleCredentials.parse(it, store).device }.getOrNull() } ?: ""
 
 suspend fun ChatRepository.clearAll() = withContext(Dispatchers.IO) {
 	// Join the poll loop before wiping state.
