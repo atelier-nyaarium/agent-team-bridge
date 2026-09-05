@@ -6,12 +6,12 @@ const root = path.resolve(import.meta.dirname, "..");
 const read = (relative: string) => fs.readFileSync(path.join(root, relative), "utf8").split("\n");
 
 describe("vault tools residue", () => {
-	it("the tool hands a value only to the child, and never answers one", () => {
+	it("the tool hands a value only to the child or the capture post, and never answers one", () => {
 		const lines = read("mcp/vault/vaultTools.ts");
 		for (const [index, line] of lines.entries()) {
 			const at = `vaultTools.ts:${index + 1}`;
 			if (line.includes("data.value")) expect(line, at).toContain("deps.run(");
-			if (/\bvalue:/.test(line)) expect(/deps\.(run|post)\(/.test(line), at).toBe(true);
+			if (/\bvalue:/.test(line)) expect(/deps\.run\(|deps\.post\("\/vault\/capture"/.test(line), at).toBe(true);
 		}
 	});
 
@@ -19,7 +19,7 @@ describe("vault tools residue", () => {
 		const source = read("mcp/vault/vaultRun.ts").join("\n");
 		const block = /export interface VaultRunResult \{([\s\S]*?)\n\}/.exec(source)?.[1] ?? "";
 		expect(block).toContain("stdout: string");
-		expect(block).not.toMatch(/\bvalue\??:/);
+		expect(block).not.toMatch(/\bvalue\??:|\[key: string\]/);
 	});
 
 	it("the helper writes the value to stdout alone, and its notes never carry it", () => {
@@ -28,7 +28,7 @@ describe("vault tools residue", () => {
 		for (const [index, line] of lines.entries()) {
 			const at = `main-vault-askpass.ts:${index + 1}`;
 			if (line.includes("outcome.value")) expect(line, at).toContain("process.stdout.write");
-			if (line.includes("console.error")) expect(line, at).not.toMatch(/\.value\b/);
+			if (line.includes("console.error")) expect(line.replace("no value", ""), at).not.toMatch(/\bvalue\b/);
 		}
 	});
 });
