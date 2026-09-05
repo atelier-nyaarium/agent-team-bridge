@@ -23,6 +23,23 @@ export interface Ambient {
 
 export type Clock = Pick<Ambient, "now">;
 
+/** The promise's value, or null once `ms` pass first; the timer never outlives the race. */
+export async function withinMs<T>(
+	ambient: Pick<Ambient, "setTimer" | "clearTimer">,
+	promise: Promise<T>,
+	ms: number,
+): Promise<T | null> {
+	let timer: TimerHandle | undefined;
+	const expiry = new Promise<null>((resolve) => {
+		timer = ambient.setTimer(() => resolve(null), ms);
+	});
+	try {
+		return await Promise.race([promise, expiry]);
+	} finally {
+		if (timer) ambient.clearTimer(timer);
+	}
+}
+
 // Globals enter through this reader. Timer handles are unref'd.
 export function processAmbient(): Ambient {
 	return {

@@ -207,11 +207,12 @@ describe("federation harness: vault requests", () => {
 			(await gatewayPost("/vault/askpass", { "x-vault-helper-token": token }, { cmdline, waitMs })).json();
 		expect((await gatewayPost("/vault/askpass", {}, { cmdline: "sudo apt install foo" })).status).toBe(401);
 
-		// No matching title: typed request.
+		// No matching title: typed request, collected by the helper after the wait ran out.
 		const seen = (await requestRows()).length;
-		const typed = askpass("sudo apt install foo", 10_000);
+		const typed = await askpass("sudo apt install foo", 200);
+		expect(typed).toMatchObject({ outcome: "pending" });
 		const request = await nextRequest(seen);
-		expect(request).toMatchObject({ kind: "typed", shape: "sudo apt" });
+		expect(request).toMatchObject({ kind: "typed", shape: "sudo apt", requestId: typed.requestId });
 		const value = h.phone.seal("t0ps3cret", vaultAadKind(VAULT_TYPED_KIND, request.requestId));
 		const answered = await h.phone.value({
 			kind: "vault_answer",
@@ -220,7 +221,15 @@ describe("federation harness: vault requests", () => {
 			value,
 		});
 		expect(answered.result).toEqual({ ok: true });
-		expect(await typed).toEqual({ outcome: "approved", decision: "once", value: "t0ps3cret" });
+		// A session cannot collect the helper's request, and the helper cannot search.
+		expect((await post(alice, "/vault/collect", { requestId: request.requestId, waitMs: 100 })).status).toBe(403);
+		expect((await gatewayPost("/vault/search", { "x-vault-helper-token": token }, {})).status).toBe(404);
+		const collected = await gatewayPost(
+			"/vault/collect",
+			{ "x-vault-helper-token": token },
+			{ requestId: request.requestId, waitMs: 5_000 },
+		);
+		expect(await collected.json()).toEqual({ outcome: "approved", decision: "once", value: "t0ps3cret" });
 
 		const id = "prod-ssh";
 		await h.phone.send({

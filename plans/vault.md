@@ -405,8 +405,8 @@ evicts a revoked signer through the one drop path, and names its frame refusals 
 - Harness scenarios under both timer drives: request then answer once; answer 30
   minutes then a second run inside the window; deny; timeout; a gateway restart with a window held.
 - A vault sealing case in `gen-wire-fixtures.ts`, minted under the identity set.
-- Loopback routes for the MCP server and the helper: search (public fields only), run-begin,
-  collect, capture, askpass. Helper token minted at install, verified per call (A6).
+- Loopback routes for the MCP server and the helper: search (public fields only), use, collect,
+  capture, askpass. Helper token minted at install, verified per call (A6).
 - The value leaves the gateway only in a loopback answer to an approved request.
 
 Shipped beyond the bullets: routes are `/vault/search`, `/vault/use`, `/vault/collect`,
@@ -419,7 +419,11 @@ first argument, or the whole line when a flag appears first because its value co
 Search reports whether an entry holds a value, so notes never request one. Approval waits for
 collection until the request deadline; session end drops open requests and grants. The request unit
 covers timeout under manual drive; the harness covers the rest under real drive. `vault_revoke` also
-revokes helper tokens by id.
+revokes helper tokens by id. Each value route resolves one principal, a bound session or the helper,
+and names the kinds it serves, so the helper collects its own pending answer; the mint route takes
+the host token. Grants and helper tokens open through `openDurable`, and a revocation is reported
+only once its snapshot is installed. A request row is volatile: a restart drops whatever the outbox
+still holds, and an answer to a request the gateway no longer holds reads as expired.
 
 ## Phase 3 - Phone: Vault tab, editor, request sheet
 

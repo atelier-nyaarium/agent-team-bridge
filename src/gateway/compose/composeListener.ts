@@ -50,7 +50,7 @@ export function composeListener(deps: ListenerStageDeps): ListenerStage {
 		admitPayload: () => context.arming()?.admitPayload,
 		blobStore: stores.blobStore,
 		sessionAuthority: sessions.sessionAuthority,
-		agentRoutes: new Map([...deps.agents.agentRoutes, ...deps.vault.routes]),
+		loopbackRoutes: new Map([...deps.agents.agentRoutes, ...deps.vault.routes]),
 		routes: routes.current,
 	});
 

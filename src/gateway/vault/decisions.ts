@@ -2,7 +2,7 @@
 
 import { z } from "zod";
 import type { Ambient } from "../../shared/ambient.js";
-import { DurableStore } from "../../shared/durable-store.js";
+import { type DurableStore, DurableStoreInstalledError } from "../../shared/durable-store.js";
 import {
 	VAULT_SESSION_GRANT_CAP_MS,
 	VAULT_WINDOW_MS,
@@ -12,7 +12,8 @@ import {
 } from "../../shared/schemasVault.js";
 
 export interface VaultDecisionsDeps {
-	dataDir: string;
+	/** Opened through `openDurable`, so a poisoned file starts this store fresh. */
+	store: DurableStore;
 	ambient: Pick<Ambient, "newId">;
 	sessionCapMs?: number;
 }
@@ -36,19 +37,33 @@ export function operationShape(operation: string): string {
 }
 
 export function createVaultDecisions(deps: VaultDecisionsDeps) {
-	const store = new DurableStore(deps.dataDir, "vault-decisions");
+	const { store } = deps;
 	const sessionCapMs = deps.sessionCapMs ?? VAULT_SESSION_GRANT_CAP_MS;
-	let grants: VaultGrant[] = GrantsSchema.safeParse(store.load()).data ?? [];
+	let grants: VaultGrant[] = GrantsSchema.parse(store.load() ?? []);
 
-	const persist = () => store.save(grants);
-	const keep = (kept: VaultGrant[]) => {
-		if (kept.length === grants.length) return false;
-		grants = kept;
-		persist();
-		return true;
+	/** A revocation lands on disk before it is reported; the rest is best effort. */
+	const commit = (next: VaultGrant[], checked: boolean): boolean => {
+		const previous = grants;
+		grants = next;
+		if (!checked) {
+			store.save(grants);
+			return true;
+		}
+		try {
+			store.saveChecked(grants);
+			return true;
+		} catch (error) {
+			// An installed snapshot is what a reopen reads.
+			if (error instanceof DurableStoreInstalledError) return true;
+			grants = previous;
+			console.warn(`[vault] grant write failed: ${(error as Error).message}`);
+			return false;
+		}
 	};
-	const sweep = (now: number) =>
-		keep(grants.filter((grant) => grant.expiresAt === undefined || grant.expiresAt > now));
+	const sweep = (now: number): void => {
+		const kept = grants.filter((grant) => grant.expiresAt === undefined || grant.expiresAt > now);
+		if (kept.length !== grants.length) commit(kept, false);
+	};
 
 	/** Session grants cover every shape; window grants cover one. */
 	const covers = (scope: GrantScope, now: number): VaultGrant | undefined => {
@@ -81,8 +96,7 @@ export function createVaultDecisions(deps: VaultDecisionsDeps) {
 						sessionTarget: scope.sessionTarget,
 						expiresAt: now + sessionCapMs,
 					};
-		grants.push(granted);
-		persist();
+		commit([...grants, granted], false);
 		return granted;
 	};
 
@@ -91,10 +105,14 @@ export function createVaultDecisions(deps: VaultDecisionsDeps) {
 		return [...grants];
 	};
 
-	const revoke = (grantId: string): boolean => keep(grants.filter((grant) => grant.grantId !== grantId));
+	const revoke = (grantId: string): boolean => {
+		const kept = grants.filter((grant) => grant.grantId !== grantId);
+		return kept.length !== grants.length && commit(kept, true);
+	};
 
 	const sessionEnded = (sessionTarget: string): void => {
-		keep(grants.filter((grant) => grant.sessionTarget !== sessionTarget));
+		const kept = grants.filter((grant) => grant.sessionTarget !== sessionTarget);
+		if (kept.length !== grants.length) commit(kept, true);
 	};
 
 	return { covers, grant, list, revoke, sessionEnded };

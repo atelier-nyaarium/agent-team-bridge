@@ -1,4 +1,5 @@
 import type { Ambient } from "../../shared/ambient.js";
+import { openDurable } from "../../shared/durable-store.js";
 import type { ConsolePushEntry } from "../../shared/federation-protocol.js";
 import type { MIGRATING } from "../../shared/migration-fence.js";
 import { ownerKeyId } from "../../shared/owner-id.js";
@@ -32,8 +33,8 @@ export interface VaultStage {
 
 export function composeVault(deps: VaultStageDeps): VaultStage {
 	const { ambient, context, localGatewayId, sessions } = deps;
-	const decisions = createVaultDecisions({ dataDir: deps.dataDir, ambient });
-	const helperTokens = createHelperTokens({ dataDir: deps.dataDir, ambient });
+	const decisions = openDurable(deps.dataDir, "vault-decisions", (store) => createVaultDecisions({ store, ambient }));
+	const helperTokens = openDurable(deps.dataDir, "vault-helper", (store) => createHelperTokens({ store, ambient }));
 	const ownThread = `gateway.${localGatewayId}.vault`;
 	const ownerSignPub = () => context.slice()?.allowlist.ownerSignPub ?? null;
 
@@ -60,7 +61,10 @@ export function composeVault(deps: VaultStageDeps): VaultStage {
 			actionType: "request",
 			payload: request,
 		};
-		return deps.routes().deliverToOwner({ entry, dedupeKey: `vault:${request.requestId}`, label: "vault" });
+		// The answer lives in this process, so a row a restart never delivered would only mislead.
+		return deps
+			.routes()
+			.deliverToOwner({ entry, dedupeKey: `vault:${request.requestId}`, label: "vault", volatile: true });
 	};
 
 	const requests = createVaultRequests({

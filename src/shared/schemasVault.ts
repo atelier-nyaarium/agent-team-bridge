@@ -170,9 +170,10 @@ export const VaultCaptureRequestSchema = z.object({
 	value: z.string().min(1).max(MAX_VAULT_CAPTURE_CHARS),
 });
 export const VaultAskpassRequestSchema = z.object({ cmdline: operation, waitMs });
-/** Pending answers expose a request; deny and timeout refuse. */
-export const VaultUseAnswerSchema = z.discriminatedUnion("outcome", [
-	z.object({ outcome: z.literal("approved"), decision: VaultDecisionSchema, value: z.string() }),
+export const VaultApprovedDecisionSchema = z.enum(["once", "window", "session"]);
+/** What use, collect, and askpass answer: pending hands back the request; deny and timeout both refuse. */
+export const VaultValueAnswerSchema = z.discriminatedUnion("outcome", [
+	z.object({ outcome: z.literal("approved"), decision: VaultApprovedDecisionSchema, value: z.string() }),
 	z.object({ outcome: z.literal("refused"), reason: z.string() }),
 	z.object({ outcome: z.literal("pending"), requestId, deadlineAt: z.number().int().nonnegative() }),
 ]);
@@ -187,4 +188,5 @@ export type VaultDecision = z.infer<typeof VaultDecisionSchema>;
 export type VaultRequest = z.infer<typeof VaultRequestSchema>;
 export type VaultGrant = z.infer<typeof VaultGrantSchema>;
 export type VaultPublicEntry = z.infer<typeof VaultPublicEntrySchema>;
-export type VaultUseAnswer = z.infer<typeof VaultUseAnswerSchema>;
+export type VaultApprovedDecision = z.infer<typeof VaultApprovedDecisionSchema>;
+export type VaultValueAnswer = z.infer<typeof VaultValueAnswerSchema>;

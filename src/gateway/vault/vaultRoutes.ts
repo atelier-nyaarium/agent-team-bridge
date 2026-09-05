@@ -1,19 +1,20 @@
 // Vault values leave only in approved answers.
 
-import type { Ambient, TimerHandle } from "../../shared/ambient.js";
+import { type Ambient, withinMs } from "../../shared/ambient.js";
 import { MIGRATING } from "../../shared/migration-fence.js";
 import {
+	type VaultApprovedDecision,
 	VaultAskpassRequestSchema,
 	VaultCaptureRequestSchema,
 	VaultCollectRequestSchema,
-	type VaultDecision,
 	type VaultPublicEntry,
 	type VaultRequest,
 	VaultSearchRequestSchema,
-	type VaultUseAnswer,
 	VaultUseRequestSchema,
+	type VaultValueAnswer,
 } from "../../shared/schemasVault.js";
 import { bindingTokensEqual } from "../../shared/session-tokens.js";
+import { jsonResponse as json } from "../agentRouteEnvelope.js";
 import type { VaultClient, VaultEntryView } from "../router/vaultClient.js";
 import { presentedByRequest } from "../sessionAuthority.js";
 import { type GrantScope, operationShape, type VaultDecisions } from "./decisions.js";
@@ -23,6 +24,7 @@ import type { VaultRequestAnswer, VaultRequests } from "./requests.js";
 export const VAULT_ROUTE_WAIT_CAP_MS = 230_000;
 const DEFAULT_WAIT_MS = 25_000;
 const REFUSAL = "the owner did not authorize";
+const HELPER_TOKEN_HEADER = "x-vault-helper-token";
 
 export interface VaultRoutesDeps {
 	client: () => VaultClient | null;
@@ -38,9 +40,11 @@ export interface VaultRoutesDeps {
 
 type Handler = (req: Request, body: unknown) => Promise<Response>;
 
-const json = (body: unknown, status = 200): Response => Response.json(body, { status });
+/** Who asked: a bound session by its team, or the helper by its token. */
+type Principal = { kind: "session"; target: string } | { kind: "helper"; target: string };
+
 const refused = (reason: string, status = 403): Response =>
-	json({ outcome: "refused", reason } satisfies VaultUseAnswer, status);
+	json({ outcome: "refused", reason } satisfies VaultValueAnswer, status);
 
 /** Migration refusal differs from unreachable owner. */
 const unopened = (reason: "migrating" | "unreachable"): Response =>
@@ -56,15 +60,19 @@ const publicView = (entry: VaultEntryView): VaultPublicEntry => ({
 export function createVaultRoutes(deps: VaultRoutesDeps): Map<string, Handler> {
 	const waitFor = (requested: number | undefined) => Math.min(requested ?? DEFAULT_WAIT_MS, VAULT_ROUTE_WAIT_CAP_MS);
 
-	/** Null when the wait ran out. */
-	const bounded = async (answer: Promise<VaultRequestAnswer>, waitMs: number): Promise<VaultRequestAnswer | null> => {
-		let timer: TimerHandle | undefined;
-		const expiry = new Promise<null>((resolve) => {
-			timer = deps.ambient.setTimer(() => resolve(null), waitMs);
-		});
-		const winner = await Promise.race([answer, expiry]);
-		if (timer) deps.ambient.clearTimer(timer);
-		return winner;
+	/** One credential per caller; each route names the kinds it serves. An unknown token answers not found, as the agent routes do. */
+	const principal = (req: Request, accepts: ReadonlyArray<Principal["kind"]>): Principal | Response => {
+		const helperToken = req.headers.get(HELPER_TOKEN_HEADER);
+		if (helperToken) {
+			const tokenId = deps.helperTokens.verify(helperToken);
+			if (tokenId && accepts.includes("helper")) return { kind: "helper", target: `helper.${tokenId}` };
+			return json({ error: "not found" }, 404);
+		}
+		const team = deps.resolveCaller(req);
+		if (team && accepts.includes("session")) return { kind: "session", target: team };
+		return team || presentedByRequest(req).token
+			? json({ error: "not found" }, 404)
+			: json({ error: "this session is not bound to the gateway" }, 401);
 	};
 
 	async function ready(): Promise<VaultClient | Response> {
@@ -74,15 +82,6 @@ export function createVaultRoutes(deps: VaultRoutesDeps): Map<string, Handler> {
 		if (refreshed.kind !== "ok") return json({ error: `vault unavailable: ${refreshed.error}` }, 503);
 		return client;
 	}
-
-	const caller = (req: Request): string | Response => {
-		const team = deps.resolveCaller(req);
-		if (team) return team;
-		// An unknown token answers not found, as the agent routes do.
-		return presentedByRequest(req).token
-			? json({ error: "not found" }, 404)
-			: json({ error: "this session is not bound to the gateway" }, 401);
-	};
 
 	const usable = (
 		client: VaultClient,
@@ -112,12 +111,12 @@ export function createVaultRoutes(deps: VaultRoutesDeps): Map<string, Handler> {
 			sessionTarget: scope.sessionTarget,
 		});
 		if (opened.kind !== "opened") return unopened(opened.reason);
-		return settle(await bounded(opened.answer, waitMs), opened.request, value);
+		return settle(await withinMs(deps.ambient, opened.answer, waitMs), opened.request, value);
 	}
 
-	function approved(decision: VaultDecision, value: string | null): Response {
+	function approved(decision: VaultApprovedDecision, value: string | null): Response {
 		if (value === null) return json({ outcome: "refused", reason: "the value could not be opened" }, 503);
-		return json({ outcome: "approved", decision, value } satisfies VaultUseAnswer);
+		return json({ outcome: "approved", decision, value } satisfies VaultValueAnswer);
 	}
 
 	function settle(answer: VaultRequestAnswer | null, request: VaultRequest, value: () => string | null): Response {
@@ -126,7 +125,7 @@ export function createVaultRoutes(deps: VaultRoutesDeps): Map<string, Handler> {
 				outcome: "pending",
 				requestId: request.requestId,
 				deadlineAt: request.deadlineAt,
-			} satisfies VaultUseAnswer);
+			} satisfies VaultValueAnswer);
 		// First collector wins.
 		if (!deps.requests.forget(request.requestId)) return refused(REFUSAL);
 		if (answer.kind === "refused") return refused(REFUSAL);
@@ -134,8 +133,8 @@ export function createVaultRoutes(deps: VaultRoutesDeps): Map<string, Handler> {
 	}
 
 	const search: Handler = async (req, body) => {
-		const team = caller(req);
-		if (team instanceof Response) return team;
+		const who = principal(req, ["session"]);
+		if (who instanceof Response) return who;
 		const parsed = VaultSearchRequestSchema.safeParse(body);
 		if (!parsed.success) return json({ error: "invalid vault search" }, 400);
 		const client = await ready();
@@ -156,8 +155,8 @@ export function createVaultRoutes(deps: VaultRoutesDeps): Map<string, Handler> {
 	};
 
 	const use: Handler = async (req, body) => {
-		const team = caller(req);
-		if (team instanceof Response) return team;
+		const who = principal(req, ["session"]);
+		if (who instanceof Response) return who;
 		const parsed = VaultUseRequestSchema.safeParse(body);
 		if (!parsed.success) return json({ error: "invalid vault use request" }, 400);
 		const client = await ready();
@@ -167,19 +166,19 @@ export function createVaultRoutes(deps: VaultRoutesDeps): Map<string, Handler> {
 		const scope = {
 			entryId: parsed.data.entryId,
 			shape: operationShape(parsed.data.operation),
-			sessionTarget: team,
+			sessionTarget: who.target,
 		};
 		return decide(scope, parsed.data.operation, found.value, waitFor(parsed.data.waitMs));
 	};
 
 	const collect: Handler = async (req, body) => {
-		const team = caller(req);
-		if (team instanceof Response) return team;
+		const who = principal(req, ["session", "helper"]);
+		if (who instanceof Response) return who;
 		const parsed = VaultCollectRequestSchema.safeParse(body);
 		if (!parsed.success) return json({ error: "invalid vault collect request" }, 400);
-		const pending = deps.requests.collect(parsed.data.requestId, team);
+		const pending = deps.requests.collect(parsed.data.requestId, who.target);
 		if (!pending) return refused(REFUSAL);
-		const answer = await bounded(pending.answer, waitFor(parsed.data.waitMs));
+		const answer = await withinMs(deps.ambient, pending.answer, waitFor(parsed.data.waitMs));
 		if (answer?.kind !== "approved" || pending.request.kind !== "entry")
 			return settle(answer, pending.request, () => null);
 		const client = await ready();
@@ -189,8 +188,8 @@ export function createVaultRoutes(deps: VaultRoutesDeps): Map<string, Handler> {
 	};
 
 	const capture: Handler = async (req, body) => {
-		const team = caller(req);
-		if (team instanceof Response) return team;
+		const who = principal(req, ["session"]);
+		if (who instanceof Response) return who;
 		const parsed = VaultCaptureRequestSchema.safeParse(body);
 		if (!parsed.success) return json({ error: "invalid vault capture" }, 400);
 		const client = await ready();
@@ -202,20 +201,20 @@ export function createVaultRoutes(deps: VaultRoutesDeps): Map<string, Handler> {
 		const created = await client.create({ id, ...parsed.data, value });
 		if (created.kind === "unavailable") return json({ error: created.error }, 503);
 		if (created.kind === "refused") return json({ error: created.refusal }, 409);
-		deps.notifyOwner("Vault entry captured", `${team} captured "${parsed.data.publicTitle}" as ${id}.`);
+		deps.notifyOwner("Vault entry captured", `${who.target} captured "${parsed.data.publicTitle}" as ${id}.`);
 		return json({ id });
 	};
 
 	/** Unique title match selects an entry; otherwise input is typed. */
 	const askpass: Handler = async (req, body) => {
-		const tokenId = deps.helperTokens.verify(req.headers.get("x-vault-helper-token"));
-		if (!tokenId) return json({ error: "helper token not accepted" }, 401);
+		const who = principal(req, ["helper"]);
+		if (who instanceof Response) return who;
 		const parsed = VaultAskpassRequestSchema.safeParse(body);
 		if (!parsed.success) return json({ error: "invalid askpass request" }, 400);
 		const client = await ready();
 		if (client instanceof Response) return client;
 		const shape = operationShape(parsed.data.cmdline);
-		const sessionTarget = `helper.${tokenId}`;
+		const sessionTarget = who.target;
 		const waitMs = waitFor(parsed.data.waitMs);
 		// Duplicate titles require typed input.
 		const matches = client
@@ -234,7 +233,7 @@ export function createVaultRoutes(deps: VaultRoutesDeps): Map<string, Handler> {
 		}
 		const opened = deps.requests.open({ kind: "typed", operation: parsed.data.cmdline, sessionTarget });
 		if (opened.kind !== "opened") return unopened(opened.reason);
-		return settle(await bounded(opened.answer, waitMs), opened.request, () => null);
+		return settle(await withinMs(deps.ambient, opened.answer, waitMs), opened.request, () => null);
 	};
 
 	/** Host token gates helper minting. */
@@ -242,7 +241,8 @@ export function createVaultRoutes(deps: VaultRoutesDeps): Map<string, Handler> {
 		const presented = req.headers.get("x-host-token");
 		if (!deps.hostToken || !presented || !bindingTokensEqual(presented, deps.hostToken))
 			return json({ error: "host token required" }, 401);
-		return json(deps.helperTokens.mint());
+		const minted = deps.helperTokens.mint();
+		return minted ? json(minted) : json({ error: "the helper token could not be stored" }, 503);
 	};
 
 	return new Map<string, Handler>([

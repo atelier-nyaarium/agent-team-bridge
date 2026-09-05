@@ -36,7 +36,7 @@ export interface HttpRouterDeps {
 	admitPayload: () => unknown;
 	blobStore: BlobStore;
 	sessionAuthority: Pick<SessionAuthority, "mayUseLocalPlane">;
-	agentRoutes: Map<string, (req: Request, body: unknown) => Promise<Response>>;
+	loopbackRoutes: Map<string, (req: Request, body: unknown) => Promise<Response>>;
 	/** Read per request: federation activating mid-session rebuilds the routes object. */
 	routes: () => HttpRoutes;
 }
@@ -47,7 +47,7 @@ export function createHttpRouter({
 	admitPayload,
 	blobStore,
 	sessionAuthority,
-	agentRoutes,
+	loopbackRoutes,
 	routes,
 }: HttpRouterDeps) {
 	function serveAdmitPayload(req: Request): Response {
@@ -126,7 +126,7 @@ export function createHttpRouter({
 		if (method === "POST" && url.pathname === "/plugin-action") return r.pluginAction(req, body);
 		if (method === "POST" && url.pathname === "/task-board") return r.taskBoard(req, body);
 		if (method === "POST") {
-			const agentRoute = agentRoutes.get(url.pathname);
+			const agentRoute = loopbackRoutes.get(url.pathname);
 			if (agentRoute) return agentRoute(req, body);
 		}
 

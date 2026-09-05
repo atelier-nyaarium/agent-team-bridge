@@ -1,4 +1,4 @@
-import type { Ambient, TimerHandle } from "../../shared/ambient.js";
+import { type Ambient, withinMs } from "../../shared/ambient.js";
 import type { BoardDisposition } from "../../shared/board-authority.js";
 import type { ConsoleOp } from "../../shared/console-protocol.js";
 import { type HostOp, type HostOpResult, isSpawnWorkdirPath } from "../../shared/host-op.js";
@@ -127,12 +127,7 @@ export function createSessionLifecycleHandlers({
 			}
 		});
 
-		let boundTimer: TimerHandle | undefined;
-		const bound = new Promise<null>((resolve) => {
-			boundTimer = ambient.setTimer(() => resolve(null), createSessionBoundMs);
-		});
-		const winner = await Promise.race([launch, bound]);
-		if (boundTimer) ambient.clearTimer(boundTimer);
+		const winner = await withinMs(ambient, launch, createSessionBoundMs);
 
 		if (winner === null) {
 			launch.catch(() => undefined);
@@ -171,13 +166,8 @@ export function createSessionLifecycleHandlers({
 			const current = sessionStore.getByTeam(name);
 			return current === adopted && current.confirmedAt === undefined;
 		};
-		let boundTimer: TimerHandle | undefined;
-		const bound = new Promise<null>((resolve) => {
-			boundTimer = ambient.setTimer(() => resolve(null), createSessionBoundMs);
-		});
 		const wakeCall = tryWakeTeam(name);
-		const winner = await Promise.race([wakeCall, bound]);
-		if (boundTimer) ambient.clearTimer(boundTimer);
+		const winner = await withinMs(ambient, wakeCall, createSessionBoundMs);
 		if (winner === null) {
 			void wakeCall
 				.then((r) => {

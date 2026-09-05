@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createVaultDecisions, operationShape } from "../gateway/vault/decisions.js";
+import { openDurable } from "../shared/durable-store.js";
 import { VAULT_SESSION_GRANT_CAP_MS, VAULT_WINDOW_MS } from "../shared/schemasVault.js";
 
 const roots: string[] = [];
@@ -16,6 +17,8 @@ const fresh = () => {
 };
 let ids = 0;
 const ambient = { newId: () => `grant-${++ids}` };
+const open = (dataDir: string) =>
+	openDurable(dataDir, "vault-decisions", (store) => createVaultDecisions({ store, ambient }));
 const scope = (shape: string, sessionTarget = "host.alice", entryId = "deploy") => ({ entryId, shape, sessionTarget });
 
 describe("vault decisions", () => {
@@ -29,7 +32,7 @@ describe("vault decisions", () => {
 	});
 
 	it("a window covers its shape until it expires; once covers nothing; session covers every shape", () => {
-		const decisions = createVaultDecisions({ dataDir: fresh(), ambient });
+		const decisions = open(fresh());
 		expect(decisions.grant("once", scope("ssh deploy@prod"), 1_000)).toBeNull();
 		expect(decisions.covers(scope("ssh deploy@prod"), 1_000)).toBeUndefined();
 
@@ -63,11 +66,11 @@ describe("vault decisions", () => {
 
 	it("grants survive a reopen, and a revoke or an expiry drops them from the list", () => {
 		const dataDir = fresh();
-		const first = createVaultDecisions({ dataDir, ambient });
+		const first = open(dataDir);
 		const window = first.grant("window", scope("ssh deploy@prod"), 1_000);
 		first.grant("session", scope("ssh deploy@prod", "host.carol"), 1_000);
 
-		const reopened = createVaultDecisions({ dataDir, ambient });
+		const reopened = open(dataDir);
 		expect(
 			reopened
 				.list(2_000)
@@ -77,6 +80,19 @@ describe("vault decisions", () => {
 		expect(reopened.revoke(window?.grantId ?? "")).toBe(true);
 		expect(reopened.revoke("missing")).toBe(false);
 		expect(reopened.list(1_000 + VAULT_SESSION_GRANT_CAP_MS)).toEqual([]);
-		expect(createVaultDecisions({ dataDir, ambient }).list(2_000)).toEqual([]);
+		expect(open(dataDir).list(2_000)).toEqual([]);
+	});
+
+	it("a poisoned file starts the store fresh, and the next grant heals it", () => {
+		const dataDir = fresh();
+		fs.writeFileSync(path.join(dataDir, "vault-decisions.json"), JSON.stringify({ nope: 1 }));
+		const poisoned = open(dataDir);
+		expect(poisoned.list(1_000)).toEqual([]);
+		const window = poisoned.grant("window", scope("ssh deploy@prod"), 1_000);
+		expect(
+			open(dataDir)
+				.list(2_000)
+				.map((grant) => grant.grantId),
+		).toEqual([window?.grantId]);
 	});
 });

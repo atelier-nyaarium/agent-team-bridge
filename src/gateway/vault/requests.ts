@@ -3,7 +3,12 @@
 import type { Ambient, TimerHandle } from "../../shared/ambient.js";
 import { MIGRATING } from "../../shared/migration-fence.js";
 import type { ContentEnvelope } from "../../shared/schemasContentKey.js";
-import { VAULT_REQUEST_DEADLINE_MS, type VaultDecision, type VaultRequest } from "../../shared/schemasVault.js";
+import {
+	VAULT_REQUEST_DEADLINE_MS,
+	type VaultApprovedDecision,
+	type VaultDecision,
+	type VaultRequest,
+} from "../../shared/schemasVault.js";
 import { operationShape } from "./decisions.js";
 
 export type VaultRequestInput =
@@ -11,7 +16,7 @@ export type VaultRequestInput =
 	| { kind: "typed"; operation: string; sessionTarget: string };
 
 export type VaultRequestAnswer =
-	| { kind: "approved"; decision: VaultDecision; typedValue?: string }
+	| { kind: "approved"; decision: VaultApprovedDecision; typedValue?: string }
 	| { kind: "refused" };
 
 export type VaultRequestOpened =
@@ -98,11 +103,11 @@ export function createVaultRequests(deps: VaultRequestsDeps) {
 		value?: ContentEnvelope,
 	): { ok: true } | { ok: false; reason: string } => {
 		const entry = pending.get(requestId);
-		if (!entry || entry.settled) return { ok: false, reason: "no such request" };
+		if (!entry || entry.settled) return { ok: false, reason: "request expired" };
 		if (deps.ambient.now() >= entry.request.deadlineAt) {
 			entry.settle({ kind: "refused" });
 			forget(requestId);
-			return { ok: false, reason: "no such request" };
+			return { ok: false, reason: "request expired" };
 		}
 		if (decision === "deny") {
 			entry.settle({ kind: "refused" });

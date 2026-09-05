@@ -26,6 +26,8 @@ export interface DeliverToOwnerOptions {
 	entry: ConsolePushEntry;
 	dedupeKey: string;
 	label?: string;
+	/** A row only this process can act on; a restart drops it undelivered. */
+	volatile?: boolean;
 }
 
 export type DeliverToOwnerResult = boolean | typeof MIGRATING;
@@ -55,6 +57,7 @@ type OwnerRowOutboxItem = {
 	label: string;
 	// Stamped at enqueue for identical retries.
 	at?: number;
+	volatile?: boolean;
 };
 
 export function ownerRowBody(entry: ConsolePushEntry, at: number): Record<string, unknown> {
@@ -86,6 +89,7 @@ export function createConsolePushOps({
 			opId: z.string().min(1),
 			label: z.string().min(1),
 			at: z.number().int().nonnegative().optional(),
+			volatile: z.boolean().optional(),
 		}),
 	);
 	let storedInvalid = false;
@@ -94,7 +98,7 @@ export function createConsolePushOps({
 		restore: (raw) => {
 			if (raw === null) return [];
 			const parsed = OutboxItemsSchema.safeParse(raw);
-			if (parsed.success) return parsed.data;
+			if (parsed.success) return parsed.data.filter((item) => !item.volatile);
 			storedInvalid = true;
 			return [];
 		},
@@ -205,7 +209,12 @@ export function createConsolePushOps({
 	const drainTimer = ambient.setInterval(() => void drainOutbox(), 1000);
 	const stop = (): void => ambient.clearInterval(drainTimer);
 
-	function deliverToOwner({ entry, dedupeKey, label = "deliver" }: DeliverToOwnerOptions): DeliverToOwnerResult {
+	function deliverToOwner({
+		entry,
+		dedupeKey,
+		label = "deliver",
+		volatile = false,
+	}: DeliverToOwnerOptions): DeliverToOwnerResult {
 		if (fenced()) {
 			console.warn(`[${label}] refused: migrating`);
 			return MIGRATING;
@@ -220,14 +229,14 @@ export function createConsolePushOps({
 			);
 			return false;
 		}
-		if (!appendOwnerRow(entry, entry.opId ?? dedupeKey, label)) return false;
+		if (!appendOwnerRow(entry, entry.opId ?? dedupeKey, label, volatile)) return false;
 		const blobIds = [...new Set((entry.files ?? []).flatMap((file) => (file.blobId ? [file.blobId] : [])))];
 		if (blobIds.length > 0) cacheBlobs?.(blobIds);
 		return true;
 	}
 
-	function appendOwnerRow(entry: ConsolePushEntry, opId: string, label: string): boolean {
-		const item: OwnerRowOutboxItem = { entry, opId, label, at: now() };
+	function appendOwnerRow(entry: ConsolePushEntry, opId: string, label: string, volatile = false): boolean {
+		const item: OwnerRowOutboxItem = { entry, opId, label, at: now(), ...(volatile ? { volatile } : {}) };
 		if (!queueOutbox(item)) return false;
 		void drainOutbox();
 		return true;

@@ -1,4 +1,4 @@
-import type { TimerHandle } from "../../shared/ambient.js";
+import { withinMs } from "../../shared/ambient.js";
 import type { ConsoleOp, ConsoleOpResult } from "../../shared/console-protocol.js";
 import { fenced, MIGRATING } from "../../shared/migration-fence.js";
 import { ownerKeyId } from "../../shared/owner-id.js";
@@ -117,12 +117,7 @@ export function createConsoleDispatcher({
 					{ consoleSender: true },
 				);
 
-				let boundTimer: TimerHandle | undefined;
-				const bound = new Promise<null>((resolve) => {
-					boundTimer = ambient.setTimer(() => resolve(null), sendBoundMs);
-				});
-				const winner = await Promise.race([sendPromise, bound]);
-				if (boundTimer) ambient.clearTimer(boundTimer);
+				const winner = await withinMs(ambient, sendPromise, sendBoundMs);
 
 				if (winner === null) {
 					void sendPromise
