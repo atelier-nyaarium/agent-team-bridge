@@ -364,24 +364,31 @@ fun TerminalView(
 						}
 					}
 				} else {
-					// Claude is not running in this pane (Ctrl-C killed it, or the session is still coming
-					// up), so the slash macros - claude TUI commands - have nothing to receive them. The row
-					// becomes the relaunch affordance instead; the control keys and input stay, since the
-					// bare shell underneath is still real and typeable.
+					// Claude is not running in this pane, so the slash macros have nothing to receive them.
+					// The bare shell underneath is real: the row types the install macros into it, or relaunches.
 					val waking = relaunching || presence?.isVerifying == true || presence?.waking(System.currentTimeMillis()) == true
-					FilledTonalButton(
-						onClick = hapticClick {
-							relaunching = true
-							wakeRequested = true
-							scope.launch {
-								runCatchingCancellable { onRelaunch() }.onFailure { sendError = it.message ?: "wake failed" }
-								relaunching = false
-							}
-						},
-						enabled = !waking,
-						modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+					Row(
+						Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp, vertical = 4.dp),
+						horizontalArrangement = Arrangement.spacedBy(6.dp),
 					) {
-						Text(if (waking) "Waking..." else "Wake up")
+						PALETTE_SHELL.forEach { macro ->
+							AssistChip(
+								onClick = hapticClick { fire(macro.cmd, null) },
+								label = { Text(macro.label, fontFamily = FontFamily.Monospace, color = MACRO_AUTO_SEND_COLOR) },
+							)
+						}
+						AssistChip(
+							onClick = hapticClick {
+								relaunching = true
+								wakeRequested = true
+								scope.launch {
+									runCatchingCancellable { onRelaunch() }.onFailure { sendError = it.message ?: "wake failed" }
+									relaunching = false
+								}
+							},
+							enabled = !waking,
+							label = { Text(if (waking) "Waking..." else "Wake up", fontFamily = FontFamily.Monospace) },
+						)
 					}
 				}
 				Row(

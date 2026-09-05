@@ -46,6 +46,18 @@ internal val PALETTE_SLASH = listOf(
 	SlashMacro("/reload-plugins", autoSend = true),
 )
 
+// Typed into the bare shell when Claude is not running in the pane. Each installs or updates.
+internal data class ShellMacro(val label: String, val cmd: String)
+
+internal val PALETTE_SHELL = listOf(
+	ShellMacro("Install Claude", "curl -fsSL https://claude.ai/install.sh | bash"),
+	ShellMacro(
+		"Install Tools",
+		"claude plugin marketplace add atelier-nyaarium/claude-marketplace || claude plugin marketplace update atelier-nyaarium; " +
+			"for p in switchboard nyaaskills lexicon; do claude plugin install \$p@atelier-nyaarium && claude plugin update -y \$p@atelier-nyaarium; done",
+	),
+)
+
 // Macro chip label color: orange fires Enter immediately, blue only stages text.
 internal val MACRO_AUTO_SEND_COLOR = Color(0xFFFF9800)
 internal val MACRO_STAGE_ONLY_COLOR = Color(0xFF2196F3)
