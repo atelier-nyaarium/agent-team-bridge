@@ -31,24 +31,9 @@ class NotificationReceiver : BroadcastReceiver() {
 		intent.getStringExtra(SwitchboardService.EXTRA_VAULT_REQUEST)?.let { requestId ->
 			// A notification outliving the plugin answers nothing.
 			if (!com.atelier_nyaarium.switchboard.plugins.Plugins.get(context).isActive("vault")) return
-			val decision = when (intent.action) {
-				ACTION_VAULT_ONCE -> com.atelier_nyaarium.switchboard.vault.VAULT_DECISION_ONCE
-				ACTION_VAULT_WINDOW -> com.atelier_nyaarium.switchboard.vault.VAULT_DECISION_WINDOW
-				ACTION_VAULT_DENY -> com.atelier_nyaarium.switchboard.vault.VAULT_DECISION_DENY
-				else -> return
-			}
-			// A gate set after the notification was posted sends the tap into the sheet.
-			val gated = decision != com.atelier_nyaarium.switchboard.vault.VAULT_DECISION_DENY &&
-				repo.store.vaultUnlock != com.atelier_nyaarium.switchboard.vault.VAULT_UNLOCK_OFF
-			if (gated) {
-				context.startActivity(
-					Intent(context, MainActivity::class.java)
-						.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-						.putExtra(SwitchboardService.EXTRA_VAULT_REQUEST, requestId),
-				)
-				return
-			}
-			return repo.command { vaultOps.answerById(requestId, decision) }
+			// Only a swipe answers from here; every other answer lives in the sheet.
+			if (intent.action != ACTION_VAULT_DENY) return
+			return repo.command { vaultOps.answerById(requestId, com.atelier_nyaarium.switchboard.vault.VAULT_DECISION_DENY) }
 		}
 		val team = intent.getStringExtra(SwitchboardService.EXTRA_OPEN_TEAM) ?: return
 		val at = intent.getLongExtra(SwitchboardService.EXTRA_MESSAGE_AT, -1L)
@@ -73,8 +58,6 @@ class NotificationReceiver : BroadcastReceiver() {
 		const val ACTION_PLAY_FULL = "com.atelier_nyaarium.switchboard.PLAY_FULL"
 		const val ACTION_PLAY_SUMMARY = "com.atelier_nyaarium.switchboard.PLAY_SUMMARY"
 		const val ACTION_STATUS_DISMISSED = "com.atelier_nyaarium.switchboard.STATUS_DISMISSED"
-		const val ACTION_VAULT_ONCE = "com.atelier_nyaarium.switchboard.VAULT_ONCE"
-		const val ACTION_VAULT_WINDOW = "com.atelier_nyaarium.switchboard.VAULT_WINDOW"
 		const val ACTION_VAULT_DENY = "com.atelier_nyaarium.switchboard.VAULT_DENY"
 	}
 }

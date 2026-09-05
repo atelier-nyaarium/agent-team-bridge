@@ -14,7 +14,6 @@ import com.atelier_nyaarium.switchboard.SwitchboardService.Companion.CHANNEL_STA
 import com.atelier_nyaarium.switchboard.SwitchboardService.Companion.EXTRA_MESSAGE_AT
 import com.atelier_nyaarium.switchboard.SwitchboardService.Companion.EXTRA_OPEN_TEAM
 import com.atelier_nyaarium.switchboard.SwitchboardService.Companion.EXTRA_VAULT_REQUEST
-import com.atelier_nyaarium.switchboard.vault.VAULT_UNLOCK_OFF
 import com.atelier_nyaarium.switchboard.vault.VaultPendingRequest
 import com.atelier_nyaarium.switchboard.vault.requestTitle
 import com.atelier_nyaarium.switchboard.vault.requester
@@ -265,11 +264,10 @@ internal class ServiceNotifications(private val context: Context) {
 		)
 	}
 
-	/** Swipe denies; approve buttons only while no unlock is set. */
+	/** Tap opens the sheet, where every answer lives; swipe denies. */
 	internal fun notifyVaultRequest(repo: ChatRepository, pending: VaultPendingRequest) {
 		if (!canNotify()) return
 		val who = requester(repo.state.value, pending)
-		val typed = pending.entryId == null
 		val entryTitle = pending.entryId?.let { repo.vaultOps.view(it)?.title }
 		val builder = NotificationCompat.Builder(context, CHANNEL_VAULT)
 			.setSmallIcon(android.R.drawable.ic_lock_lock)
@@ -279,11 +277,6 @@ internal class ServiceNotifications(private val context: Context) {
 			.setAutoCancel(true)
 			.setContentIntent(vaultContentIntent(pending.requestId))
 			.setDeleteIntent(vaultActionIntent(pending.requestId, NotificationReceiver.ACTION_VAULT_DENY))
-		if (!typed && repo.store.vaultUnlock == VAULT_UNLOCK_OFF) {
-			builder.addAction(0, "Once", vaultActionIntent(pending.requestId, NotificationReceiver.ACTION_VAULT_ONCE))
-			builder.addAction(0, "30 min", vaultActionIntent(pending.requestId, NotificationReceiver.ACTION_VAULT_WINDOW))
-		}
-		builder.addAction(0, "Deny", vaultActionIntent(pending.requestId, NotificationReceiver.ACTION_VAULT_DENY))
 		NotificationManagerCompat.from(context).notify(vaultNotificationId(pending.requestId), builder.build())
 	}
 

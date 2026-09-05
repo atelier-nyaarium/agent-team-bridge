@@ -581,7 +581,8 @@ stays for an older helper.
 Deny steers. Tapping Deny swaps the approve row for a `Steer` field and `Back` and `Deny`; the
 second Deny sends the note, empty or not. The note is an optional field on `vault_answer` and on
 the refused answer, so it reaches the session in the `vault_run` result it was waiting on, and the
-helper prints it to stderr. The notification's Deny stays bare.
+helper prints it to stderr. The notification lost its Once, 30 min, and Deny buttons: a tap opens
+the sheet, where every answer lives, and a swipe still denies.
 
 ### Deferred by the owner: the shape stops at the first metacharacter
 
