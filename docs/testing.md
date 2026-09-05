@@ -64,13 +64,24 @@ bookkeeping:
 | `federation-harness.test.ts` | One Domain: send and reply, host launch, presence, board, notices, a queued reply across a gateway restart, the empty keyring |
 | `federation-harness-boot.test.ts` | Reach before roster, the bounded bootstrap install, Router and gateway restarts, a notice held through a Router outage |
 | `federation-harness-sessions.test.ts` | Session bindings and impostors, worker answers, transcript handover, duplicated deliveries, reply authority, the wake boundary, the console's create, rename, close, forget, tmux, peek, and notify rules, daemon capabilities |
-| `federation-harness-domains.test.ts` | Two and three Domains: the handshake, shares and the Router record, cross-Domain send and reply, opaque refusal, unshare, unlink, colliding gateway ids, a forged reply, a repeated send opId |
-| `federation-harness-router.test.ts` | Router-only: tenant provision, first root, rename, removal, deletion, replay across a restart, device approval, the trust rendezvous |
+| `federation-harness-handshake.test.ts` | A session verifying before its lead confirms, a reconnect within retention, a stale close under a newer registration |
+| `federation-harness-domains.test.ts` | Two and three Domains: the handshake, shares and the Router record, cross-Domain send and reply, opaque refusal, unshare, unlink, colliding gateway ids, forged replies, a repeated send opId |
+| `federation-harness-xdomain.test.ts` | The share gate, a cross-Domain wake, return-route authentication, a relay retried across a Router restart, unlink of in-flight work, share auto-forget |
+| `federation-harness-router.test.ts` | Router-only: tenant provision, first root, rename and its refusals, removal, deletion, replay across a restart, device approval, the trust rendezvous |
 | `federation-harness-codex.test.ts` | Codex through the gateway and the daemon: start, message, list, stop, replayed frames, gateway and daemon restarts |
 
 `startRouterOnly` composes the Router without a gateway, so a scenario can add an arming or active
-gateway itself; `restartRouter` replaces the Router on its port; the phone driver's `reach()` is the
-token-gated reach and gateway roster.
+gateway itself. `restartRouter` replaces the Router on its port over a store reopened from disk.
+The phone driver's `reach()` is the token-gated reach and gateway roster. A friend Domain from
+`addDomain` shares the Router identity and app token and carries its own host token.
+
+The coordinators and services behind the scenarios keep pure-rule suites beside them:
+`cross-domain-handshake` (limits, cancellation, mismatch refusals), `router-coordinators`
+(rendezvous, approval, and tenant limits), `owner-op-intake` (in-flight duplicates, caps,
+admission refusals, quarantine), `cross-domain-presence` (consumer, pusher, reconciler, source),
+and `share-rules`. The host daemon's Codex service has its own bench in
+`codex-daemon-service.test.ts`: the real `ThreadLifecycle`, tracker, and JSONL transport over a
+scripted App Server child, with only the launcher as a double.
 
 ## Minted wire fixtures
 
