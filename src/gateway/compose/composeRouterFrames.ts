@@ -16,6 +16,7 @@ import type { RouterPresenceBuild } from "./composeRouterPresence.js";
 import type { GatewayRoutes } from "./composeRoutes.js";
 import type { SessionsStage } from "./composeSessions.js";
 import type { StoresStage } from "./composeStores.js";
+import type { VaultStage } from "./composeVault.js";
 import type { FederationContext } from "./federationContext.js";
 
 export interface RouterFramesStageDeps {
@@ -27,6 +28,7 @@ export interface RouterFramesStageDeps {
 	sessions: Pick<SessionsStage, "registry" | "conversationRegistry" | "isTrustedCatalogProject" | "presence">;
 	host: Pick<HostStage, "relayToHost" | "wakeService" | "wakeCoordinator">;
 	routes: () => GatewayRoutes;
+	vault: Pick<VaultStage, "console" | "sessionEnded">;
 }
 
 export interface RouterFramesBuild extends RouterFrameHandlers {
@@ -99,6 +101,8 @@ export function composeRouterFrames(deps: RouterFramesStageDeps): RouterFramesSt
 			unlinkDomain: presence.unlinkDomain,
 			untrustOwner: presence.untrustOwner,
 			durableOpStore: stores.durableOpStore,
+			vault: deps.vault.console,
+			onSessionEnded: (team) => deps.vault.sessionEnded(team),
 		});
 
 		const valueOp = (raw: unknown): void => {

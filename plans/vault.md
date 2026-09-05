@@ -390,8 +390,9 @@ evicts a revoked signer through the one drop path, and names its frame refusals 
 - `src/gateway/compose/composeVault.ts`: the stage that builds the client, the decisions, and the
   request road, after the stores and the Router client. Deps typed on `GatewayDeps`; every clock
   and timer through `ambient` (R9).
-- `src/gateway/router/vaultClient.ts`: sole sealer and opener of vault fields, sole local-key
-  mapper. Opens with `ContentKeyStore`. A `vault-door-residue` test pins it as the only door.
+- `src/gateway/router/vaultClient.ts`: sole sealer and opener of vault fields, sole reader of the
+  gateway allowlist. Opens with `ContentKeyStore`. A `vault-door-residue` test pins it as the
+  only door.
 - `src/gateway/vault/decisions.ts`: grants under `DATA_DIR/vault-decisions.json`, named in
   `DATA_DIR_ENTRIES` (`dataDirInventory.ts`). Once is consumed on use. 30 minutes keys on program
   plus target, secret, session, its deadline on `ambient.now`. Whole session keys on secret and
@@ -407,6 +408,18 @@ evicts a revoked signer through the one drop path, and names its frame refusals 
 - Loopback routes for the MCP server and the helper: search (public fields only), run-begin,
   collect, capture, askpass. Helper token minted at install, verified per call (A6).
 - The value leaves the gateway only in a loopback answer to an approved request.
+
+Shipped beyond the bullets: routes are `/vault/search`, `/vault/use`, `/vault/collect`,
+`/vault/capture`, `/vault/askpass`, and `/vault/helper-token`; the last mints a helper token with
+the host's own token for the installer. Whole-session grants cap at eight hours; no console setting
+configures the cap. The sealed `gateways` field holds a JSON array of gateway ids. An ask selects a
+sole entry whose public title equals the shape; duplicate titles require a typed request. Typed
+values never leave a grant. Capture trims one trailing newline. The shape is the program plus its
+first argument, or the whole line when a flag appears first because its value could hide the target.
+Search reports whether an entry holds a value, so notes never request one. Approval waits for
+collection until the request deadline; session end drops open requests and grants. The request unit
+covers timeout under manual drive; the harness covers the rest under real drive. `vault_revoke` also
+revokes helper tokens by id.
 
 ## Phase 3 - Phone: Vault tab, editor, request sheet
 

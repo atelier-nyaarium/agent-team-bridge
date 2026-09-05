@@ -14,6 +14,11 @@ import {
 	TaskBoardVersionSchema,
 	TeamInfoSchema,
 } from "./schemasPresence.js";
+import {
+	ConsoleVaultAnswerResultSchema,
+	ConsoleVaultGrantsResultSchema,
+	ConsoleVaultRevokeResultSchema,
+} from "./schemasVault.js";
 
 ////////////////////////////////
 //  Op result schemas (gateway -> console)
@@ -455,6 +460,9 @@ export const ConsoleOpResultSchema = z.union([
 	CrossDomainListSharesResultSchema,
 	CrossDomainListPeersResultSchema,
 	CrossDomainUnlinkResultSchema,
+	ConsoleVaultAnswerResultSchema,
+	ConsoleVaultGrantsResultSchema,
+	ConsoleVaultRevokeResultSchema,
 ]);
 
 ////////////////////////////////

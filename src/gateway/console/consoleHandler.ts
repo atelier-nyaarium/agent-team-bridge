@@ -43,6 +43,8 @@ export function createConsoleDispatcher({
 	unlinkDomain,
 	untrustOwner,
 	durableOpStore,
+	vault,
+	onSessionEnded,
 }: ConsoleHandlerDeps) {
 	const targets = createConsoleTargets({ localDomainId, localGatewayId, isTrustedCatalogProject });
 	const terminalOps = createTerminalHandlers({ targets, relayToHost, sessionStore });
@@ -56,6 +58,7 @@ export function createConsoleDispatcher({
 		markCreateInFlight,
 		awaitRegister,
 		dropSessionResume,
+		onSessionEnded,
 		sessionStore,
 	});
 	const crossDomainOps = createCrossDomainHandlers({
@@ -278,10 +281,19 @@ export function createConsoleDispatcher({
 				return crossDomainOps.untrust(op);
 
 			case "vault_answer":
+				return requireVault().answer(op.requestId, op.decision, op.value);
+
 			case "vault_grants":
+				return requireVault().grants();
+
 			case "vault_revoke":
-				throw new Error("vault is not available on this Gateway");
+				return requireVault().revoke(op.grantId);
 		}
+	}
+
+	function requireVault() {
+		if (!vault) throw new Error("vault is not available on this Gateway");
+		return vault;
 	}
 
 	function durableOpKey(kind: string, opId: string): string {

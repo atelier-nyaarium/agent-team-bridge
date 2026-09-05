@@ -13,6 +13,7 @@ import type { RouterPresenceStage } from "./composeRouterPresence.js";
 import type { RoutesStage } from "./composeRoutes.js";
 import type { SessionsStage } from "./composeSessions.js";
 import type { StoresStage } from "./composeStores.js";
+import type { VaultStage } from "./composeVault.js";
 import type { WebSocketsStage } from "./composeWebSockets.js";
 import type { FederationContext } from "./federationContext.js";
 
@@ -32,6 +33,7 @@ export interface ListenerStageDeps {
 	websockets: Pick<WebSocketsStage, "wsHandlers">;
 	routes: Pick<RoutesStage, "current" | "stop">;
 	routerPresence: Pick<RouterPresenceStage, "stop">;
+	vault: Pick<VaultStage, "routes">;
 }
 
 export interface ListenerStage {
@@ -48,7 +50,7 @@ export function composeListener(deps: ListenerStageDeps): ListenerStage {
 		admitPayload: () => context.arming()?.admitPayload,
 		blobStore: stores.blobStore,
 		sessionAuthority: sessions.sessionAuthority,
-		agentRoutes: deps.agents.agentRoutes,
+		agentRoutes: new Map([...deps.agents.agentRoutes, ...deps.vault.routes]),
 		routes: routes.current,
 	});
 

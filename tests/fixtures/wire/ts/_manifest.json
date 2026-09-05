@@ -68,6 +68,12 @@
 			"peer": "phone"
 		},
 		{
+			"file": "gateway/router/vaultClient/create.json",
+			"composer": "gateway/router/vaultClient",
+			"case": "create",
+			"peer": "phone"
+		},
+		{
 			"file": "gateway/router/sessionRegistryReporter/forget.json",
 			"composer": "gateway/router/sessionRegistryReporter",
 			"case": "forget",

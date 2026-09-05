@@ -6,6 +6,7 @@ import com.atelier_nyaarium.switchboard.proto.ContentEnvelope
 import com.atelier_nyaarium.switchboard.proto.ConsoleListDirsResult
 import com.atelier_nyaarium.switchboard.proto.MailboxEntry
 import com.atelier_nyaarium.switchboard.proto.RowEnvelope
+import com.atelier_nyaarium.switchboard.proto.VaultPut
 import com.atelier_nyaarium.switchboard.proto.WireFixture
 import com.atelier_nyaarium.switchboard.proto.WireManifest
 import com.atelier_nyaarium.switchboard.proto.WirePhoneDecode
@@ -56,6 +57,7 @@ class WireFixturesDecodeTest {
 			"RowEnvelope" -> wireJson.decodeFromJsonElement<RowEnvelope>(params.getValue("row").jsonObject.getValue("envelope"))
 			"ContentEnvelope" -> wireJson.decodeFromJsonElement<ContentEnvelope>(params.getValue("result"))
 			"BoardOp" -> wireJson.decodeFromJsonElement<BoardOp>(params.getValue("write").jsonObject.getValue("ops").jsonArray.first())
+			"VaultPut" -> wireJson.decodeFromJsonElement<VaultPut>(params.getValue("put"))
 			else -> error("unsupported frame decode target $decodeAs")
 		}
 	}

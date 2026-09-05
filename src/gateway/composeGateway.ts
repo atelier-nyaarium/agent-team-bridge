@@ -19,6 +19,7 @@ import {
 import { composeRoutes, type GatewayRoutes, type RoutesStage } from "./compose/composeRoutes.js";
 import { composeSessions } from "./compose/composeSessions.js";
 import { composeStores } from "./compose/composeStores.js";
+import { composeVault, type VaultStage } from "./compose/composeVault.js";
 import { composeWebSockets, type WebSocketsStage } from "./compose/composeWebSockets.js";
 import { FederationContext } from "./compose/federationContext.js";
 import type { GatewayDeps, GatewayGraph } from "./compose/gatewayTypes.js";
@@ -46,6 +47,7 @@ export function composeGateway(deps: GatewayDeps): GatewayGraph {
 	let routerFrames: RouterFramesStage | undefined;
 	let frames: RouterFramesBuild | undefined;
 	let presenceHandlers: RouterPresenceBuild | undefined;
+	let vault: VaultStage | undefined;
 
 	const requireRoutes = (): GatewayRoutes => {
 		if (!routes) throw new Error("the routes stage is not composed yet");
@@ -88,7 +90,13 @@ export function composeGateway(deps: GatewayDeps): GatewayGraph {
 		stores,
 		context,
 	});
-	const persistence = composePersistence({ ambient: bootstrap.ambient, stores, sessions, context });
+	const persistence = composePersistence({
+		ambient: bootstrap.ambient,
+		stores,
+		sessions,
+		context,
+		sessionEnded: (team) => vault?.sessionEnded(team),
+	});
 	const host = composeHost({ sessions, wakeTimeoutMs: config.wakeTimeoutMs, ambient: bootstrap.ambient });
 	const agents = composeAgents({ sessions, host, ambient: bootstrap.ambient });
 	const awareness = composeAwareness({ sessions, host, ambient: bootstrap.ambient });
@@ -145,6 +153,15 @@ export function composeGateway(deps: GatewayDeps): GatewayGraph {
 		awareness,
 		websockets,
 	});
+	vault = composeVault({
+		dataDir: bootstrap.dataDir,
+		localGatewayId: bootstrap.localGatewayId,
+		hostWsToken: config.hostWsToken,
+		ambient: bootstrap.ambient,
+		context,
+		routes: requireRoutes,
+		sessions,
+	});
 	routerPresence = composeRouterPresence({
 		ambient: bootstrap.ambient,
 		context,
@@ -162,6 +179,7 @@ export function composeGateway(deps: GatewayDeps): GatewayGraph {
 		sessions,
 		host,
 		routes: requireRoutes,
+		vault,
 	});
 
 	if (bootstrap.gatewayBoot.kind === "arming") enrollment.enterArming(bootstrap.gatewayBoot.nonce);
@@ -183,6 +201,7 @@ export function composeGateway(deps: GatewayDeps): GatewayGraph {
 		websockets,
 		routes,
 		routerPresence,
+		vault,
 	});
 
 	return {

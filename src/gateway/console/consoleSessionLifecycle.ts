@@ -19,6 +19,8 @@ export interface SessionLifecycleDeps {
 	markCreateInFlight?: (team: string) => () => void;
 	awaitRegister?: (team: string) => Promise<WakeResult>;
 	dropSessionResume?: (team: string, boardDisposition: BoardDisposition) => void;
+	/** Close and forget end session grants. */
+	onSessionEnded?: (team: string) => void;
 	sessionStore?: Pick<
 		SessionStore,
 		| "getByTeam"
@@ -43,6 +45,7 @@ export function createSessionLifecycleHandlers({
 	markCreateInFlight,
 	awaitRegister,
 	dropSessionResume,
+	onSessionEnded,
 	sessionStore,
 }: SessionLifecycleDeps) {
 	async function createSession(
@@ -217,6 +220,7 @@ export function createSessionLifecycleHandlers({
 		const dedupKey = `${conversationId}:${opId}`;
 		const r = await relayToHost({ kind: "killSession", target, dedupKey });
 		if (!r.ok) throw new Error(r.error ?? "close failed");
+		onSessionEnded?.(name);
 		return { closed: true };
 	}
 
@@ -234,6 +238,7 @@ export function createSessionLifecycleHandlers({
 		}
 		const disposition: BoardDisposition = op.boardDisposition ?? "release";
 		dropSessionResume?.(name, disposition);
+		onSessionEnded?.(name);
 		return { killed: true, boardDisposition: disposition };
 	}
 

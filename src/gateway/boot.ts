@@ -18,6 +18,7 @@ import type { createBlobUploader } from "./router/blobUploader.js";
 import type { createBoardClient } from "./router/boardClient.js";
 import type { RouterClient } from "./router/routerClient.js";
 import { loadRouterReach, loadRouterTransport, type RouterTransport } from "./router/transport.js";
+import type { VaultClient } from "./router/vaultClient.js";
 
 type BoardClient = ReturnType<typeof createBoardClient>;
 type BlobUploader = ReturnType<typeof createBlobUploader>;
@@ -53,6 +54,7 @@ export interface FederationSlice {
 	routerClient: RouterClient;
 	contentKeyStore: ContentKeyStore;
 	boardClient: BoardClient;
+	vaultClient: VaultClient;
 	blobUploader: BlobUploader;
 	replayPersist: () => void;
 	domainMeta: DomainMeta | null;

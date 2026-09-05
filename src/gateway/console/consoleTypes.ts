@@ -17,6 +17,8 @@ import type {
 import type { SignedXDomainLink } from "../../shared/federation-protocol.js";
 import type { HostOp, HostOpResult } from "../../shared/host-op.js";
 import { MAX_POLL_HOLD_MS } from "../../shared/schemas.js";
+import type { ContentEnvelope } from "../../shared/schemasContentKey.js";
+import type { VaultDecision, VaultGrant } from "../../shared/schemasVault.js";
 import type { SessionStore } from "../../shared/session-store.js";
 import type { GatewaySpawnPoints, TeamInfo } from "../../shared/types.js";
 import type { DeliverToOwner } from "../consolePushOps.js";
@@ -95,6 +97,14 @@ export interface ConsoleHandlerDeps {
 	unlinkDomain?: (domainId: string) => CrossDomainUnlinkResult;
 	untrustOwner?: (ownerSignPub: string) => CrossDomainUnlinkResult;
 	durableOpStore?: DurableOpStore;
+	vault?: VaultConsoleHandlers;
+	onSessionEnded?: (team: string) => void;
+}
+
+export interface VaultConsoleHandlers {
+	answer: (requestId: string, decision: VaultDecision, value?: ContentEnvelope) => { ok: boolean; reason?: string };
+	grants: () => { grants: VaultGrant[] };
+	revoke: (grantId: string) => { revoked: boolean };
 }
 
 export interface CrossDomainConsoleHandlers {

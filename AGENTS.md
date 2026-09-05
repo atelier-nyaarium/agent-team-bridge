@@ -6,7 +6,7 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
 
 - `src/main-mcp.ts` / `main-gateway.ts` / `main-host-daemon.ts` / `main-federation.ts` - four entry points
 - `src/gateway/` - Docker-side HTTP and WS router
-- `src/gateway/composeGateway.ts` - calls the fourteen compose stages in order, then builds the fault port, and owns the cycles between them; `index.ts` is the Bun process adapter
+- `src/gateway/composeGateway.ts` - fifteen compose stages, fault port, and cycles; `index.ts` is the Bun adapter
 - `src/gateway/compose/gatewayTypes.ts` - `GatewayConfig`, `GatewayDeps`, `GatewayGraph`, and the `GatewayFaultPort` the harness drives
 - `src/gateway/compose/federationContext.ts` - the one federation reader; activation publishes boot, Domain id, and slice together, and it posts the Router share record
 - `src/gateway/compose/composeBootstrap.ts` - directories, identity, keyring, boot decision, schema wipe
@@ -36,6 +36,9 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
 - `src/gateway/sessionAuthority.ts` - sole owner of credential-field access; residue-tested
 - `src/gateway/presence.ts` / `readAnchors.ts` / `hostOpCoordinator.ts` - presence, read anchors, host RPC correlation
 - `src/gateway/router/boardClient.ts` - Router-held task board client
+- `src/gateway/router/vaultClient.ts` - vault sealing/opening, delta-held Router list, approval-gated values, and the gateway write
+- `src/gateway/vault/decisions.ts` / `requests.ts` / `helperTokens.ts` / `vaultRoutes.ts` - grants, operation shapes, one-shot request rows, helper tokens, and loopback routes
+- `src/gateway/compose/composeVault.ts` - vault client, decisions, requests, routes, and console operations
 - `src/gateway/boardAwareness.ts` - board awareness recipients and net-change classification
 - `src/gateway/awarenessBank.ts` - subscriber state, deadlines, and liveness reads
 - `src/gateway/daemonCapabilities.ts` - daemon capability answer

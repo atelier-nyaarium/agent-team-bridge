@@ -29,6 +29,7 @@ import { buildRegisterAuth } from "../router/registerAuth.js";
 import { startRouterClient } from "../router/routerClient.js";
 import { createShareAttestor } from "../router/shareAttestor.js";
 import { routerWsConnection, saveRouterReach } from "../router/transport.js";
+import { createVaultClient } from "../router/vaultClient.js";
 import { resolveLiveIncarnation } from "../wsTypes.js";
 import type { AwarenessStage } from "./composeAwareness.js";
 import type { HostStage } from "./composeHost.js";
@@ -319,6 +320,13 @@ export function composeFederation(deps: FederationStageDeps): FederationStage {
 			ownerSignPub: () => allowlist.ownerSignPub,
 			keys: gatewayBootstrap.contentKeys,
 		});
+		const vaultClient = createVaultClient({
+			call: (action, params) => routerClient.callInboxTool(action, params),
+			domainId,
+			gatewayId: localGatewayId,
+			ownerSignPub: () => allowlist.ownerSignPub,
+			keys: gatewayBootstrap.contentKeys,
+		});
 		keyRequester = createKeyRequester({
 			domainId,
 			gatewayId: localGatewayId,
@@ -387,6 +395,7 @@ export function composeFederation(deps: FederationStageDeps): FederationStage {
 			routerClient,
 			contentKeyStore: gatewayBootstrap.contentKeys,
 			boardClient,
+			vaultClient,
 			blobUploader,
 			replayPersist: () => replayDurable.save(replayGuard.snapshot()),
 			domainMeta: null,

@@ -9,6 +9,7 @@ import { createPresenceReporter } from "../src/gateway/router/presenceReporter.j
 import { buildRegisterAuth, registerFrame } from "../src/gateway/router/registerAuth.js";
 import { createSessionRegistryReporter } from "../src/gateway/router/sessionRegistryReporter.js";
 import { composeValueResult } from "../src/gateway/router/valueResult.js";
+import { createVaultClient } from "../src/gateway/router/vaultClient.js";
 import type { Ambient, IntervalHandle, TimerHandle } from "../src/shared/ambient.js";
 import { rankBetween } from "../src/shared/board-rank.js";
 import type { ConsolePushEntry } from "../src/shared/federation-protocol.js";
@@ -380,6 +381,37 @@ if (boardFrame)
 			sealed: [
 				{ path: "write.ops[0].title", aadKind: "board.title\nt-fixture", plaintextOf: "title" },
 				{ path: "write.ops[0].body", aadKind: "board.body\nt-fixture", plaintextOf: "body" },
+			],
+		},
+	);
+
+const vaultContext = FixtureDraws.forCase("ts", "gateway/router/vaultClient", "create");
+activeDraws = vaultContext;
+const vaultFrames: Record<string, unknown>[] = [];
+const vault = createVaultClient({
+	domainId: set.domain.id,
+	gatewayId: set.gateway.id,
+	ownerSignPub: () => set.domain.owner.sign.pub,
+	keys,
+	call: async (name, params) => {
+		vaultFrames.push({ name, params });
+		return { result: { outcome: "applied", revision: 1 } };
+	},
+});
+await vault.create({ id: "v-fixture", publicTitle: "Deploy key", value: "hunter2" });
+const vaultFrame = vaultFrames.find((frame) => frame.name === "vault_create");
+if (vaultFrame)
+	write(
+		"gateway/router/vaultClient",
+		"create",
+		{ ...vaultContext.inputs, id: "v-fixture", publicTitle: "Deploy key", value: "hunter2" },
+		vaultFrame,
+		{ outcome: "applied" },
+		{
+			decodeAs: "VaultPut",
+			sealed: [
+				{ path: "put.sealed.publicTitle", aadKind: "vault.publicTitle\nv-fixture", plaintextOf: "publicTitle" },
+				{ path: "put.sealed.value", aadKind: "vault.value\nv-fixture", plaintextOf: "value" },
 			],
 		},
 	);

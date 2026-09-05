@@ -26,6 +26,8 @@ export interface PersistenceStageDeps {
 	>;
 	sessions: Pick<SessionsStage, "sessionStore" | "registry" | "presence" | "sessionResumeSnapshot">;
 	context: FederationContext;
+	/** Swept sessions end like closed ones. */
+	sessionEnded?: (team: string) => void;
 }
 
 export interface PersistenceStage {
@@ -34,7 +36,13 @@ export interface PersistenceStage {
 	persistTimer: IntervalHandle;
 }
 
-export function composePersistence({ ambient, stores, sessions, context }: PersistenceStageDeps): PersistenceStage {
+export function composePersistence({
+	ambient,
+	stores,
+	sessions,
+	context,
+	sessionEnded,
+}: PersistenceStageDeps): PersistenceStage {
 	const runPersistSteps = createPersistRunner();
 	const persistDelivery = (cleanShutdown: boolean) =>
 		runPersistSteps([
@@ -54,7 +62,10 @@ export function composePersistence({ ambient, stores, sessions, context }: Persi
 							resolveLiveIncarnation(sessions.registry, sessions.sessionStore, team) !== undefined,
 					});
 					if (sweptTeams.length === 0) return;
-					for (const team of sweptTeams) void context.slice()?.boardClient.sessionEnded(team, "release");
+					for (const team of sweptTeams) {
+						void context.slice()?.boardClient.sessionEnded(team, "release");
+						sessionEnded?.(team);
+					}
 					sessions.presence.markDirty();
 				},
 			},

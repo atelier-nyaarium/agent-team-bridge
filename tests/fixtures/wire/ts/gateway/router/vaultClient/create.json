@@ -1,0 +1,56 @@
+{
+	"producer": "ts",
+	"composer": "gateway/router/vaultClient",
+	"case": "create",
+	"clock": 1757000000000,
+	"inputs": {
+		"draws": {
+			"0": "lXpLox1jZ8r/ejKt",
+			"1": "A6VF8JW/GMDOfMGx"
+		},
+		"id": "v-fixture",
+		"publicTitle": "Deploy key",
+		"value": "hunter2"
+	},
+	"expect": {
+		"outcome": "applied"
+	},
+	"frame": {
+		"name": "vault_create",
+		"params": {
+			"put": {
+				"id": "v-fixture",
+				"expectedRevision": 0,
+				"sealed": {
+					"publicTitle": {
+						"v": 1,
+						"epoch": 1,
+						"nonce": "lXpLox1jZ8r/ejKt",
+						"ciphertext": "JVvLUPAKvB4Wb8S2ZYL0T0edgEgtbL/P9w4="
+					},
+					"value": {
+						"v": 1,
+						"epoch": 1,
+						"nonce": "A6VF8JW/GMDOfMGx",
+						"ciphertext": "WZzDOoZxoFnn0bS3RhfRoUt06UyB31M="
+					}
+				}
+			}
+		}
+	},
+	"phone": {
+		"decodeAs": "VaultPut",
+		"sealed": [
+			{
+				"path": "put.sealed.publicTitle",
+				"aadKind": "vault.publicTitle\nv-fixture",
+				"plaintextOf": "publicTitle"
+			},
+			{
+				"path": "put.sealed.value",
+				"aadKind": "vault.value\nv-fixture",
+				"plaintextOf": "value"
+			}
+		]
+	}
+}

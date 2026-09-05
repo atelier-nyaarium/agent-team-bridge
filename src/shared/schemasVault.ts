@@ -106,10 +106,12 @@ export const VaultDecisionSchema = z
 	.enum(["once", "window", "session", "deny"])
 	.meta({ id: "VaultDecision", catalog: "decision" });
 
+const operation = z.string().trim().min(1).max(512);
+
 const requestFields = {
 	v: z.literal(1),
 	requestId,
-	operation: z.string().min(1).max(512),
+	operation,
 	shape: z.string().min(1).max(256),
 	sessionTarget: z.string().min(1).max(128),
 	deadlineAt: z.number().int().nonnegative(),
@@ -144,6 +146,37 @@ export const ConsoleVaultRevokeResultSchema = z
 	.object({ revoked: z.boolean() })
 	.meta({ id: "ConsoleVaultRevokeResult" });
 
+export const VAULT_REQUEST_DEADLINE_MS = 9 * 60 * 1000;
+export const VAULT_WINDOW_MS = 30 * 60 * 1000;
+// Whole-session grants cap at eight hours.
+export const VAULT_SESSION_GRANT_CAP_MS = 8 * 60 * 60 * 1000;
+export const MAX_VAULT_CAPTURE_CHARS = 8_192;
+
+const waitMs = z.number().int().nonnegative().optional();
+
+/** Loopback request shapes. */
+export const VaultPublicEntrySchema = z.object({
+	id: entryId,
+	publicTitle: z.string(),
+	publicDescription: z.string().optional(),
+	hasValue: z.boolean(),
+});
+export const VaultSearchRequestSchema = z.object({ query: z.string().max(256).optional() });
+export const VaultUseRequestSchema = z.object({ entryId, operation, waitMs });
+export const VaultCollectRequestSchema = z.object({ requestId, waitMs });
+export const VaultCaptureRequestSchema = z.object({
+	publicTitle: z.string().min(1).max(256),
+	publicDescription: z.string().max(2048).optional(),
+	value: z.string().min(1).max(MAX_VAULT_CAPTURE_CHARS),
+});
+export const VaultAskpassRequestSchema = z.object({ cmdline: operation, waitMs });
+/** Pending answers expose a request; deny and timeout refuse. */
+export const VaultUseAnswerSchema = z.discriminatedUnion("outcome", [
+	z.object({ outcome: z.literal("approved"), decision: VaultDecisionSchema, value: z.string() }),
+	z.object({ outcome: z.literal("refused"), reason: z.string() }),
+	z.object({ outcome: z.literal("pending"), requestId, deadlineAt: z.number().int().nonnegative() }),
+]);
+
 export type VaultEntryClear = z.infer<typeof VaultEntryClearSchema>;
 export type VaultEntrySealed = z.infer<typeof VaultEntrySealedSchema>;
 export type VaultStoredEntry = z.infer<typeof VaultStoredEntrySchema>;
@@ -153,3 +186,5 @@ export type VaultListResult = z.infer<typeof VaultListResultSchema>;
 export type VaultDecision = z.infer<typeof VaultDecisionSchema>;
 export type VaultRequest = z.infer<typeof VaultRequestSchema>;
 export type VaultGrant = z.infer<typeof VaultGrantSchema>;
+export type VaultPublicEntry = z.infer<typeof VaultPublicEntrySchema>;
+export type VaultUseAnswer = z.infer<typeof VaultUseAnswerSchema>;
