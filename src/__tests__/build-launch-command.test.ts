@@ -13,11 +13,12 @@ import {
 const dc = { kind: "devcontainer" as const, name: "recipe-app", sessionName: "scratch" };
 
 describe("buildLaunchCommand", () => {
-	it("overrides PROJECT_NAME to the composite, cds to the workspace, and execs claude (no resume)", () => {
+	it("overrides PROJECT_NAME to the composite, cds to the workspace, and runs claude with a bash fallback", () => {
 		const cmd = buildLaunchCommand(dc);
 		expect(cmd).toContain("export PROJECT_NAME=recipe-app.scratch");
-		expect(cmd).toContain("cd /workspace/recipe-app");
-		expect(cmd).toContain("exec claude");
+		expect(cmd).toContain("cd /workspace/recipe-app; claude ");
+		// A missing claude leaves a peekable pane rather than a dead tmux server.
+		expect(cmd.endsWith("; exec bash'")).toBe(true);
 		expect(cmd).not.toContain("--resume");
 		// The override runs after sourcing bashrc so it wins over the image ENV.
 		expect(cmd.indexOf("source ~/.bashrc")).toBeLessThan(cmd.indexOf("export PROJECT_NAME"));

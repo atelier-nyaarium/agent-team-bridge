@@ -1,7 +1,8 @@
-import { exec, execSync } from "node:child_process";
+import { execSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { appendBuildTranscript, beginBuildTranscript } from "./buildTranscript.js";
 
 ////////////////////////////////
 //  Interfaces & Types
@@ -179,55 +180,53 @@ function provisionPluginSettings(projectPath: string): void {
 	console.log(`[devcontainer] provisioned plugins for '${projectPath}'`);
 }
 
-export function ensureContainerUpAsync(projectPath: string): Promise<ContainerUpResult> {
-	if (isContainerReady(projectPath)) {
-		return Promise.resolve({ wasAlreadyRunning: true, pluginsProvisioned: false });
-	}
+// The CLI's JSON answer is the last stdout line; earlier output is progress.
+const STDOUT_TAIL_CHARS = 65_536;
 
+/** One CLI run, both streams into the project's transcript as they arrive. */
+function runDevcontainer(project: string, args: string[]): Promise<{ code: number | null; stdout: string }> {
+	appendBuildTranscript(project, `$ devcontainer ${args.join(" ")}\n`);
+	return new Promise((resolve) => {
+		const child = spawn(devcontainerBin(), args, { stdio: ["ignore", "pipe", "pipe"] });
+		let stdout = "";
+		child.stdout.on("data", (chunk: Buffer) => {
+			const text = chunk.toString("utf8");
+			stdout = (stdout + text).slice(-STDOUT_TAIL_CHARS);
+			appendBuildTranscript(project, text);
+		});
+		child.stderr.on("data", (chunk: Buffer) => appendBuildTranscript(project, chunk.toString("utf8")));
+		child.on("error", (error) => {
+			appendBuildTranscript(project, `${error.message}\n`);
+			resolve({ code: null, stdout });
+		});
+		child.on("close", (code) => resolve({ code, stdout }));
+	});
+}
+
+export async function ensureContainerUpAsync(projectPath: string): Promise<ContainerUpResult> {
+	if (isContainerReady(projectPath)) return { wasAlreadyRunning: true, pluginsProvisioned: false };
+
+	const project = path.basename(projectPath);
+	beginBuildTranscript(project);
 	teardownContainer(projectPath);
 
-	const bin = devcontainerBin();
+	const up = await runDevcontainer(project, ["up", "--workspace-folder", projectPath, "--remove-existing-container"]);
+	if (up.code !== 0) throw new Error(`devcontainer up failed for '${projectPath}' (exit ${up.code ?? "signal"})`);
+	parseDevcontainerOutput(up.stdout, projectPath);
 
-	return new Promise((resolve, reject) => {
-		exec(
-			`"${bin}" up --workspace-folder "${projectPath}" --remove-existing-container`,
-			{ encoding: "utf-8", maxBuffer: 10 * 1024 * 1024 },
-			(error, stdout) => {
-				if (error) {
-					reject(new Error(`devcontainer up failed for '${projectPath}':\n${error.message}`));
-					return;
-				}
+	const lifecycle = await runDevcontainer(project, ["run-user-commands", "--workspace-folder", projectPath]);
+	if (lifecycle.code !== 0) console.error(`[devcontainer] run-user-commands failed for '${projectPath}' (non-fatal)`);
 
-				try {
-					parseDevcontainerOutput(stdout, projectPath);
-				} catch (e) {
-					reject(e);
-					return;
-				}
-
-				// Run lifecycle commands (postCreateCommand, postStartCommand)
-				exec(
-					`"${bin}" run-user-commands --workspace-folder "${projectPath}"`,
-					{ encoding: "utf-8", maxBuffer: 10 * 1024 * 1024 },
-					(lcError) => {
-						if (lcError) {
-							console.error(`[devcontainer] run-user-commands failed for '${projectPath}' (non-fatal)`);
-						}
-
-						let pluginsProvisioned = false;
-						if (!hasPluginSettings(projectPath)) {
-							try {
-								provisionPluginSettings(projectPath);
-								pluginsProvisioned = true;
-							} catch (e) {
-								console.error(`[devcontainer] plugin provisioning failed: ${(e as Error).message}`);
-							}
-						}
-
-						resolve({ wasAlreadyRunning: false, pluginsProvisioned });
-					},
-				);
-			},
-		);
-	});
+	let pluginsProvisioned = false;
+	if (!hasPluginSettings(projectPath)) {
+		try {
+			provisionPluginSettings(projectPath);
+			pluginsProvisioned = true;
+		} catch (e) {
+			const message = (e as Error).message;
+			console.error(`[devcontainer] plugin provisioning failed: ${message}`);
+			appendBuildTranscript(project, `[plugins] ${message}\n`);
+		}
+	}
+	return { wasAlreadyRunning: false, pluginsProvisioned };
 }

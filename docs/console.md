@@ -80,8 +80,11 @@ single-flight, cadence and concurrency limits, and mutating-op deduplication.
 
 - `tmuxCore.ts` builds spawn argv without a shell. Exact tmux lookup uses `-t =<name>`; prefix lookup
   would let `story` select `story-2`.
-- `peekWithFallback` returns Docker logs before a pane exists. The result uses flat optional `kind`
-  and `text`; a discriminated union does not work with the Kotlin wire model.
+- `peekWithFallback` returns the `devcontainer up` transcript, then Docker logs, before a pane
+  exists. The result uses flat optional `kind` and `text`; a discriminated union does not work with
+  the Kotlin wire model.
+- A devcontainer launch ends in `exec bash` like the host launch, so a pane whose `claude` never
+  started stays peekable with the error on screen.
 - A wake with no capturable pane is reported as failed, so `/send` fails instead of waiting forever.
 - The **Wake** button sends the `wake` delivery op to the session's own address. The gateway resolves
   it to the local `spawn.session`, bounds the launch like `create_session`, and answers `pending` past

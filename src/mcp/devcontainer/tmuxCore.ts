@@ -12,6 +12,7 @@ import {
 } from "../../shared/host-op.js";
 import { trimPaneRowPadding } from "../../shared/pane-trim.js";
 import { parseSessionName } from "../../shared/session-id.js";
+import { buildTranscript } from "./buildTranscript.js";
 
 // Re-exported so the daemon and tests keep this import path.
 export { isAgentReady, isAgentWorking, isLoggedOut, limitNotice } from "../../shared/agent-screen.js";
@@ -182,15 +183,23 @@ export async function peekPane(target: TmuxTarget, resize = true): Promise<TmuxP
 	return { ansi, hash };
 }
 
-/** A bounded `docker logs` tail, shown while a pane does not exist yet. */
+/** The last `devcontainer up` transcript, then a bounded `docker logs` tail, while a pane does not exist yet. */
 async function captureContainerLogs(target: TmuxTarget): Promise<{ text: string; hash: string }> {
 	if (target.kind === "host") throw new Error(`no such container`);
 	assertTmuxName(target.name);
-	const text = await run(
-		["docker", "logs", "--tail", String(CONTAINER_LOGS_TAIL), containerName(target.name)],
-		CONTAINER_LOGS_TIMEOUT_MS,
-		{ mergeStderr: true },
-	);
+	const transcript = buildTranscript(target.name);
+	let logs = "";
+	try {
+		logs = await run(
+			["docker", "logs", "--tail", String(CONTAINER_LOGS_TAIL), containerName(target.name)],
+			CONTAINER_LOGS_TIMEOUT_MS,
+			{ mergeStderr: true },
+		);
+	} catch (error) {
+		// Before the container exists, the transcript is the whole view.
+		if (transcript === undefined) throw error;
+	}
+	const text = transcript === undefined ? logs : `${transcript}${logs ? `\n${logs}` : ""}`;
 	const hash = crypto.createHash("sha256").update(text).digest("hex").slice(0, 16);
 	return { text, hash };
 }

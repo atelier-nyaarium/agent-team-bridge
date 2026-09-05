@@ -168,7 +168,8 @@ export function buildLaunchCommand(
 			pathPrefix: safePathPrefix ? opts.pathPrefix : undefined,
 		});
 	}
-	return `bash -c 'source ~/.bashrc; export PROJECT_NAME=${composite}; ${exportToken}cd /workspace/${target.name}; exec claude ${claudeArgs}'`;
+	// `exec bash` keeps the pane peekable after claude exits or never starts, as the host launch does.
+	return `bash -c 'source ~/.bashrc; export PROJECT_NAME=${composite}; ${exportToken}cd /workspace/${target.name}; claude ${claudeArgs}; exec bash'`;
 }
 
 ////////////////////////////////
