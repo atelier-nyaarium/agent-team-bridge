@@ -10,6 +10,7 @@ import {
 	ScheduleSendValueSchema,
 } from "../../shared/schemasScheduled.js";
 import { isComposite } from "../../shared/session-id.js";
+import { OP_OUTCOME_ACCEPTED } from "../../shared/wire-vocabulary.js";
 import { foldWriteResult } from "../../shared/write-result.js";
 import type { InboxService } from "../inbox/inboxService.js";
 import type { OwnerStoreRegistry } from "../inbox/ownerStoreRegistry.js";
@@ -54,7 +55,7 @@ const resultKey = (record: { sender: { conversationId: string }; opId: string },
 const writeVersion = (write: { kind: string; version?: number }, fallback: number): number => write.version ?? fallback;
 const foldAppendResult = (result: OpResultEnvelope) =>
 	foldWriteResult(
-		result.outcome === "accepted"
+		result.outcome === OP_OUTCOME_ACCEPTED
 			? { kind: "ok" }
 			: result.outcome === "durability_uncertain"
 				? { kind: "durability_uncertain" }
@@ -127,7 +128,7 @@ export function createScheduledService(deps: ScheduledDeps) {
 		const existing = store.list("scheduled").find((record) => record.clear.opId === input.opId);
 		if (existing) {
 			const record = ScheduledRecordSchema.parse({ ...existing.clear, version: existing.version });
-			return envelope(sender, "accepted", { state: record.state, version: record.version });
+			return envelope(sender, OP_OUTCOME_ACCEPTED, { state: record.state, version: record.version });
 		}
 		for (const file of input.files)
 			if (!deps.referenceHeld.has(domainId, file)) return envelope(sender, "refused", { reason: "file" });
@@ -155,8 +156,8 @@ export function createScheduledService(deps: ScheduledDeps) {
 		scheduleTimer(domainId, input.target, input.fireAt);
 		const version = writeVersion(write, (current?.version ?? 0) + 1);
 		const pending = resultRow(domainId, { ...record, version } as ScheduledRecord, "pending");
-		if (pending.outcome !== "accepted")
-			return envelope(sender, folded.outcome === "accepted" ? "durability_uncertain" : folded.outcome);
+		if (pending.outcome !== OP_OUTCOME_ACCEPTED)
+			return envelope(sender, folded.outcome === OP_OUTCOME_ACCEPTED ? "durability_uncertain" : folded.outcome);
 		return envelope(sender, folded.outcome, { version });
 	}
 
@@ -177,7 +178,7 @@ export function createScheduledService(deps: ScheduledDeps) {
 		if (!foldWriteResult(write).applied) return { outcome: "refused", reason: "conflict" };
 		clearTimer(domainId, target);
 		applyRefs(domainId, [{ ref: scheduledRef(target), blobIds: [] }]);
-		return { outcome: "accepted", version: writeVersion(write, current.version + 1) };
+		return { outcome: OP_OUTCOME_ACCEPTED, version: writeVersion(write, current.version + 1) };
 	}
 
 	function list(domainId: string): ScheduledRecord[] {

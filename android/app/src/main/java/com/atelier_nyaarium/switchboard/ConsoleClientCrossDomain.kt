@@ -1,5 +1,6 @@
 package com.atelier_nyaarium.switchboard
 
+import com.atelier_nyaarium.switchboard.proto.Address
 import com.atelier_nyaarium.switchboard.proto.ConsoleOp
 import com.atelier_nyaarium.switchboard.proto.CrossDomainCancelResult
 import com.atelier_nyaarium.switchboard.proto.CrossDomainConfirmResult
@@ -12,9 +13,14 @@ import com.atelier_nyaarium.switchboard.proto.CrossDomainShareResult
 import com.atelier_nyaarium.switchboard.proto.CrossDomainShareTarget
 import com.atelier_nyaarium.switchboard.proto.CrossDomainUnlinkResult
 import com.atelier_nyaarium.switchboard.proto.CrossDomainUnshareResult
-import com.atelier_nyaarium.switchboard.proto.SignedXDomainLink
 import com.atelier_nyaarium.switchboard.proto.Protocol
+import com.atelier_nyaarium.switchboard.proto.SignedXDomainLink
+import com.atelier_nyaarium.switchboard.proto.SpawnPoint
+import com.atelier_nyaarium.switchboard.proto.parseTarget
 import java.util.UUID
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.encodeToJsonElement
+import kotlinx.serialization.json.put
 
 ////////////////////////////////
 //  Cross-Domain trust ops
@@ -85,22 +91,51 @@ suspend fun ConsoleClient.crossDomainShare(
 	sessionTarget: String,
 	target: CrossDomainShareTarget,
 	opId: String = UUID.randomUUID().toString(),
-): CrossDomainShareResult =
-	valueResult(
-		sendValueOp(defaultGatewayId(), ConsoleOp.CrossDomainShare(sessionTarget = sessionTarget, target = target), opId),
-		Protocol.Wire.ConsoleOpKind.CROSS_DOMAIN_SHARE,
-	)
+): CrossDomainShareResult {
+	postRouterShare(Protocol.Wire.ConsoleOpKind.CROSS_DOMAIN_SHARE, sessionTarget, target)
+	return try {
+		valueResult(
+			sendValueOp(defaultGatewayId(), ConsoleOp.CrossDomainShare(sessionTarget = sessionTarget, target = target), opId),
+			Protocol.Wire.ConsoleOpKind.CROSS_DOMAIN_SHARE,
+		)
+	} catch (e: Exception) {
+		// A refused mirror withdraws the record.
+		runCatching { postRouterShare(Protocol.Wire.ConsoleOpKind.CROSS_DOMAIN_UNSHARE, sessionTarget, target) }
+			.onFailure { DebugLog.log("Share", "withdrawal after a refused mirror failed") }
+		throw e
+	}
+}
 
 /** Withdraw a local session's share from an audience. */
 suspend fun ConsoleClient.crossDomainUnshare(
 	sessionTarget: String,
 	target: CrossDomainShareTarget,
 	opId: String = UUID.randomUUID().toString(),
-): CrossDomainUnshareResult =
-	valueResult(
+): CrossDomainUnshareResult {
+	postRouterShare(Protocol.Wire.ConsoleOpKind.CROSS_DOMAIN_UNSHARE, sessionTarget, target)
+	return valueResult(
 		sendValueOp(defaultGatewayId(), ConsoleOp.CrossDomainUnshare(sessionTarget = sessionTarget, target = target), opId),
 		Protocol.Wire.ConsoleOpKind.CROSS_DOMAIN_UNSHARE,
 	)
+}
+
+/** The Router record admits the friend's rows. */
+private suspend fun ConsoleClient.postRouterShare(kind: String, sessionTarget: String, target: CrossDomainShareTarget) {
+	val answer = postSigned(
+		buildJsonObject {
+			put("kind", kind)
+			put("sessionTarget", canonicalShareTarget(sessionTarget))
+			put("target", wireJson.encodeToJsonElement(CrossDomainShareTarget.serializer(), target))
+		},
+	)
+	requireDelivery(answer, kind)
+}
+
+private fun ConsoleClient.canonicalShareTarget(sessionTarget: String): String =
+	when (val parsed = parseTarget(sessionTarget, localDomainId(), defaultGatewayId())) {
+		is Address -> parsed.canonical
+		is SpawnPoint -> Address.of(parsed.domain, parsed.gateway, parsed.spawn, Protocol.DEFAULT_SESSION).canonical
+	}
 
 /** This owner's current shares, so the UI can render the per-session checkmarks. */
 suspend fun ConsoleClient.crossDomainListShares(): CrossDomainListSharesResult =

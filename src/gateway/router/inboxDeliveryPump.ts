@@ -18,6 +18,7 @@ import {
 	parseInboxAddress,
 	signRowEnvelope,
 } from "../../shared/schemasInbox.js";
+import { OP_OUTCOME_ACCEPTED } from "../../shared/wire-vocabulary.js";
 import type { ChannelDeliveryCoordinator } from "../channelDelivery.js";
 import type { ContentKeyStore } from "../federation/contentKeyStore.js";
 import type { Sealer } from "../federation/sealer.js";
@@ -94,6 +95,7 @@ export function createInboxDeliveryPump(deps: InboxDeliveryPumpDeps) {
 		reason?: string,
 		custody = true,
 	) {
+		if (outcome === "failed") console.warn(`[inbox] ${address} seq=${seq} failed: ${reason ?? "unknown"}`);
 		deps.claims.setOutcome(address, seq, deliveryEpoch, outcome);
 		const reply = (await deps.routerClient.callInboxTool("inbox_ack", {
 			address,
@@ -271,7 +273,7 @@ export function createInboxDeliveryPump(deps: InboxDeliveryPumpDeps) {
 			row: { envelope, producerSig: signRowEnvelope(envelope, deps.producerSignPriv), body: sealed.envelope },
 		})) as AckReply | undefined;
 		const outcome = reply?.result?.outcome;
-		if (outcome !== "accepted" && outcome !== "conflict")
+		if (outcome !== OP_OUTCOME_ACCEPTED && outcome !== "conflict")
 			return ack(address, row.seq, deliveryEpoch, "waking", "result_pending", false);
 		return ack(address, row.seq, deliveryEpoch, "delivered");
 	}

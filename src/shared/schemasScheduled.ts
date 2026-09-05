@@ -33,7 +33,7 @@ export const ScheduledRecordSchema = z
 
 export const ScheduleSendValueSchema = z
 	.object({
-		kind: z.literal("schedule_send"),
+		kind: z.literal("schedule_send").meta({ catalog: "owner-op-kind" }),
 		target: ScheduledTargetSchema,
 		fireAt: z.number().int().nonnegative(),
 		opId: z

@@ -27,7 +27,17 @@ export const OWNER_OP_KINDS = {
 	keyReceiptsRead: "key_receipts_read",
 	boardRead: "board_read",
 	boardWrite: "board_write",
+	presenceRead: "presence_read",
+	scheduleSend: "schedule_send",
+	capabilitiesRead: "capabilities_read",
+	cursorTranslate: "cursor_translate",
 } as const;
+
+export const OP_OUTCOME_ACCEPTED = "accepted";
+export const BOARD_OUTCOME_APPLIED = "applied";
+export const CONSOLE_REASON_CURSOR_STALE = "cursor_stale";
+export const GATEWAY_ERROR_STALE_INCARNATION = "stale_incarnation";
+export const GATEWAY_REASON_NO_WAITER = "no_waiter";
 
 export const SIGNING_TAGS = {
 	admission: "ADMISSION_V1",

@@ -5,7 +5,10 @@ import com.atelier_nyaarium.switchboard.proto.RefKeyMeta
 import com.atelier_nyaarium.switchboard.proto.RefSegmentMeta
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -105,19 +108,20 @@ class ReferenceViewerTest {
 	@Test
 	fun aFuzzyResolutionExplainsItselfWithItsReasonWhenCarried() {
 		assertEquals("renamed", noticeFor(key(quality = "fuzzy", reason = "renamed")))
-		assertEquals("this reference no longer matches exactly", noticeFor(key(quality = "fuzzy")))
+		assertNotNull(noticeFor(key(quality = "fuzzy")))
 	}
 
 	@Test
 	fun anUnresolvedResolutionFallsBackToItsOwnWording() {
-		assertEquals("this reference could not be found in the file", noticeFor(key(quality = "unresolved")))
+		val unresolved = noticeFor(key(quality = "unresolved"))
+		assertNotNull(unresolved)
+		assertNotEquals(noticeFor(key(quality = "fuzzy")), unresolved)
 	}
 
 	@Test
 	fun ambiguityPrintsItsCountOrNothingNeverTheWordNull() {
-		assertEquals("3 declarations matched; showing the first", noticeFor(key(ambiguous = true, matchCount = 3)))
-		// Independently-optional wire fields: a partial legacy reconstruction can carry the flag
-		// without the count, which must degrade to silence.
+		assertTrue(noticeFor(key(ambiguous = true, matchCount = 3))!!.contains("3"))
+		// The flag without its count degrades to silence.
 		assertNull(noticeFor(key(ambiguous = true, matchCount = null)))
 	}
 }

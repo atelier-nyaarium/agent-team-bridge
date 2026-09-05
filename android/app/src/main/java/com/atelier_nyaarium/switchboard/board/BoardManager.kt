@@ -195,9 +195,6 @@ class BoardManager(private val store: BoardStore) : ClearsOnReprovision {
 		}
 	}
 
-	/** Retry threshold for row markers. */
-	fun strugglingEntries(): Set<String> = emptySet()
-
 	/** Include queued targets. */
 	fun sourceGatewayIds(homeGatewayId: String): List<String> = listOfNotNull(homeGatewayId.takeIf { it.isNotEmpty() })
 
@@ -207,25 +204,6 @@ class BoardManager(private val store: BoardStore) : ClearsOnReprovision {
 		refusals.remove(refusal)
 		mutate { it.copy(notices = it.notices.filter { n -> n != refusal }) }
 	}
-
-	fun applySnapshot(
-		gatewayId: String,
-		entries: List<BoardEntry>,
-		version: Long?,
-		truncated: Boolean,
-		now: Long = System.currentTimeMillis(),
-	) {
-		return
-	}
-
-	/** Revocation prunes columns and queued writes. */
-	fun retainGateways(admitted: Collection<String>) {
-		if (admitted.isEmpty()) return
-		return
-	}
-
-	/** Gateways with truncated snapshots. */
-	fun truncatedGateways(): List<String> = emptyList()
 
 	/** Attachment buckets protected from sweeping. */
 	fun attachmentBuckets(): Set<String>? {

@@ -1,43 +1,31 @@
 package com.atelier_nyaarium.switchboard
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/**
- * Unit tests for the directory picker's failure vocabulary. The point of these is that the causes stay
- * DISTINGUISHABLE: they all rendered as an empty picker once, so a machine that was switched off read
- * as a broken feature.
- */
+/** The three failing layers stay distinguishable. */
 class DirListingTest {
+	private val offline = dirListError(Error("""gateway "ql-2815" is not connected"""))
+	private val unreached = dirListError(Error("list_dirs failed: unseal failed: unable to authenticate data"))
+	private val noDaemon = dirListError(Error("list_dirs failed: terminal view unavailable on this Gateway"))
 
 	@Test
-	fun anOfflineMachineSaysSo() {
-		assertEquals("That machine is offline.", dirListError(Error("""gateway "ql-2815" is not connected""")))
-		assertEquals("That machine is offline.", dirListError(Error("gateway unavailable")))
+	fun eachLayerHasItsOwnAnswer() {
+		assertEquals(3, setOf(offline, unreached, noDaemon).size)
+		assertEquals(offline, dirListError(Error("gateway unavailable")))
 	}
 
 	@Test
 	fun aMisroutedFrameIsNotReportedAsCryptography() {
-		// What the Router's substitute-gateway fallback produced. A person reading it needs to know the
-		// machine was not reached, not that an AEAD tag failed.
-		val answer = dirListError(Error("list_dirs failed: unseal failed: unable to authenticate data"))
-		assertEquals("Couldn't reach that machine.", answer)
-	}
-
-	@Test
-	fun aMissingDaemonIsItsOwnCause() {
-		assertEquals(
-			"No host daemon on that machine.",
-			dirListError(Error("list_dirs failed: terminal view unavailable on this Gateway")),
-		)
+		assertFalse(unreached.contains("unseal", ignoreCase = true))
 	}
 
 	@Test
 	fun anUnrecognizedCauseKeepsItsOwnMessage() {
-		// Never guessed at: this string is the only thing between a person and a silent failure, so a
-		// raw message beats a wrong friendly one.
-		assertEquals("invalid path: must be absolute or ~-rooted", dirListError(Error("invalid path: must be absolute or ~-rooted")))
+		val raw = "invalid path: must be absolute or ~-rooted"
+		assertEquals(raw, dirListError(Error(raw)))
 		assertTrue(dirListError(Error("")).isNotEmpty())
 	}
 

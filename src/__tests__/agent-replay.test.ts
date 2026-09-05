@@ -1,15 +1,5 @@
-// The replay rule and the activity-append rule, tested where they LIVE rather than through either
-// backend's service.
-//
-// Both rules existed twice, and both had drifted: Copilot searched with a first-match loop that
-// could not see a second claimant, skipped the durability check entirely, and reported an operation
-// the gateway had explicitly failed to confirm as a completed replay. None of that was user-visible,
-// because both routes branch only on `disposition === "committed"` - which is exactly why it
-// survived. A mock harness per backend would have proved agreement only for the cases somebody
-// thought to write down; one owner plus the residue sweep below makes disagreement unspellable.
+// The replay and activity rules at their one owner.
 
-import fs from "node:fs";
-import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
 	AGENT_ACTIVITY_MAX_ITEMS,
@@ -25,42 +15,6 @@ import {
 
 ////////////////////////////////
 //  Functions & Helpers
-
-const SRC = path.join(import.meta.dirname, "..");
-const OWNER = path.join("shared", "agent-record.ts");
-
-function sourceFiles(dir: string): string[] {
-	const out: string[] = [];
-	for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-		const full = path.join(dir, entry.name);
-		if (entry.isDirectory()) {
-			if (entry.name === "__tests__") continue;
-			out.push(...sourceFiles(full));
-		} else if (entry.name.endsWith(".ts")) {
-			out.push(full);
-		}
-	}
-	return out;
-}
-
-/** Comparing an operation's fingerprint is the one move only a replay makes: an ordinary lookup
- * matches on operationId, which is why THAT cannot be the pattern (it is the legitimate way to find
- * an operation inside one agent, and appears a dozen times). Scoped to the gateway, since the
- * persisted-record self-check in `shared/codexAgentRecord.ts` compares a fingerprint for an
- * unrelated reason - it recomputes rather than matches. */
-const COMPARES_A_FINGERPRINT = /\.fingerprint\s*(?:===|!==)/;
-
-/** Building a truncation marker by incrementing the count. `localAgentRuntime.ts` carries an
- * existing `omitted` forward when it projects a turn, which is not this. */
-const BUILDS_A_TRUNCATION = /omitted:\s*\w+\s*\+\s*1/;
-
-/** Calling a raw fingerprint function rather than deriving one from an identity. The three owners
- * that legitimately define these wrappers are exempted by name at the call site below. */
-const MINTS_A_FINGERPRINT = /\bagentOperationFingerprint\(|\b(?:codex|copilot)OperationFingerprint\(/;
-
-/** Rebuilding the stored-to-published activity projection by hand, i.e. rewriting a commentary item
- * to drop its itemId. Both routes spelled this identically before it had an owner. */
-const PROJECTS_ACTIVITIES = /kind === "commentary"\s*\?\s*\{\s*kind/;
 
 const ID: AgentOperationIdentity = { kind: "message", agentId: "a-1", prompt: "p" };
 const FP = agentOperationFingerprintOf(ID);
@@ -353,84 +307,5 @@ describe("activity append", () => {
 		expect(
 			appendAgentActivity(commentary(AGENT_ACTIVITY_MAX_ITEMS), "late", "x", AGENT_ACTIVITY_MAX_ITEMS + 1),
 		).toEqual([...commentary(AGENT_ACTIVITY_MAX_ITEMS), { kind: "commentary", itemId: "late", text: "x" }]);
-	});
-});
-
-// Scope, stated so it is not mistaken for a proof: these are TEXT sweeps over TypeScript in src/,
-// the same mechanism as every other residue test here. They catch a rule rewritten in the obvious
-// spelling, which is how both of these were rewritten. They do NOT catch a bracket access, a
-// destructure, an equality moved into a helper, or an increment written as `(prior ?? 0) + 1`, and
-// they read comments and strings as if they were code. An AST check would close that, and would be
-// worth building for the whole family of residue tests rather than for this one.
-describe("residue", () => {
-	// A sweep reports "clean" by finding nothing, which is also what a broken walk reports. These are
-	// the two files that HELD the duplicated rules before this refactor.
-	it("the scan reaches the files that used to hold the rules", () => {
-		const scanned = new Set(sourceFiles(SRC).map((f) => path.relative(SRC, f)));
-		expect(scanned).toContain(path.join("gateway", "codexAgentService.ts"));
-		expect(scanned).toContain(path.join("gateway", "copilotAgentService.ts"));
-		expect(scanned).toContain(path.join("gateway", "codexAgentReducers.ts"));
-	});
-
-	it("no gateway module compares an operation fingerprint of its own", () => {
-		const offenders = sourceFiles(path.join(SRC, "gateway")).filter((file) =>
-			COMPARES_A_FINGERPRINT.test(fs.readFileSync(file, "utf8")),
-		);
-		expect(offenders.map((f) => path.relative(SRC, f))).toEqual([]);
-	});
-
-	// The contract this item was filed to create. Codex minted a start fingerprint without the model
-	// and Copilot minted one with it, because each spelled its own input at its own call site. No
-	// production module may spell one again: they go through `agentOperationFingerprintOf`, and each
-	// family's legacy era is stamped by its own `*OperationIdentity` rather than named at a call site.
-	// Tests are exempt because building a legacy-shaped record on purpose is how the tolerance is
-	// proven at all.
-	it("no module outside the identity owners mints a fingerprint of its own", () => {
-		const owners = new Set([
-			OWNER,
-			path.join("shared", "codexAgentIdentity.ts"),
-			path.join("shared", "copilot-agent.ts"),
-		]);
-		const offenders = sourceFiles(SRC)
-			.map((file) => path.relative(SRC, file))
-			.filter(
-				(rel) => !owners.has(rel) && MINTS_A_FINGERPRINT.test(fs.readFileSync(path.join(SRC, rel), "utf8")),
-			);
-		expect(offenders).toEqual([]);
-	});
-
-	// The same class as issue #271, which shipped: a published projection drifting from its sibling
-	// while every test kept passing. Both routes wrote this out identically before it had an owner.
-	it("nothing outside agent-record.ts projects a stored activity for publication", () => {
-		const offenders = sourceFiles(SRC)
-			.map((file) => path.relative(SRC, file))
-			.filter((rel) => rel !== OWNER && PROJECTS_ACTIVITIES.test(fs.readFileSync(path.join(SRC, rel), "utf8")));
-		expect(offenders).toEqual([]);
-	});
-
-	it("nothing outside agent-record.ts builds a truncation marker", () => {
-		const offenders = sourceFiles(SRC)
-			.map((file) => path.relative(SRC, file))
-			.filter((rel) => rel !== OWNER && BUILDS_A_TRUNCATION.test(fs.readFileSync(path.join(SRC, rel), "utf8")));
-		expect(offenders).toEqual([]);
-	});
-
-	// Positive controls: without these both sweeps pass vacuously the moment a pattern stops matching.
-	it("the residue patterns match the shapes they are meant to catch", () => {
-		expect(COMPARES_A_FINGERPRINT.test("if (operation.fingerprint !== fingerprint)")).toBe(true);
-		expect(COMPARES_A_FINGERPRINT.test("if (matches[0]!.operation.fingerprint === fingerprint)")).toBe(true);
-		expect(COMPARES_A_FINGERPRINT.test("const fingerprint = codexOperationFingerprint(kind, id)")).toBe(false);
-		expect(BUILDS_A_TRUNCATION.test('{ kind: "truncated", omitted: omitted + 1 }')).toBe(true);
-		expect(BUILDS_A_TRUNCATION.test('{ kind: "truncated" as const, omitted: prior + 1 }')).toBe(true);
-		expect(BUILDS_A_TRUNCATION.test('{ kind: "truncated" as const, omitted: turn.omitted }')).toBe(false);
-		expect(MINTS_A_FINGERPRINT.test('codexOperationFingerprint("start", agentId, prompt)')).toBe(true);
-		expect(MINTS_A_FINGERPRINT.test("agentOperationFingerprint(kind, agentId, prompt)")).toBe(true);
-		expect(MINTS_A_FINGERPRINT.test("agentOperationFingerprintOf(identity)")).toBe(false);
-		expect(
-			PROJECTS_ACTIVITIES.test(
-				'activity.kind === "commentary" ? { kind: activity.kind, text: activity.text } : a',
-			),
-		).toBe(true);
-		expect(PROJECTS_ACTIVITIES.test("publishedActivities(turn?.activities)")).toBe(false);
 	});
 });

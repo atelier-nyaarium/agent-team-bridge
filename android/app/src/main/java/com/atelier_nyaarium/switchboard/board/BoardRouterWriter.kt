@@ -51,7 +51,7 @@ class BoardRouterWriter(
 			val result = runCatching { decode(signAndPost(body(write), opId)) }
 				.getOrElse { return BoardWriteOutcome.Unreachable(it) }
 			when (result.outcome) {
-				"applied" -> {
+				Protocol.Wire.BOARD_OUTCOME_APPLIED -> {
 					board.settleWrite(opId, result.revision, result.entries)
 					return BoardWriteOutcome.Applied
 				}

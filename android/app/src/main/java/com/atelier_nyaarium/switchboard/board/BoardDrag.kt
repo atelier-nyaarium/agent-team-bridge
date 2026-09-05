@@ -275,7 +275,6 @@ fun LazyListScope.boardRowItems(
 	rows: List<BoardRow>,
 	controller: BoardDragController,
 	presentation: BoardRowPresentation,
-	struggling: Set<String> = emptySet(),
 	onOpen: (BoardRow) -> Unit,
 ) {
 	items(
@@ -288,7 +287,6 @@ fun LazyListScope.boardRowItems(
 			row = row,
 			presentation = presentation,
 			carried = row.entry.id in controller.ui.carried,
-			struggling = row.entry.id in struggling,
 			onClick = { onOpen(row) },
 		)
 	}

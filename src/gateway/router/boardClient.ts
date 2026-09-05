@@ -18,6 +18,7 @@ import {
 	BoardWriteResultSchema,
 } from "../../shared/schemasBoardState.js";
 import type { ContentEnvelope } from "../../shared/schemasContentKey.js";
+import { BOARD_OUTCOME_APPLIED } from "../../shared/wire-vocabulary.js";
 import type { ContentKeyStore } from "../federation/contentKeyStore.js";
 
 export type ClearBoardOp =
@@ -284,7 +285,7 @@ export function createBoardClient(deps: BoardClientDeps) {
 			if (!parsed.success) return { kind: "unavailable", error: "malformed board_op answer" };
 			const result = parsed.data;
 			const folded = fold(result.entries);
-			if (result.outcome === "applied") {
+			if (result.outcome === BOARD_OUTCOME_APPLIED) {
 				const titles = new Map(folded.entries.map((e) => [e.id, e.title]));
 				return {
 					kind: "applied",

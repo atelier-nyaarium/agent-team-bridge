@@ -42,6 +42,7 @@ import type {
 	RidingAwareness,
 	TeamInfo,
 } from "../shared/types.js";
+import { OP_OUTCOME_ACCEPTED } from "../shared/wire-vocabulary.js";
 import { isNoAckSessionId } from "./awarenessBank.js";
 import { createBlobFetcher } from "./blobFetch.js";
 import type { ChannelDeliveryCoordinator } from "./channelDelivery.js";
@@ -397,8 +398,10 @@ export function createRoutes({
 				opKey: { ...envelope.opKey, hash: sha256Hex(canonicalJson({ address, op })) },
 			});
 			if (result.error) return { ok: false, error: result.error };
-			const accepted = result.result as { outcome?: string } | undefined;
-			if (accepted?.outcome && accepted.outcome !== "accepted") return { ok: false, error: accepted.outcome };
+			const accepted = result.result as { outcome?: string; ok?: boolean; error?: string } | undefined;
+			if (accepted?.ok === false) return { ok: false, error: accepted.error ?? "refused" };
+			if (accepted?.outcome && accepted.outcome !== OP_OUTCOME_ACCEPTED)
+				return { ok: false, error: accepted.outcome };
 			return { ok: true, result: accepted };
 		}
 		// The Domain the target actually resolved to (authoritative over the caller's hint),.

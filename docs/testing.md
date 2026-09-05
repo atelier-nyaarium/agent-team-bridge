@@ -16,9 +16,11 @@ and two Bun smoke gates.
 
 ## The fixture world
 
-`tests/fixtures/identity/set.json`, minted once by `scripts/gen-identity-set.ts`: the Router
-identity, the Domain and its owner, the gateway and console identities with their admissions, the
-three bearer tokens, and the epoch 1 content key. Everything below reads this one file.
+`tests/fixtures/identity/set.json`, minted once by `scripts/gen-identity-set.ts` through
+`mintIdentitySet`: the Router identity, the Domain and its owner, the gateway and console
+identities with their admissions, the three bearer tokens, and the epoch 1 content key. Everything
+below reads this one file; the harness mints further sets with the same function for its friend
+Domains.
 `src/shared/fixture-identity.ts` names its signing keys; `main-federation` and `composeGateway`
 refuse them unless `ALLOW_FIXTURE_IDENTITY=1`, which only the harness and the boot smoke set.
 Re-minting the set invalidates every derived fixture.
@@ -39,15 +41,36 @@ graph through `composeGateway`, joined by the real pinned client over loopback. 
 and the sessions are fake sockets at the gateway's own WebSocket handlers (`fakeHost.ts`,
 `fakeSession.ts`); the phone is a TypeScript driver on `RouterServer.handle` (`phoneDriver.ts`)
 plus a console socket against the Router's TLS listener (`consoleSocket.ts`). Both clocks take
-the harness `now`. `restartGateway` recomposes over the retained directories.
+the harness `now`. `restartGateway` recomposes over the retained directories. `restartHost`
+reconnects the daemon, and with `newDaemon` as a fresh process.
 
-Scenarios live in `src/__tests__/federation-harness.test.ts`. Each asserts what the phone or the
-session observes, never a fake's bookkeeping.
+The fake host is also the Codex daemon. It answers `codex_command` frames through a responder:
+`stockCodexResponder` accepts and completes at once, and a scenario installs its own for a running
+or refused turn. It keeps one `FakeCodexDaemon` per machine across gateway restarts and validates
+every Codex frame it sends against the daemon schemas. A fake session can answer the lead
+handshake as a worker, present a binding token, or name a project path.
+
+`addDomain` roots a second Domain in the Router under a minted identity set and composes its own
+gateway, host, and phone; `link(receiver, requester)` runs the real listening-token handshake
+through the Router and submits both owner-signed link edges. The phone driver's `console()` posts
+any console-surface body and `enroll()` an enroll op, so tenant provisioning, first root, device
+approval, and the trust rendezvous run against the real surfaces.
+
+Each scenario asserts what the phone, a session, or the daemon observes, never a fake's
+bookkeeping:
+
+| File | Covers |
+|---|---|
+| `federation-harness.test.ts` | One Domain: send and reply, host launch, presence, board, notices, a queued reply across a gateway restart, the empty keyring |
+| `federation-harness-boot.test.ts` | Reach before roster, the bounded bootstrap install, Router and gateway restarts, a notice held through a Router outage |
+| `federation-harness-sessions.test.ts` | Session bindings and impostors, worker answers, transcript handover, duplicated deliveries, reply authority, the wake boundary, the console's create, rename, close, forget, tmux, peek, and notify rules, daemon capabilities |
+| `federation-harness-domains.test.ts` | Two and three Domains: the handshake, shares and the Router record, cross-Domain send and reply, opaque refusal, unshare, unlink, colliding gateway ids, a forged reply, a repeated send opId |
+| `federation-harness-router.test.ts` | Router-only: tenant provision, first root, rename, removal, deletion, replay across a restart, device approval, the trust rendezvous |
+| `federation-harness-codex.test.ts` | Codex through the gateway and the daemon: start, message, list, stop, replayed frames, gateway and daemon restarts |
+
 `startRouterOnly` composes the Router without a gateway, so a scenario can add an arming or active
 gateway itself; `restartRouter` replaces the Router on its port; the phone driver's `reach()` is the
-token-gated reach and gateway roster. `federation-harness-boot.test.ts` covers reach before roster,
-a bounded bootstrap install that requests the missing epoch, and a Router restart that leaves one
-registration in the reach roster and one presence row after re-registration.
+token-gated reach and gateway roster.
 
 ## Minted wire fixtures
 

@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { CopilotPersistedAgentSchema, copilotOperationFingerprint } from "../shared/copilot-agent.js";
 import { sanitizeLabel, sanitizeWorkdirPath } from "../shared/session-sanitize.js";
-import { SessionStore } from "../shared/session-store.js";
+import { type CopilotCatalogWriter, SessionStore } from "../shared/session-store.js";
 
-// Deterministic ids for clash tests: yields the scripted values, then unique fillers.
+// Scripted ids, then unique fillers.
 function scriptedIds(...ids: string[]) {
 	let extra = 0;
 	return () => ids.shift() ?? `fill${extra++}`;
@@ -12,6 +13,32 @@ const LEGACY_FILE = {
 	"host.switchboard": { claudeSessionId: "16aa1d0d-aaaa", lastSeen: 1000 },
 	"host.story-telling": { claudeSessionId: "c1fa7689-bbbb", lastSeen: 2000 },
 };
+
+const COPILOT_OPERATION_ID = "123e4567-e89b-42d3-a456-426614174000";
+const COPILOT_AGENT_ID = "copilot_0123456789abcdef0123456789abcdef";
+
+function requestedCopilotAgent() {
+	return CopilotPersistedAgentSchema.parse({
+		version: 1,
+		agentId: COPILOT_AGENT_ID,
+		agentState: "creating",
+		requestedTarget: { kind: "host", workdirHint: "Work" },
+		operations: [
+			{
+				operationId: COPILOT_OPERATION_ID,
+				kind: "start",
+				prompt: "Review",
+				fingerprint: copilotOperationFingerprint("start", COPILOT_AGENT_ID, "Review\nauto"),
+				state: "requested",
+				createdAt: 10,
+				updatedAt: 10,
+			},
+		],
+		turns: [],
+		createdAt: 10,
+		updatedAt: 10,
+	});
+}
 
 describe("SessionStore migration", () => {
 	it("migrates a legacy resume map into full records seeded from the segment", () => {
@@ -282,7 +309,7 @@ describe("SessionStore establishOnConfirm binding order", () => {
 	});
 });
 
-describe("SessionStore labels", () => {
+describe("SessionStore labels and paths", () => {
 	it("dedups labels per spawn with a -# suffix; other spawns may reuse the label", () => {
 		const store = new SessionStore({ idGen: scriptedIds("id1", "id2", "id3") });
 		expect(store.mint({ spawn: "host", sessionLabel: "switchboard" }).sessionLabel).toBe("switchboard");
@@ -307,24 +334,35 @@ describe("SessionStore labels", () => {
 		expect(store.getByTeam("host.id2")?.sessionLabel).toBe("alpha-2");
 	});
 
-	it("sanitizeLabel keeps free-form text but rejects path-unsafe or invisible input", () => {
-		expect(sanitizeLabel("  My Cool Session!  ")).toBe("My Cool Session!");
-		expect(sanitizeLabel("chat \u{1F600}")).toBe("chat \u{1F600}");
-		expect(sanitizeLabel("a/b")).toBeNull();
-		expect(sanitizeLabel("a\\b")).toBeNull();
-		expect(sanitizeLabel("..")).toBeNull();
-		expect(sanitizeLabel("tab\there")).toBeNull();
-		expect(sanitizeLabel("\u200b\u200b\u200b")).toBeNull();
-		expect(sanitizeLabel("abc\u202edef")).toBeNull();
-		expect(sanitizeLabel("x\u0085y")).toBeNull();
-		expect(sanitizeLabel("")).toBeNull();
-		expect(sanitizeLabel("x".repeat(200))?.length).toBe(64);
-	});
-
-	it("caps on code points, so an astral character never truncates into a lone surrogate", () => {
-		const capped = sanitizeLabel(`${"x".repeat(63)}\u{1F600}`);
-		expect([...(capped ?? "")].length).toBe(64);
-		expect(capped?.endsWith("\u{1F600}")).toBe(true);
+	it("sanitizes labels into usable session state", () => {
+		const inputs = [
+			"  My Cool Session!  ",
+			"chat \u{1F600}",
+			"a/b",
+			"a\\b",
+			"..",
+			"tab\there",
+			"\u200b\u200b\u200b",
+			"abc\u202edef",
+			"x\u0085y",
+			"",
+			"x".repeat(200),
+			`${"x".repeat(63)}\u{1F600}`,
+		];
+		expect(inputs.map(sanitizeLabel)).toEqual([
+			"My Cool Session!",
+			"chat \u{1F600}",
+			null,
+			null,
+			null,
+			null,
+			null,
+			null,
+			null,
+			null,
+			"x".repeat(64),
+			`${"x".repeat(63)}\u{1F600}`,
+		]);
 	});
 
 	it("mint falls back to safe defaults when the supplied label and hint are unsafe", () => {
@@ -357,19 +395,35 @@ describe("SessionStore labels", () => {
 		expect(next.hostWorkdirHint(loaded as NonNullable<typeof loaded>)).toBe("~/deep/dir");
 	});
 
-	it("sanitizeWorkdirPath accepts absolute and ~-rooted paths only, rejecting breakout characters", () => {
-		expect(sanitizeWorkdirPath("/data/media")).toBe("/data/media");
-		expect(sanitizeWorkdirPath("  ~/projects/app  ")).toBe("~/projects/app");
-		expect(sanitizeWorkdirPath("~")).toBe("~");
-		expect(sanitizeWorkdirPath("relative/dir")).toBeNull();
-		expect(sanitizeWorkdirPath("~elsewhere")).toBeNull();
-		expect(sanitizeWorkdirPath("/it's")).toBeNull();
-		expect(sanitizeWorkdirPath('/a"b')).toBeNull();
-		expect(sanitizeWorkdirPath("/a`b")).toBeNull();
-		expect(sanitizeWorkdirPath("/a$b")).toBeNull();
-		expect(sanitizeWorkdirPath("/a\\b")).toBeNull();
-		expect(sanitizeWorkdirPath(`/${"x".repeat(600)}`)).toBeNull(); // over-long names a different dir if sliced
-		expect(sanitizeWorkdirPath("")).toBeNull();
+	it("sanitizes workdir paths into safe persisted state", () => {
+		const inputs = [
+			"/data/media",
+			"  ~/projects/app  ",
+			"~",
+			"relative/dir",
+			"~elsewhere",
+			"/it's",
+			'/a"b',
+			"/a`b",
+			"/a$b",
+			"/a\\b",
+			`/${"x".repeat(600)}`,
+			"",
+		];
+		expect(inputs.map(sanitizeWorkdirPath)).toEqual([
+			"/data/media",
+			"~/projects/app",
+			"~",
+			null,
+			null,
+			null,
+			null,
+			null,
+			null,
+			null,
+			null,
+			null,
+		]);
 	});
 
 	it("restore drops a hand-edited workdirPath that fails the path rules", () => {
@@ -449,53 +503,69 @@ describe("SessionStore TTL", () => {
 });
 
 describe("SessionStore session binding", () => {
-	it("hands a self-appearing session no binding, so it stays claimable by the session that appeared", () => {
+	it("creates a token only when a launched session needs one", () => {
 		const store = new SessionStore();
 		const record = store.mint({ spawn: "recipe-app" });
 
 		expect(record.bindToken).toBeUndefined();
-	});
-
-	it("mints on the first launch and reuses it forever after, since a reattach never re-runs the launch", () => {
-		const store = new SessionStore();
-		const record = store.mint({ spawn: "recipe-app" });
-
 		const first = store.ensureBindToken(record);
 		expect(store.ensureBindToken(record)).toBe(first);
-		expect(store.recordByBindToken(first)).toBe(record);
-	});
-
-	it("resolves a token only to the record it was minted for", () => {
-		const store = new SessionStore();
-		const mine = store.mint({ spawn: "recipe-app" });
-		const sibling = store.mint({ spawn: "recipe-app" });
-		const token = store.ensureBindToken(mine);
-		store.ensureBindToken(sibling);
-
-		expect(store.recordByBindToken(token)).toBe(mine);
+		expect(store.recordByBindToken(first)).toEqual(record);
 		expect(store.recordByBindToken("not-a-real-token")).toBeUndefined();
 	});
 
-	it("carries the binding across a persist round trip, so a gateway restart does not orphan a live session", () => {
+	it("restores the binding for its owner and leaves tokenless records tokenless", () => {
 		const store = new SessionStore();
 		const record = store.mint({ spawn: "recipe-app" });
 		const token = store.ensureBindToken(record);
+		store.mint({ spawn: "recipe-app" });
 
 		const restored = new SessionStore();
 		restored.restore(JSON.parse(JSON.stringify(store.snapshot())));
 
 		expect(restored.recordByBindToken(token)?.id).toBe(record.id);
+		expect(restored.list().filter((item) => !item.bindToken)).toHaveLength(1);
+	});
+});
+
+describe("SessionStore Copilot catalogs", () => {
+	it("commits an agent, snapshots it, and restores it under its session", () => {
+		let writer!: CopilotCatalogWriter;
+		const store = new SessionStore({
+			copilotCatalogPersistence: {
+				persistChecked: () => {},
+				receiveWriter: (received) => {
+					writer = received;
+				},
+			},
+		});
+		const owner = store.mint({ spawn: "host", sessionLabel: "Work" });
+		const agent = requestedCopilotAgent();
+
+		const result = writer.commit(owner, 0, [agent]);
+		const restored = new SessionStore();
+		restored.restore(store.snapshot());
+		const restoredOwner = restored.getByTeam(store.teamOf(owner));
+
+		expect(result).toMatchObject({ committed: true, catalog: { revision: 1, agents: [agent] } });
+		expect(restored.listCopilotAgents(restoredOwner!)).toEqual([agent]);
 	});
 
-	it("never invents a binding for a record restored without one, which would lock out its running session", () => {
+	it("restores healthy Copilot agents while dropping a damaged sibling", () => {
+		const healthy = requestedCopilotAgent();
 		const store = new SessionStore();
-		const record = store.mint({ spawn: "recipe-app" });
-		const raw = JSON.parse(JSON.stringify(store.snapshot())) as Record<string, Record<string, unknown>>;
-		delete raw[`recipe-app.${record.id}`].bindToken;
 
-		const restored = new SessionStore();
-		restored.restore(raw);
+		store.restore({
+			"host.owner": {
+				id: "owner",
+				sessionLabel: "Owner",
+				spawn: "host",
+				lastSeen: 10,
+				copilotCatalog: { version: 1, revision: 7, agents: [healthy, { broken: true }] },
+			},
+		});
 
-		expect(restored.getByTeam(`recipe-app.${record.id}`)?.bindToken).toBeUndefined();
+		const owner = store.getByTeam("host.owner");
+		expect(store.copilotCatalog(owner!)).toEqual({ version: 1, revision: 7, agents: [healthy] });
 	});
 });

@@ -156,4 +156,68 @@ describe("federation harness routing and restart", () => {
 		expect(rows).toBe(1);
 		session.close();
 	});
+
+	it("converges to one presence row per team when a session reattaches after a gateway restart", async () => {
+		const first = attachFakeSession(h.gateway, { team: "fixture-app.again", conversationId: "conv-again" });
+		await first.ready();
+		await h.waitFor(async () => {
+			const { planes } = await h.phone.planesRead();
+			return JSON.stringify(planes.find((plane) => plane.name === "presence")?.payload).includes(first.team);
+		}, "presence before the restart");
+		await h.restartGateway();
+		const second = attachFakeSession(h.gateway, { team: "fixture-app.again", conversationId: "conv-again" });
+		await second.ready();
+		const presence = await h.waitFor(async () => {
+			const { planes } = await h.phone.planesRead();
+			const plane = planes.find((candidate) => candidate.name === "presence");
+			const payload = JSON.stringify(plane?.payload);
+			return payload.includes(`"team":"${second.team}"`) && payload.includes('"status":"online"')
+				? plane
+				: undefined;
+		}, "presence after the restart");
+		expect(JSON.stringify(presence.payload).split(`"team":"${second.team}"`).length - 1).toBe(1);
+		first.close();
+		second.close();
+	});
+
+	it("holds an owner notice through a Router outage and delivers it once after the restart", async () => {
+		let launched: ReturnType<typeof attachFakeSession> | undefined;
+		h.host.handlers.onCreateSession = (op) => {
+			launched = attachFakeSession(h.gateway, {
+				team: `${op.target.name}.${op.target.sessionName}`,
+				conversationId: "conv-outage",
+				sessionToken: op.sessionToken,
+			});
+		};
+		const created = await h.phone.value({ kind: "create_session", target: "host", displayLabel: "Outage" });
+		expect(created.result).toMatchObject({ created: true });
+		const bound = await h.waitFor(() => launched, "the daemon's launch");
+		await bound.ready();
+
+		await h.router.server.stop();
+		const posted = await bound.post("/human/notify", {
+			from: bound.team,
+			title: "While down",
+			summary: "Posted during the outage.",
+			full: "The Router was down when this was posted.",
+		});
+		expect(posted.status).toBe(200);
+		await h.restartRouter();
+		const notices = await h.waitFor(
+			async () => {
+				const found = h.phone
+					.entries(await h.phone.inboxRead())
+					.filter((entry) => entry.title === "While down");
+				return found.length > 0 ? found : undefined;
+			},
+			"the held notice",
+			20_000,
+		);
+		await new Promise((resolve) => setTimeout(resolve, 300));
+		expect(h.phone.entries(await h.phone.inboxRead()).filter((entry) => entry.title === "While down")).toHaveLength(
+			notices.length,
+		);
+		expect(notices).toHaveLength(1);
+		bound.close();
+	});
 });

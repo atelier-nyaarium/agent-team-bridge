@@ -80,7 +80,7 @@ export const BoardWriteSchema = z
 	.meta({ id: "BoardWrite" });
 export const BoardWriteResultSchema = z
 	.object({
-		outcome: z.enum(["applied", "conflict", "refused"]),
+		outcome: z.enum(["applied", "conflict", "refused"]).meta({ id: "BoardWriteOutcome", catalog: "outcome" }),
 		revision: z.number().int().nonnegative(),
 		entries: z.array(BoardStoredEntrySchema),
 		cascaded: z

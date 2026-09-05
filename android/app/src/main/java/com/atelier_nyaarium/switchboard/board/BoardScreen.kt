@@ -70,9 +70,6 @@ fun BoardScreen(
 			.filter { System.currentTimeMillis() - it.second > STALE_AFTER_MS }
 	}
 
-	val truncatedColumns = remember(revision) { repo.boardOps.boardTruncatedGateways() }
-	val struggling = remember(revision) { repo.boardOps.boardStrugglingEntries() }
-
 	var trashOpen by rememberSaveable { mutableStateOf(false) }
 	// Preserve drafts across tab disposal.
 	var composing by rememberSaveable { mutableStateOf(false) }
@@ -151,17 +148,6 @@ fun BoardScreen(
 			}
 		}
 
-		for (gw in truncatedColumns) {
-			item(key = "cut:$gw") {
-				Text(
-					"$gw sent only part of its board; older entries may be missing",
-					style = MaterialTheme.typography.labelSmall,
-					color = MaterialTheme.colorScheme.onSurfaceVariant,
-					modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
-				)
-			}
-		}
-
 		item(key = "sect:backlog") {
 			BoardSectionLabel {
 				Button(
@@ -188,7 +174,7 @@ fun BoardScreen(
 				)
 			}
 		}
-		boardRowItems(rows.unassigned.rows, drag, BoardRowPresentation.Board, struggling) {
+		boardRowItems(rows.unassigned.rows, drag, BoardRowPresentation.Board) {
 			onOpenEntry(it.gatewayId, it.entry.id)
 		}
 
@@ -208,7 +194,6 @@ fun BoardScreen(
 							row = row,
 							presentation = BoardRowPresentation.Board,
 							carried = false,
-							struggling = false,
 							onClick = { onOpenEntry(row.gatewayId, row.entry.id) },
 						)
 					}

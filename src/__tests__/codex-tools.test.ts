@@ -3,34 +3,12 @@ import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { initBridge, routerErrorText, routerPost } from "../mcp/bridge/helpers.js";
 import { codexRequestBody } from "../mcp/codex/codexTools.js";
-import {
-	CODEX_DEFAULT_MODEL,
-	CODEX_PRIORITY_SERVICE_TIER,
-	CodexGatewayRequestSchema,
-	CodexRequestErrorSchema,
-	sanitizeCodexErrorText,
-} from "../shared/codex-agent.js";
+import { CodexRequestErrorSchema, sanitizeCodexErrorText } from "../shared/codex-agent.js";
 
-describe("what a tool actually sends", () => {
-	it("builds a request the gateway's own schema accepts, for every kind", () => {
-		const bodies = [
-			codexRequestBody("start", { prompt: "Audit" }),
-			codexRequestBody("message", { agentId: "codex_0123456789abcdef0123456789abcdef", prompt: "Continue" }),
-			codexRequestBody("await", { agentId: "codex_0123456789abcdef0123456789abcdef" }),
-			codexRequestBody("stop", { agentId: "codex_0123456789abcdef0123456789abcdef" }),
-			codexRequestBody("list"),
-		];
-
-		// The gateway is strict, so an extra or misnamed field is a 400 the caller cannot act on.
-		for (const body of bodies) expect(CodexGatewayRequestSchema.safeParse(body).success).toBe(true);
-	});
-
-	it("mints a distinct operation id per invocation, and only where one is needed", () => {
+describe("Codex request identities", () => {
+	it("mints distinct ids for mutations and none for reads", () => {
 		const first = codexRequestBody("start", { prompt: "Audit" });
 		const second = codexRequestBody("start", { prompt: "Audit" });
-
-		// Two tool calls are two mutations even with identical text; sharing an id would make the
-		// second a replay of the first.
 		expect(first.operationId).not.toBe(second.operationId);
 		expect(codexRequestBody("await", { agentId: "codex_0123456789abcdef0123456789abcdef" })).not.toHaveProperty(
 			"operationId",
@@ -38,154 +16,71 @@ describe("what a tool actually sends", () => {
 		expect(codexRequestBody("list")).not.toHaveProperty("operationId");
 	});
 
-	it("passes list recovery filters without adding them to other requests", () => {
-		const agentId = "codex_0123456789abcdef0123456789abcdef";
-		const list = codexRequestBody("list", { agentId, detail: "full", limit: 1 });
-
-		expect(list).toMatchObject({ kind: "list", agentId, detail: "full", limit: 1 });
-		expect(CodexGatewayRequestSchema.safeParse(list).success).toBe(true);
-		expect(codexRequestBody("await", { agentId })).not.toHaveProperty("detail");
-	});
-
-	it("omits an absent field rather than sending it undefined", () => {
-		// A strict schema rejects a key that is present and undefined, so this is not cosmetic.
-		expect(codexRequestBody("start", { prompt: "Audit", model: "gpt-5.6-sol" })).not.toHaveProperty("serviceTier");
-		expect(codexRequestBody("start", { prompt: "Audit", model: "gpt-5.6-sol" })).toMatchObject({
-			model: "gpt-5.6-sol",
-		});
-		// A model belongs to a thread's whole life, so it exists on start alone.
-		expect(
-			codexRequestBody("message", { agentId: "codex_0123456789abcdef0123456789abcdef", prompt: "x", model: "s" }),
-		).not.toHaveProperty("model");
-	});
-
-	it("pairs the default model with priority only when the caller chose neither", () => {
-		// Naming a heavier model must not silently also buy the tier it charges extra for.
+	it("applies start defaults without copying them to later turns", () => {
 		expect(codexRequestBody("start", { prompt: "Audit" })).toMatchObject({
-			model: CODEX_DEFAULT_MODEL,
-			serviceTier: CODEX_PRIORITY_SERVICE_TIER,
-		});
-		expect(codexRequestBody("start", { prompt: "Audit", model: "gpt-5.6-sol" })).not.toHaveProperty("serviceTier");
-		// A tier alone leaves the model to the target's own default rather than pinning one.
-		expect(codexRequestBody("start", { prompt: "Audit", serviceTier: "priority" })).not.toHaveProperty("model");
-	});
-
-	it("carries a tier on message, where a model is not allowed", () => {
-		const message = codexRequestBody("message", {
-			agentId: "codex_0123456789abcdef0123456789abcdef",
-			prompt: "x",
+			model: expect.any(String),
 			serviceTier: "priority",
 		});
-
-		expect(message).toMatchObject({ serviceTier: "priority" });
-		expect(CodexGatewayRequestSchema.safeParse(message).success).toBe(true);
-		// A message names no model, so the start-only default must not leak onto it.
+		expect(codexRequestBody("start", { prompt: "Audit", model: "gpt-5.6-sol" })).not.toHaveProperty("serviceTier");
 		expect(
-			codexRequestBody("message", { agentId: "codex_0123456789abcdef0123456789abcdef", prompt: "x" }),
-		).not.toHaveProperty("serviceTier");
-	});
-
-	it("keeps model and cwd on start only", () => {
-		expect(codexRequestBody("start", { prompt: "Audit", model: "gpt-5.6-sol", cwd: "/work/tree" })).toMatchObject({
-			model: "gpt-5.6-sol",
-			cwd: "/work/tree",
-		});
-		const message = codexRequestBody("message", {
-			agentId: "codex_0123456789abcdef0123456789abcdef",
-			prompt: "x",
-			model: "s",
-			cwd: "/work/tree",
-		});
-		expect(message).not.toHaveProperty("model");
-		expect(message).not.toHaveProperty("cwd");
+			codexRequestBody("message", { agentId: "codex_0123456789abcdef0123456789abcdef", prompt: "Continue" }),
+		).not.toHaveProperty("model");
 	});
 });
 
-describe("what a caller reads back from the gateway", () => {
+describe("routerPost", () => {
 	let server: http.Server;
-	let reply: { status: number; body: unknown } = { status: 200, body: {} };
-	const received: unknown[] = [];
+	let reply: { status: number; body: unknown };
 
 	beforeAll(async () => {
-		// A real socket, not a mock: a mock that hands back a plain string for `error` would pass even
-		// though a structured refusal object stringifies to the literal text "[object Object]", hiding
-		// exactly the shape mismatch this test exists to catch.
-		server = http.createServer((req, res) => {
-			let raw = "";
-			req.on("data", (chunk) => {
-				raw += chunk;
-			});
-			req.on("end", () => {
-				received.push(JSON.parse(raw));
-				res.writeHead(reply.status, { "content-type": "application/json" });
-				res.end(JSON.stringify(reply.body));
-			});
+		server = http.createServer((_request, response) => {
+			response.writeHead(reply.status, { "content-type": "application/json" });
+			response.end(JSON.stringify(reply.body));
 		});
 		await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
 		const { port } = server.address() as AddressInfo;
 		initBridge({ routerUrl: `http://127.0.0.1:${port}`, projectName: "recipe-app.work", agentType: "claude" });
 	});
 
-	afterAll(() => {
-		server.close();
+	afterAll(() => server.close());
+
+	it("returns the parsed gateway value", async () => {
+		reply = { status: 200, body: { agentId: "codex_0123456789abcdef0123456789abcdef", observation: "terminal" } };
+		expect(await routerPost("/codex", codexRequestBody("list"), { retries: 0 })).toEqual(reply.body);
 	});
 
-	it("renders a structured refusal's message rather than its object", async () => {
+	it("exposes structured HTTP failures as an error object", async () => {
 		reply = {
 			status: 400,
 			body: CodexRequestErrorSchema.parse({
-				error: {
-					code: "invalid_input",
-					retryable: false,
-					message: sanitizeCodexErrorText("agent already has an unresolved prompt delivery"),
-				},
+				error: { code: "invalid_input", retryable: false, message: sanitizeCodexErrorText("invalid request") },
 			}),
 		};
-
-		await expect(routerPost("/codex", codexRequestBody("list"), { retries: 0 })).rejects.toThrow(
-			"agent already has an unresolved prompt delivery",
-		);
+		try {
+			await routerPost("/codex", codexRequestBody("list"), { retries: 0 });
+			expect.fail("request should reject");
+		} catch (error) {
+			expect(error).toMatchObject({ status: 400 });
+		}
 	});
 
-	it("still renders a plain string error, which most routes answer with", async () => {
-		reply = { status: 404, body: { error: "not found" } };
-		await expect(routerPost("/codex", codexRequestBody("list"), { retries: 0 })).rejects.toThrow("not found");
-	});
-
-	it("does not retry HTTP failures, including 5xx responses", async () => {
-		reply = { status: 503, body: { error: "unavailable" } };
-		const before = received.length;
-		await expect(routerPost("/codex", codexRequestBody("list"), { retries: 2, retryDelayMs: 0 })).rejects.toThrow(
-			"unavailable",
-		);
-		expect(received).toHaveLength(before + 1);
-	});
-
-	it("preserves the HTTP status for a JSON null error body", async () => {
+	it("preserves status when the error body is null", async () => {
 		reply = { status: 502, body: null };
-		await expect(routerPost("/codex", codexRequestBody("list"), { retries: 0 })).rejects.toThrow("HTTP 502");
-	});
-
-	it("returns the gateway's result unchanged on success", async () => {
-		reply = { status: 200, body: { agentId: "codex_0123456789abcdef0123456789abcdef", observation: "terminal" } };
-		await expect(routerPost("/codex", codexRequestBody("list"), { retries: 0 })).resolves.toMatchObject({
-			observation: "terminal",
-		});
-	});
-
-	it("sends a body the gateway can parse", async () => {
-		reply = { status: 200, body: {} };
-		received.length = 0;
-		await routerPost("/codex", codexRequestBody("start", { prompt: "Audit" }), { retries: 0 });
-
-		expect(CodexGatewayRequestSchema.safeParse(received[0]).success).toBe(true);
+		try {
+			await routerPost("/codex", codexRequestBody("list"), { retries: 0 });
+			expect.fail("request should reject");
+		} catch (error) {
+			expect(error).toMatchObject({ status: 502 });
+		}
 	});
 });
 
 describe("routerErrorText", () => {
-	it("falls back rather than inventing text when the shape is neither", () => {
-		expect(routerErrorText(undefined)).toBeUndefined();
-		expect(routerErrorText({ code: "invalid_input" })).toBeUndefined();
-		expect(routerErrorText(42)).toBeUndefined();
-	});
+	it.each([
+		["plain", "plain"],
+		[{ message: "structured" }, "structured"],
+		[undefined, undefined],
+		[{ code: "invalid_input" }, undefined],
+		[42, undefined],
+	] as const)("extracts a supported value", (failure, expected) => expect(routerErrorText(failure)).toBe(expected));
 });

@@ -49,6 +49,10 @@ object Protocol {
 		const val OWNER_OP_KEY_RECEIPTS_READ: String = "key_receipts_read"
 		const val OWNER_OP_BOARD_READ: String = "board_read"
 		const val OWNER_OP_BOARD_WRITE: String = "board_write"
+		const val OWNER_OP_PRESENCE_READ: String = "presence_read"
+		const val OWNER_OP_SCHEDULE_SEND: String = "schedule_send"
+		const val OWNER_OP_CAPABILITIES_READ: String = "capabilities_read"
+		const val OWNER_OP_CURSOR_TRANSLATE: String = "cursor_translate"
 		const val SIGNING_TAG_ADMISSION: String = "ADMISSION_V1"
 		const val SIGNING_TAG_REVOCATION: String = "REVOCATION_V1"
 		const val SIGNING_TAG_REGISTER: String = "REGISTER_V1"
@@ -76,6 +80,11 @@ object Protocol {
 		const val SIGNING_TAG_ENROLL_SAS: String = "ENROLL_SAS_V1"
 		const val SIGNING_TAG_CODEX_AGENT: String = "CODEX_AGENT_V1"
 		const val SIGNING_TAG_COPILOT_AGENT: String = "COPILOT_AGENT_V1"
+		const val OP_OUTCOME_ACCEPTED: String = "accepted"
+		const val BOARD_OUTCOME_APPLIED: String = "applied"
+		const val CONSOLE_REASON_CURSOR_STALE: String = "cursor_stale"
+		const val GATEWAY_ERROR_STALE_INCARNATION: String = "stale_incarnation"
+		const val GATEWAY_REASON_NO_WAITER: String = "no_waiter"
 		const val CONTENT_NONCE_BYTES: Int = 12
 		const val WIRE_NONCE_BYTES: Int = 18
 

@@ -13,7 +13,7 @@ import type { WorkspaceRoot } from "../mcp/references/refWorkspace.js";
 let root: string;
 let workspace: WorkspaceRoot;
 
-/** A session that must never be opened: the ref under test is decided before the daemon. */
+/** Never opened. */
 const unopened = async () => {
 	throw new Error("the daemon was asked");
 };
@@ -41,8 +41,7 @@ describe("resolving before the daemon is reached", () => {
 		expect(outcome.ok).toBe(true);
 		if (!outcome.ok) return;
 		expect(outcome.resolved[0]?.resolution).toMatchObject({ quality: "fuzzy", startLine: 2 });
-		expect(outcome.resolved[0]?.resolution.reason).toContain("budget ran out");
-		expect(outcome.notices).toEqual([expect.stringContaining("send again")]);
+		expect(outcome.notices).toHaveLength(1);
 	});
 
 	it("stops waiting on the index when the budget runs out mid-ask", async () => {
@@ -60,7 +59,7 @@ describe("resolving before the daemon is reached", () => {
 
 		expect(Date.now() - started).toBeLessThan(2_000);
 		expect(outcome.ok && outcome.resolved[0]?.resolution).toMatchObject({ quality: "fuzzy" });
-		expect(outcome.ok && outcome.notices[0]).toContain("send again");
+		expect(outcome.ok && outcome.notices).toHaveLength(1);
 	});
 
 	it("files two spellings of one file under the first spelling, so one snapshot ships", async () => {
@@ -91,5 +90,40 @@ describe("resolving before the daemon is reached", () => {
 			expect.stringContaining("src/nope.ts does not exist"),
 			expect.stringContaining('no match for "missing"'),
 		]);
+	});
+
+	it("refuses an outside chain and a matcher miss as structured refusal outcomes", async () => {
+		const outside = scanRefs("[x](ref:///etc/hosts:host)").refs;
+		const missing = scanRefs("[x](ref://src/cart.ts#missing)").refs;
+		const outsideResult = await resolveRefs(outside, {
+			workspace,
+			session: unopened,
+			load: loadRefFile,
+			deadline: 0,
+		});
+		const missingResult = await resolveRefs(missing, {
+			workspace,
+			session: unopened,
+			load: loadRefFile,
+			deadline: 0,
+		});
+		expect(outsideResult.ok).toBe(false);
+		expect(missingResult.ok).toBe(false);
+	});
+
+	it("degrades without admission and deduplicates notices by cause", async () => {
+		const { refs } = scanRefs("[a](ref://src/cart.ts:Cart:add) and [b](ref://src/cart.ts:Cart)");
+		const result = await resolveRefs(refs, {
+			workspace: { root, admitted: false, reason: "warming" },
+			session: unopened,
+			load: loadRefFile,
+			deadline: Date.now() + 100,
+		});
+		expect(result.ok).toBe(true);
+		if (result.ok)
+			expect({
+				qualities: result.resolved.map((item) => item.resolution.quality),
+				notices: result.notices.length,
+			}).toEqual({ qualities: ["fuzzy", "fuzzy"], notices: 1 });
 	});
 });

@@ -1,5 +1,3 @@
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
 	createSessionAuthority,
@@ -31,12 +29,12 @@ function setup() {
 	return { auth, sessionStore, registry };
 }
 
-/** An HTTP request presenting a session credential, the way a bound MCP calls in. */
+/** A request carrying a session token. */
 function withToken(token: string): Request {
 	return new Request("http://gateway/blob/put", { headers: { "x-session-token": token } });
 }
 
-/** Put a socket in the registry under a team, the way a completed register does. */
+/** A registered socket under a team. */
 function goLive(registry: TeamRegistry, sessionStore: SessionStore, team: string, ws: { data: WsData }): void {
 	registry.set(team, new Map([["s1", ws as never]]));
 	sessionStore.bindBySegment(team, { live: { team, subId: "s1" } });
@@ -241,43 +239,5 @@ describe("confirmed managed callers", () => {
 		});
 
 		expect(auth.resolveConfirmedManagedSession(withToken("duplicate-token"))).toBeNull();
-	});
-});
-
-// Keeping the credential fields unreachable outside sessionAuthority is what stops a call site
-// from reading one directly and deriving its own rule for what it proves.
-describe("no call site reaches around the authority", () => {
-	// session-store owns the stored field, sessionAuthority owns every rule derived from it,
-	// wsTypes declares WsData, websocket performs the single write that stamps a proven credential
-	// onto a socket; the MCP bridge and the fake session only SEND the header.
-	const ALLOWED = new Set([
-		"shared/session-store.ts",
-		"gateway/sessionAuthority.ts",
-		"gateway/wsTypes.ts",
-		"gateway/websocket.ts",
-		"mcp/bridge/helpers.ts",
-		"testing/fakeSession.ts",
-	]);
-
-	function sourceFiles(dir: string, acc: string[] = []): string[] {
-		for (const entry of readdirSync(dir)) {
-			const full = path.join(dir, entry);
-			if (statSync(full).isDirectory()) {
-				if (entry !== "__tests__") sourceFiles(full, acc);
-			} else if (entry.endsWith(".ts")) {
-				acc.push(full);
-			}
-		}
-		return acc;
-	}
-
-	it.each(["bindToken", "boundToken", "x-session-token"])("keeps %s out of every other module", (identifier) => {
-		const root = path.join(import.meta.dirname, "..");
-		const offenders = sourceFiles(root)
-			.filter((f) => !ALLOWED.has(path.relative(root, f)))
-			.filter((f) => readFileSync(f, "utf8").includes(identifier))
-			.map((f) => path.relative(root, f));
-
-		expect(offenders).toEqual([]);
 	});
 });

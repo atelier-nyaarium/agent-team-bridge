@@ -46,7 +46,6 @@ fun BoardEntryRow(
 	row: BoardRow,
 	presentation: BoardRowPresentation,
 	carried: Boolean,
-	struggling: Boolean,
 	onClick: () -> Unit,
 ) {
 	val entry = row.entry
@@ -86,9 +85,6 @@ fun BoardEntryRow(
 		if (!strip) {
 			if (!entry.attachments.isNullOrEmpty()) {
 				Text("📎", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-			}
-			if (struggling) {
-				Text("not synced", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
 			}
 			entry.trashedAt?.let {
 				Text(

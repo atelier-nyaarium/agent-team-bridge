@@ -11,7 +11,7 @@ export const CapabilitiesReportSchema = z
 	.meta({ id: "CapabilitiesReport" });
 
 export const CapabilitiesReadSchema = z
-	.object({ kind: z.literal("capabilities_read") })
+	.object({ kind: z.literal("capabilities_read").meta({ catalog: "owner-op-kind" }) })
 	.meta({ id: "CapabilitiesRead" });
 
 export const ReportReadSchema = z

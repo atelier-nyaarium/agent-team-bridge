@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { SIGNING_TAGS } from "../shared/wire-vocabulary.js";
 
 const root = path.resolve(import.meta.dirname, "../..");
-const shared = path.join(root, "src/shared");
 const kotlin = path.join(root, "android/app/src/main");
 const fixtures = path.join(root, "tests/fixtures");
 
@@ -19,10 +19,7 @@ function filesUnder(dir: string, suffix?: string): string[] {
 
 describe("shared preimage tags", () => {
 	it("has Android and fixture twins", () => {
-		const source = filesUnder(shared, ".ts")
-			.map((file) => fs.readFileSync(file, "utf8"))
-			.join("\n");
-		const tags = [...new Set([...source.matchAll(/(?:["'`])([A-Z][A-Z_]*_V1)(?:["'`])/g)].map((m) => m[1]))];
+		const tags = Object.values(SIGNING_TAGS);
 		const kotlinText = filesUnder(kotlin, ".kt")
 			.map((file) => fs.readFileSync(file, "utf8"))
 			.join("\n");

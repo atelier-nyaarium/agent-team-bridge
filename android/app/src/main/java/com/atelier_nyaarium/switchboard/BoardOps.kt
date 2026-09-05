@@ -103,26 +103,13 @@ internal class BoardOps(
 
 	fun boardLastSyncedAt(gatewayId: String): Long = collaborators.board.lastSyncedAt(gatewayId)
 
-	fun boardTruncatedGateways(): List<String> = collaborators.board.truncatedGateways()
-
-	fun boardStrugglingEntries(): Set<String> = collaborators.board.strugglingEntries()
-
 	fun boardDismissRefusal(refusal: BoardRefusal) = collaborators.board.dismissRefusal(refusal)
-
-	fun boardRetainGateways(admitted: Collection<String>) = collaborators.board.retainGateways(admitted)
 
 	val boardRefusals get() = collaborators.board.refusals
 
 	val boardRevision get() = collaborators.board.revision
 
 	val knownBoardVersion get() = collaborators.board.knownVersion
-
-	fun applyBoardSnapshot(
-		gatewayId: String,
-		entries: List<BoardEntry>,
-		version: Long?,
-		truncated: Boolean,
-	) = collaborators.board.applySnapshot(gatewayId, entries, version, truncated)
 
 	/** Queues an intent. */
 	private fun intend(vararg intents: BoardIntent) {

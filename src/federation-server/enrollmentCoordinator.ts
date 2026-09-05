@@ -181,6 +181,18 @@ export class EnrollmentCoordinator {
 		return null;
 	}
 
+	/** An owner's unlink, unsigned. */
+	public dropLinkEdge(dstDomainId: string): number {
+		const before = this.state.linkEdges?.length ?? 0;
+		if (before === 0) return 0;
+		this.state.linkEdges = (this.state.linkEdges ?? []).filter(
+			(e) => !(e.edge.srcDomainId === this.domainId && e.edge.dstDomainId === dstDomainId),
+		);
+		const dropped = before - this.state.linkEdges.length;
+		if (dropped > 0) this.store.save(this.state);
+		return dropped;
+	}
+
 	public hasLinkEdge(srcDomainId: string, dstDomainId: string): boolean {
 		if (!this.state.ownerSignPub) return false;
 		let newest: number | null = null;

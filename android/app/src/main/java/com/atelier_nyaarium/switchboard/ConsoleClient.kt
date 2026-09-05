@@ -148,7 +148,7 @@ class ConsoleClient internal constructor(
 		}, opId) ?: return null
 		return if (coordinator == null) {
 			val posted = postOwnerOp(ownerOp) ?: return transportFailureAnswer()
-			if (posted.jsonObject["outcome"]?.jsonPrimitive?.content?.let { it != "accepted" } == true) {
+			if (posted.jsonObject["outcome"]?.jsonPrimitive?.content?.let { it != Protocol.Wire.OP_OUTCOME_ACCEPTED } == true) {
 				failureAnswer(posted)
 			} else posted
 		} else kotlinx.coroutines.coroutineScope {
@@ -159,7 +159,7 @@ class ConsoleClient internal constructor(
 					posted == null -> {
 						transportFailureAnswer()
 					}
-					posted.jsonObject["outcome"]?.jsonPrimitive?.content?.let { it != "accepted" } == true -> {
+					posted.jsonObject["outcome"]?.jsonPrimitive?.content?.let { it != Protocol.Wire.OP_OUTCOME_ACCEPTED } == true -> {
 						failureAnswer(posted)
 					}
 					else -> withTimeoutOrNull(timeoutMs) { waiter.await() }
@@ -194,6 +194,8 @@ class ConsoleClient internal constructor(
 	internal fun defaultGatewayId(): String = collaborators.homeGatewayId()?.takeIf { it.isNotEmpty() }
 		?: error("No home Gateway admitted yet")
 
+	internal fun localDomainId(): String = boot.domainId
+
 	internal fun sessionAddressOf(target: String): String {
 		val parsed = parseTarget(target, "", defaultGatewayId()) as? com.atelier_nyaarium.switchboard.proto.Address
 			?: error("\"$target\" names a spawn-point, not a session")
@@ -221,7 +223,7 @@ internal suspend fun sendValueOp(gatewayId: String, op: ConsoleOp, opId: String 
 			opId,
 		) ?: return null
 		val ownerAnswer = postOwnerOp(ownerOp)
-		if (ownerAnswer?.jsonObject?.get("outcome")?.jsonPrimitive?.content?.let { it != "accepted" } == true) {
+		if (ownerAnswer?.jsonObject?.get("outcome")?.jsonPrimitive?.content?.let { it != Protocol.Wire.OP_OUTCOME_ACCEPTED } == true) {
 			return failureAnswer(ownerAnswer)
 		}
 		val answer = ownerAnswer?.jsonObject?.get("result")

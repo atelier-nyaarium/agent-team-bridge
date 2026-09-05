@@ -1,131 +1,81 @@
 import { describe, expect, it } from "vitest";
 // @ts-expect-error - plain JS, no .d.ts
 import installThreadLinkRules from "../../android/app/src/main/assets/thread/markdown-link-rules.js";
-// Both are plain classic <script>s in the browser (thread.html loads them before thread.js) that
-// also assign to `module.exports` under Bun/Node, so the default imports work here same as any
-// other CommonJS module. Testing against the REAL vendored markdown-it pins the actual rendered
-// output, not a reimplementation of it.
 // @ts-expect-error - plain JS, no .d.ts
 import markdownit from "../../android/app/src/main/assets/thread/vendor/markdown-it.min.js";
 
-function renderer() {
+type Anchor = { href: string | null; target: string | null; className: string; dataHref: string | null };
+
+function render(body: string, schemes: string[] = []): string {
 	const md = markdownit({ html: false, breaks: true, linkify: false });
-	installThreadLinkRules(md);
-	return md;
+	installThreadLinkRules(md, { value: schemes });
+	return md.render(body);
 }
 
-describe("installThreadLinkRules", () => {
-	it("renders an https link as an ordinary anchor with its href intact", () => {
-		const out = renderer().render("[Google](https://www.google.com)");
-		expect(out).toContain('<a href="https://www.google.com">Google</a>');
-		expect(out).not.toContain("link-unhandled");
+function anchor(html: string): Anchor {
+	const match = html.match(/<a\s([^>]+)>/);
+	expect(match).not.toBeNull();
+	const attrs = new Map<string, string>();
+	for (const [, name, value] of match?.[1].matchAll(/([\w-]+)="([^"]*)"/g) ?? []) attrs.set(name, value);
+	return {
+		href: attrs.get("href") ?? null,
+		target: attrs.get("target") ?? null,
+		className: attrs.get("class") ?? "",
+		dataHref: attrs.get("data-href") ?? null,
+	};
+}
+
+describe("thread markdown links", () => {
+	it.each([
+		{ url: "https://example.com", href: "https://example.com", className: "", dataHref: null, live: true },
+		{ url: "mailto:a@b.example", href: "mailto:a@b.example", className: "", dataHref: null, live: true },
+		{
+			url: "file:///etc/hosts",
+			href: null,
+			className: "link-unhandled",
+			dataHref: "file:///etc/hosts",
+			live: false,
+		},
+		{ url: "docs/readme.md", href: null, className: "link-unhandled", dataHref: "docs/readme.md", live: false },
+		{
+			url: "ref://src/a.ts",
+			href: null,
+			className: "link-handled link-scheme-ref",
+			dataHref: "ref://src/a.ts",
+			live: false,
+		},
+	])("maps $url to its link boundary", ({ url, href, className, dataHref, live }) => {
+		const link = anchor(render(`[x](${url})`, ["ref:"]));
+		expect(link).toEqual({ href, target: null, className, dataHref });
+		expect(link.href !== null).toBe(live);
 	});
 
-	it("renders a mailto link as an ordinary anchor", () => {
-		const out = renderer().render("[mail me](mailto:a@b.example)");
-		expect(out).toContain('<a href="mailto:a@b.example">mail me</a>');
-		expect(out).not.toContain("link-unhandled");
+	it("matches claimed schemes case-insensitively", () => {
+		expect(anchor(render("[x](REF://src/a.ts)", ["ref:"]))).toEqual({
+			href: null,
+			target: null,
+			className: "link-handled link-scheme-ref",
+			dataHref: "REF://src/a.ts",
+		});
 	});
 
-	it("renders a file: link as an inert red link - no href, target in data-href", () => {
-		const out = renderer().render("[hosts](file:///etc/hosts)");
-		// The space-prefixed form: `data-href="file..."` must not count as a real href.
-		expect(out).not.toContain(' href="file');
-		expect(out).toContain('data-href="file:///etc/hosts"');
-		expect(out).toContain('class="link-unhandled"');
-		expect(out).toContain(">hosts</a>");
+	it.each([
+		"javascript:alert(1)",
+		"vbscript:x",
+		"data:text/html;base64,PGI+",
+	])("refuses a blocked destination: %s", (url) => expect(render(`[x](${url})`)).not.toContain("<a"));
+
+	it("keeps data images as image output", () => {
+		expect(render("![dot](data:image/png;base64,iVBORw0KGgo=)")).toContain(
+			'<img src="data:image/png;base64,iVBORw0KGgo="',
+		);
 	});
 
-	it("renders a future custom protocol the same inert way", () => {
-		const out = renderer().render("[ref](hostfile://project/src/main.ts)");
-		expect(out).not.toContain(' href="hostfile');
-		expect(out).toContain('data-href="hostfile://project/src/main.ts"');
-		expect(out).toContain("link-unhandled");
-	});
-
-	it("treats a bare relative path link as unhandled rather than navigable", () => {
-		const out = renderer().render("[readme](docs/readme.md)");
-		expect(out).not.toContain(' href="docs/readme.md"');
-		expect(out).toContain('data-href="docs/readme.md"');
-		expect(out).toContain("link-unhandled");
-	});
-
-	it("refuses the in-page execution vectors outright - raw text, not even an inert anchor", () => {
-		for (const url of ["javascript:alert(1)", "vbscript:x", "data:text/html;base64,PGI+"]) {
-			const out = renderer().render(`[x](${url})`);
-			expect(out).not.toContain("<a");
-			expect(out).not.toContain("data-href");
-		}
-	});
-
-	it("still lets a data:image inline image render", () => {
-		const out = renderer().render("![dot](data:image/png;base64,iVBORw0KGgo=)");
-		expect(out).toContain('<img src="data:image/png;base64,iVBORw0KGgo="');
-	});
-
-	it("a scheme that merely starts with a standard prefix does not pass as standard", () => {
-		const out = renderer().render("[x](https-fake://evil)");
-		expect(out).not.toContain(' href="https-fake');
-		expect(out).toContain("link-unhandled");
-	});
-});
-
-describe("a scheme a plugin claims", () => {
-	function renderWith(schemes: string[], body: string): string {
-		const md = markdownit();
-		installThreadLinkRules(md, { value: schemes });
-		return md.render(body);
-	}
-
-	it("renders as a live link rather than a broken one", () => {
-		const html = renderWith(["ref:"], "See [add](ref://src/cart.ts:Cart:add).");
-
-		expect(html).toContain("link-handled");
-		expect(html).not.toContain("link-unhandled");
-	});
-
-	// The scheme rides along as its own class so a plugin can style its links (the references chip's
-	// icon) without the renderer learning what any scheme means.
-	it("stamps the claimed scheme as a class, so styling stays per-plugin", () => {
-		const html = renderWith(["ref:"], "See [add](ref://src/cart.ts:Cart:add).");
-
-		expect(html).toContain("link-scheme-ref");
-	});
-
-	it("gives an unclaimed scheme no per-scheme class to style", () => {
-		expect(renderWith(["ref:"], "[a](file:///etc/hosts)")).not.toContain("link-scheme-");
-	});
-
-	it("stays inert, because only the JS tap path can see which row it sits in", () => {
-		const html = renderWith(["ref:"], "See [add](ref://src/cart.ts:Cart:add).");
-
-		// Deliberately a regex: `data-href=` contains the substring `href=`, so a plain contains
-		// check would pass on an anchor that still carried a real href.
-		expect(html).not.toMatch(/<a[^>]*\shref=/);
-		expect(html).toContain('data-href="ref://src/cart.ts:Cart:add"');
-	});
-
-	it("falls back to the unhandled tier when nothing claims the scheme", () => {
-		const html = renderWith([], "See [add](ref://src/cart.ts:Cart:add).");
-
-		expect(html).toContain('class="link-unhandled"');
-	});
-
-	it("leaves standard schemes as ordinary anchors", () => {
-		const html = renderWith(["ref:"], "See [docs](https://example.com).");
-
-		expect(html).toContain('href="https://example.com"');
-		expect(html).not.toContain("data-href");
-	});
-
-	it("matches the scheme case-insensitively, since a destination may be spelled either way", () => {
-		expect(renderWith(["ref:"], "[a](REF://src/a.ts)")).toContain("link-handled");
-	});
-
-	it("works with no scheme list at all, which is the state before any plugin loads", () => {
-		const md = markdownit();
-		installThreadLinkRules(md);
-
-		expect(md.render("[a](ref://src/a.ts)")).toContain('class="link-unhandled"');
+	it("leaves standard links live and other links inert", () => {
+		expect(
+			[anchor(render("[web](https://example.com)")), anchor(render("[file](file:///etc/hosts)"))].map(
+				(link) => link.href !== null,
+			),
+		).toEqual([true, false]);
 	});
 });

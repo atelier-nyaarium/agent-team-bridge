@@ -1,13 +1,15 @@
 // The fixed identity set, and how each runtime is seeded with its half of it.
 
+import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { FEDERATION_SECRET_SCHEMA } from "../federation-server/federationSecret.js";
 import { FileSecretStore } from "../federation-server/fileSecretStore.js";
 import { ALLOWLIST_FILE, Allowlist } from "../gateway/federation/allowlist.js";
 import { CONTENT_KEYS_FILE, ContentKeyStore } from "../gateway/federation/contentKeyStore.js";
-import type { SignedAdmission } from "../shared/admission.js";
-import type { Identity } from "../shared/crypto.js";
+import { type SignedAdmission, signAdmission } from "../shared/admission.js";
+import { deriveContentKey } from "../shared/content-envelope.js";
+import { generateIdentity, type Identity } from "../shared/crypto.js";
 
 ////////////////////////////////
 //  Interfaces & Types
@@ -40,6 +42,74 @@ export function contentKeyOf(set: IdentitySet): Buffer {
 	return Buffer.from(set.content.key, "base64");
 }
 
+export interface MintIdentitySetOptions {
+	domainId: string;
+	gatewayId: string;
+	isAdminDomain?: boolean;
+	issuedAt?: number;
+	/** Shared with the Router; a second Domain reuses the first set's. */
+	router?: Identity;
+	tokens?: IdentitySet["tokens"];
+	device?: string;
+	conversationId?: string;
+	nonces?: { gateway: string; console: string };
+}
+
+/** A whole Domain's identities, admitted and keyed the way the committed set is. */
+export function mintIdentitySet(options: MintIdentitySetOptions): IdentitySet {
+	const issuedAt = options.issuedAt ?? Date.now();
+	const owner = generateIdentity();
+	const gateway = generateIdentity();
+	const console_ = generateIdentity();
+	const nonces = options.nonces ?? {
+		gateway: randomBytes(12).toString("base64"),
+		console: randomBytes(12).toString("base64"),
+	};
+	return {
+		issuedAt,
+		router: { identity: options.router ?? generateIdentity() },
+		domain: { id: options.domainId, owner, isAdminDomain: options.isAdminDomain ?? false },
+		gateway: {
+			id: options.gatewayId,
+			identity: gateway,
+			admission: signAdmission(
+				{
+					kind: "gateway",
+					signPub: gateway.sign.pub,
+					boxPub: gateway.box.pub,
+					gatewayId: options.gatewayId,
+					issuedAt,
+					nonce: nonces.gateway,
+				},
+				owner.sign.priv,
+				owner.sign.pub,
+			),
+		},
+		console: {
+			device: options.device ?? `${options.domainId}-phone`,
+			conversationId: options.conversationId ?? `${options.domainId}-console`,
+			identity: console_,
+			admission: signAdmission(
+				{
+					kind: "console",
+					signPub: console_.sign.pub,
+					boxPub: console_.box.pub,
+					issuedAt,
+					nonce: nonces.console,
+				},
+				owner.sign.priv,
+				owner.sign.pub,
+			),
+		},
+		tokens: options.tokens ?? {
+			console: `${options.domainId}-console-token`,
+			federation: `${options.domainId}-federation-token`,
+			host: `${options.domainId}-host-token`,
+		},
+		content: { epoch: 1, key: deriveContentKey(owner.sign.priv, options.domainId, 1).toString("base64") },
+	};
+}
+
 /** Writes the Router's federation file with the fixed identity, then opens the store over it. */
 export async function seedRouter(dataDir: string, set: IdentitySet): Promise<FileSecretStore> {
 	fs.mkdirSync(dataDir, { recursive: true });
@@ -55,6 +125,12 @@ export async function seedRouter(dataDir: string, set: IdentitySet): Promise<Fil
 	);
 	const store = new FileSecretStore(dataDir);
 	await store.init();
+	await seedDomain(store, set);
+	return store;
+}
+
+/** Roots `set`'s Domain in an open Router store, admitting its gateway and console. */
+export async function seedDomain(store: FileSecretStore, set: IdentitySet): Promise<void> {
 	store.saveDomain(set.domain.id, {
 		ownerSignPub: set.domain.owner.sign.pub,
 		ownerBoxPub: set.domain.owner.box.pub,
@@ -63,7 +139,6 @@ export async function seedRouter(dataDir: string, set: IdentitySet): Promise<Fil
 		isAdminDomain: set.domain.isAdminDomain,
 	});
 	await store.flushDomain(set.domain.id);
-	return store;
 }
 
 /** Writes the federation files a gateway reads at boot; `contentKey: false` leaves the keyring empty. */

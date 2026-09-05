@@ -21,7 +21,7 @@ function quoted(title: string): string {
 	return `"${cut}${cut.length < oneLine.length ? "..." : ""}"`;
 }
 
-function classify(
+export function classifyBoardChange(
 	sessionKey: string,
 	pre: BoardEntry | undefined,
 	post: BoardEntry | undefined,
@@ -51,7 +51,7 @@ function render(sessionKey: string, changes: readonly Change<BoardEntry>[]): str
 	const changed: string[] = [];
 	const named: string[] = [];
 	for (const change of changes) {
-		const c = classify(sessionKey, change.pre, change.post);
+		const c = classifyBoardChange(sessionKey, change.pre, change.post);
 		if (c === null) continue;
 		if (c.kind === "changed") changed.push(change.identity);
 		else named.push(lineFor(c));
@@ -72,7 +72,7 @@ function render(sessionKey: string, changes: readonly Change<BoardEntry>[]): str
 export const boardAwarenessSubscriber: AwarenessSubscriber<BoardEntry> = {
 	source: "task-board",
 	act(sessionKey, pre, post) {
-		return classify(sessionKey, pre, post)?.kind === "gone" ? "act_now" : "no_act";
+		return classifyBoardChange(sessionKey, pre, post)?.kind === "gone" ? "act_now" : "no_act";
 	},
 	render,
 };

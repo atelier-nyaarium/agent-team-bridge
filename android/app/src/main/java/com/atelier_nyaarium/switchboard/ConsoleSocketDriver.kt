@@ -1,5 +1,7 @@
 package com.atelier_nyaarium.switchboard
 
+import com.atelier_nyaarium.switchboard.proto.Protocol
+
 /** Generation-routed frames and durable acknowledgements. */
 internal class ConsoleSocketDriver(
 	private val coordinator: ConsoleTransportCoordinator,
@@ -121,7 +123,7 @@ internal class ConsoleSocketDriver(
 				}
 				is ConsoleSocketFrame.Refused -> {
 					DebugLog.log("Socket", "refused ${frame.value.reason} floor=${frame.value.floor} dropped=${frame.value.dropped}")
-					if (frame.value.reason == "cursor_stale") {
+					if (frame.value.reason == Protocol.Wire.CONSOLE_REASON_CURSOR_STALE) {
 						val floor = frame.value.floor ?: 0L
 						val dropped = frame.value.dropped ?: 0L
 						coordinator.adoptFloor(floor)

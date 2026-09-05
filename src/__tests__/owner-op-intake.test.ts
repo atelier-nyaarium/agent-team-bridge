@@ -1,20 +1,27 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { InboxService } from "../federation-server/inbox/inboxService.js";
 import { OwnerOpIntake } from "../federation-server/inbox/ownerOpIntake.js";
 import { OwnerStoreRegistry } from "../federation-server/inbox/ownerStoreRegistry.js";
 import { DomainQuota } from "../federation-server/owner/domainQuota.js";
-import { OwnerQuarantined } from "../federation-server/owner/ownerStateStore.js";
-import { REGISTER_MAX_SKEW_MS, signAdmission } from "../shared/admission.js";
-import { generateIdentity } from "../shared/crypto.js";
+import { signAdmission } from "../shared/admission.js";
+import { fingerprint, generateIdentity } from "../shared/crypto.js";
+import { FEDERATION_VALUE_PROTOCOL_VERSION } from "../shared/router-protocol.js";
+import { ConsoleOpSchema } from "../shared/schemas.js";
 import { signOwnerOp, signRowEnvelope } from "../shared/schemasInbox.js";
+import { mintIdentitySet } from "../testing/identitySet.js";
 
-function setup(options: { pushResult?: boolean; quarantined?: boolean } = {}) {
+const roots: string[] = [];
+
+afterEach(() => {
+	for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
+});
+
+function localIntake(options: { maxCachedAnswers?: number } = {}) {
 	const owner = generateIdentity();
 	const consoleIdentity = generateIdentity();
-	const gateway = generateIdentity();
 	const admission = signAdmission(
 		{
 			kind: "console",
@@ -26,71 +33,77 @@ function setup(options: { pushResult?: boolean; quarantined?: boolean } = {}) {
 		owner.sign.priv,
 		owner.sign.pub,
 	);
-	const calls: unknown[][] = [];
-	const waking: unknown[][] = [];
 	const inbox = {
-		appendRow: () => {
-			if (options.quarantined) throw new OwnerQuarantined({ from: 1, to: 1 });
-			return { outcome: "accepted", opKey: { conversationId: "c", opId: "o" }, seq: 1, row: { seq: 1 } };
-		},
 		registerConsumer: () => ({ cursor: 0, cursorEpoch: 1 }),
-		rows: () => [],
-		readOwner: () => [],
-		advanceCursor: () => ({ outcome: "ok" }),
-		opResult: () => null,
+		ownerOpNonce: () => null,
+		acceptOwnerOpNonce: () => true,
 	} as never;
 	const intake = new OwnerOpIntake({
 		inbox,
-		getDomain: () => ({ ownerSignPub: owner.sign.pub, admissions: [admission], revocations: [] }),
-		push: (...args) => {
-			calls.push(args);
-			return options.pushResult ?? true;
-		},
+		getDomain: (domainId) =>
+			domainId === "domain" ? { ownerSignPub: owner.sign.pub, admissions: [admission], revocations: [] } : null,
+		push: () => true,
 		now: () => 1_000_000,
+		...options,
 	});
-	(inbox as { markWaking?: (...args: unknown[]) => void }).markWaking = (...args) => waking.push(args);
-	return { owner, consoleIdentity, gateway, intake, calls, waking };
+	return { owner, consoleIdentity, intake };
 }
 
-function op(
-	fixture: ReturnType<typeof setup>,
-	kind: string,
-	nonce: string,
-	options: { signer?: string; at?: number; value?: Record<string, unknown> } = {},
+function signedOp(
+	fixture: ReturnType<typeof localIntake>,
+	value: Record<string, unknown>,
+	options: {
+		domainId?: string;
+		device?: string;
+		opId?: string;
+		nonce?: string;
+		signer?: ReturnType<typeof generateIdentity>;
+	} = {},
 ) {
-	const fields = {
-		v: 1 as const,
-		domainId: "domain",
-		signerSignPub: options.signer ?? fixture.consoleIdentity.sign.pub,
-		conversationId: "c",
-		device: "phone",
-		opId: `o-${nonce}`,
-		at: options.at ?? 1_000_000,
-		nonce: Buffer.from(nonce).toString("base64"),
-		op: { kind, ...(options.value ?? {}) },
-	};
+	const signer = options.signer ?? fixture.consoleIdentity;
 	return signOwnerOp(
-		fields,
-		options.signer === fixture.gateway.sign.pub ? fixture.gateway.sign.priv : fixture.consoleIdentity.sign.priv,
+		{
+			v: 1,
+			domainId: options.domainId ?? "domain",
+			signerSignPub: signer.sign.pub,
+			conversationId: "conversation",
+			device: options.device ?? "phone",
+			opId: options.opId ?? "op-1",
+			at: 1_000_000,
+			nonce: Buffer.from(options.nonce ?? options.opId ?? "nonce").toString("base64"),
+			op: value,
+		},
+		signer.sign.priv,
 	);
 }
 
-describe("OwnerOpIntake", () => {
-	it("accepts admitted console operations and serves registry reads", async () => {
-		const fixture = setup();
-		expect(await fixture.intake.handle(op(fixture, "consumer_register", "register"))).toMatchObject({
-			cursorEpoch: 1,
-		});
-		expect(await fixture.intake.handle(op(fixture, "inbox_read", "read"))).toEqual([]);
-		expect(
-			await fixture.intake.handle(
-				op(fixture, "inbox_advance", "advance", { value: { cursor: 0, cursorEpoch: 1 } }),
-			),
-		).toEqual({ outcome: "ok" });
-	});
+function rowFor(op: ReturnType<typeof signedOp>, epoch: number | "clear" = 1) {
+	const envelope = {
+		origin: {
+			kind: epoch === "clear" ? ("router" as const) : ("console" as const),
+			domainId: op.domainId,
+			device: op.device,
+		},
+		opKey: { conversationId: op.conversationId, opId: op.opId },
+		epoch,
+		kind: epoch === "clear" ? ("op_result" as const) : ("console_op" as const),
+		contentRefs: [],
+	};
+	const body =
+		epoch === "clear"
+			? {}
+			: {
+					v: 1 as const,
+					epoch,
+					nonce: Buffer.alloc(12).toString("base64"),
+					ciphertext: Buffer.alloc(16).toString("base64"),
+				};
+	return { envelope, producerSig: signRowEnvelope(envelope, op.signerSignPub), body };
+}
 
-	it("answers a re-posted in-flight op with that op's one answer, running it once", async () => {
-		const fixture = setup();
+describe("OwnerOp intake", () => {
+	it("shares one in-flight answer, retries an unsettled failure, and evicts answers oldest-first", async () => {
+		const fixture = localIntake({ maxCachedAnswers: 2 });
 		let runs = 0;
 		let release: ((value: unknown) => void) | undefined;
 		fixture.intake.register("slow", () => {
@@ -99,282 +112,166 @@ describe("OwnerOpIntake", () => {
 				release = resolve;
 			});
 		});
-		const first = fixture.intake.handle(op(fixture, "slow", "same"));
-		const second = fixture.intake.handle(op(fixture, "slow", "same"));
-		release?.({ answered: true });
-
-		expect(await first).toEqual({ answered: true });
-		expect(await second).toEqual({ answered: true });
+		const first = fixture.intake.handle(signedOp(fixture, { kind: "slow" }, { opId: "same" }));
+		const second = fixture.intake.handle(signedOp(fixture, { kind: "slow" }, { opId: "same" }));
+		release?.({ run: 1 });
+		expect(await Promise.all([first, second])).toEqual([{ run: 1 }, { run: 1 }]);
 		expect(runs).toBe(1);
-	});
 
-	it("runs a re-posted op again after the first attempt failed to settle", async () => {
-		const fixture = setup();
 		let attempts = 0;
 		fixture.intake.register("flaky", () => {
 			attempts++;
 			if (attempts === 1) throw new Error("transient");
-			return { answered: attempts };
+			return { run: attempts };
+		});
+		await expect(fixture.intake.handle(signedOp(fixture, { kind: "flaky" }, { opId: "flaky" }))).rejects.toThrow();
+		expect(await fixture.intake.handle(signedOp(fixture, { kind: "flaky" }, { opId: "flaky" }))).toEqual({
+			run: 2,
 		});
 
-		await expect(fixture.intake.handle(op(fixture, "flaky", "same"))).rejects.toThrow("transient");
-		expect(await fixture.intake.handle(op(fixture, "flaky", "same"))).toEqual({ answered: 2 });
+		fixture.intake.register("count", () => ({ run: ++runs }));
+		expect(await fixture.intake.handle(signedOp(fixture, { kind: "count" }, { opId: "a" }))).toEqual({ run: 2 });
+		expect(await fixture.intake.handle(signedOp(fixture, { kind: "count" }, { opId: "b" }))).toEqual({ run: 3 });
+		expect(await fixture.intake.handle(signedOp(fixture, { kind: "count" }, { opId: "c" }))).toEqual({ run: 4 });
+		expect(await fixture.intake.handle(signedOp(fixture, { kind: "count" }, { opId: "a" }))).toEqual({ run: 5 });
 	});
 
-	it("scopes a cached answer to its Domain and drops the oldest past the cap", async () => {
-		const fixture = setup();
+	it("refuses a foreign Domain, foreign device, clear row, and an old gateway protocol", async () => {
+		const fixture = localIntake();
+		const foreignDomain = await fixture.intake.handle(
+			signedOp(fixture, { kind: "consumer_register" }, { domainId: "other" }),
+		);
+		expect(foreignDomain).toMatchObject({ outcome: "refused" });
+		const foreignDevice = await fixture.intake.handle(
+			signedOp(
+				fixture,
+				{
+					kind: "deliver",
+					address: "owner:domain/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+					row: rowFor(signedOp(fixture, { kind: "x" }, { device: "tablet", opId: "device" }), 1),
+				},
+				{ opId: "device" },
+			),
+		);
+		expect(foreignDevice).toMatchObject({ outcome: "refused" });
+		const clearOp = signedOp(
+			fixture,
+			{
+				kind: "deliver",
+				address: "owner:domain/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+				row: rowFor(signedOp(fixture, { kind: "x" }), "clear"),
+			},
+			{ opId: "clear" },
+		);
+		expect(await fixture.intake.handle(clearOp)).toMatchObject({ outcome: "refused" });
+		fixture.intake.setGatewayProtocol(() => FEDERATION_VALUE_PROTOCOL_VERSION - 1);
+		const old = signedOp(
+			fixture,
+			{
+				kind: "deliver",
+				address: "session:domain/gateway/session",
+				row: rowFor(signedOp(fixture, { kind: "x" }, { opId: "old" }), 1),
+			},
+			{ opId: "old" },
+		);
+		expect(await fixture.intake.handle(old)).toMatchObject({ outcome: "refused", reason: "unsupported" });
+	});
+
+	it("returns durability uncertainty while the owner store is quarantined", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "owner-op-quarantine-"));
+		roots.push(root);
+		const set = mintIdentitySet({ domainId: "domain", gatewayId: "gateway" });
+		const registry = new OwnerStoreRegistry({
+			dataDir: root,
+			ownerOf: () => set.domain.owner.sign.pub,
+			quotaFor: () =>
+				new DomainQuota({ dir: root, limitBytes: 10_000_000, statfs: () => ({ available: 10_000_000 }) }),
+			now: () => 1_000_000,
+		});
+		const store = registry.for(set.domain.id);
+		store.append("rows", { value: 1 });
+		store.append("rows", { value: 2 });
+		store.close();
+		const ownerDir = path.join(root, "owner", set.domain.id, fingerprint(set.domain.owner.sign.pub));
+		const journal = path.join(ownerDir, "journal-0.log");
+		const lines = fs.readFileSync(journal, "utf8").trim().split("\n");
+		lines[0] = "{";
+		fs.writeFileSync(journal, `${lines.join("\n")}\n`);
+		const reopened = new OwnerStoreRegistry({
+			dataDir: root,
+			ownerOf: () => set.domain.owner.sign.pub,
+			quotaFor: () =>
+				new DomainQuota({ dir: root, limitBytes: 10_000_000, statfs: () => ({ available: 10_000_000 }) }),
+			now: () => 1_000_000,
+		});
+		const inbox = new InboxService(reopened, {
+			signPub: set.router.identity.sign.pub,
+			signPriv: set.router.identity.sign.priv,
+		});
 		const intake = new OwnerOpIntake({
-			inbox: { registerConsumer: () => ({ cursor: 0, cursorEpoch: 1 }) } as never,
+			inbox,
 			getDomain: () => ({
-				ownerSignPub: fixture.owner.sign.pub,
-				admissions: [
-					signAdmission(
-						{
-							kind: "console",
-							signPub: fixture.consoleIdentity.sign.pub,
-							boxPub: fixture.consoleIdentity.box.pub,
-							issuedAt: 1,
-							nonce: "admit",
-						},
-						fixture.owner.sign.priv,
-						fixture.owner.sign.pub,
-					),
-				],
+				ownerSignPub: set.domain.owner.sign.pub,
+				admissions: [set.console.admission],
 				revocations: [],
 			}),
 			push: () => true,
 			now: () => 1_000_000,
-			maxCachedAnswers: 2,
 		});
-		let runs = 0;
-		intake.register("count", () => ({ run: ++runs }));
-		const signed = (nonce: string, domainId = "domain") =>
-			signOwnerOp(
+		expect(
+			await intake.handle(
+				signOwnerOp(
+					{ ...setToFields(set), op: { kind: "consumer_register", incarnation: 0 } },
+					set.console.identity.sign.priv,
+				),
+			),
+		).toMatchObject({
+			outcome: "durability_uncertain",
+		});
+		reopened.close();
+	});
+
+	it("requires each ConsoleOp kind's fields", () => {
+		const cases = [
+			[{ kind: "send", to: "x", body: "y" }, ["to", "body"]],
+			[{ kind: "respond", session_id: "s" }, ["session_id"]],
+			[{ kind: "report_read", team: "t", epoch: 0, seq: 0 }, ["team", "epoch", "seq"]],
+			[{ kind: "tmux_send", target: "t" }, ["target"]],
+			[{ kind: "create_session", target: "t" }, ["target"]],
+			[{ kind: "list_dirs", path: "" }, ["path"]],
+			[
 				{
-					v: 1 as const,
-					domainId,
-					signerSignPub: fixture.consoleIdentity.sign.pub,
-					conversationId: "c",
-					device: "phone",
-					opId: `o-${nonce}`,
-					at: 1_000_000,
-					nonce: Buffer.from(nonce).toString("base64"),
-					op: { kind: "count" },
+					kind: "cross_domain_request",
+					listeningToken: "t",
+					pin: "p",
+					requesterOwnerSignPub: "o",
+					requesterDomainId: "d",
+					requesterGatewayId: "g",
 				},
-				fixture.consoleIdentity.sign.priv,
-			);
-
-		expect(await intake.handle(signed("a"))).toEqual({ run: 1 });
-		// The same signer and nonce in another Domain is its own op, not a replay.
-		expect(await intake.handle(signed("a", "other"))).toEqual({ run: 2 });
-		expect(await intake.handle(signed("b"))).toEqual({ run: 3 });
-		// Three answers exceed the cap of two: the first is gone, so its re-post runs again.
-		expect(await intake.handle(signed("a"))).toEqual({ run: 4 });
-		expect(await intake.handle(signed("b"))).toEqual({ run: 3 });
-	});
-
-	it("refuses unauthorized, stale, mismatched, and unsupported operations, and answers a replay with its first result", async () => {
-		const fixture = setup();
-		expect(
-			await fixture.intake.handle(
-				op(fixture, "consumer_register", "gateway", { signer: fixture.gateway.sign.pub }),
-			),
-		).toMatchObject({ outcome: "refused" });
-		const registered = await fixture.intake.handle(op(fixture, "consumer_register", "replay"));
-		expect(registered).toMatchObject({ cursorEpoch: 1 });
-		expect(await fixture.intake.handle(op(fixture, "consumer_register", "replay"))).toEqual(registered);
-		expect(await fixture.intake.handle(op(fixture, "consumer_register", "stale", { at: 1 }))).toMatchObject({
-			outcome: "refused",
-		});
-		expect(await fixture.intake.handle(op(fixture, "unsupported", "unsupported"))).toMatchObject({
-			outcome: "refused",
-		});
-	});
-
-	it("refuses a foreign Domain, a foreign device, and clear rows", async () => {
-		const fixture = setup();
-		const validRow = {
-			envelope: {
-				origin: { kind: "console" as const, domainId: "domain", device: "phone" },
-				opKey: { conversationId: "c", opId: "o-foreign" },
-				epoch: "peer" as const,
-				kind: "message" as const,
-				contentRefs: [],
-			},
-			producerSig: "",
-			body: { ephemeralPub: "YQ==", nonce: "Yg==", ciphertext: "Yw==", signature: "ZA==" },
-		};
-		validRow.producerSig = signRowEnvelope(validRow.envelope, fixture.consoleIdentity.sign.priv);
-		expect(
-			await fixture.intake.handle(
-				op(fixture, "deliver", "foreign-domain", {
-					value: { address: "owner:other/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=", row: validRow },
-				}),
-			),
-		).toMatchObject({ outcome: "refused" });
-		const foreignDevice = {
-			...validRow,
-			envelope: {
-				...validRow.envelope,
-				opKey: { conversationId: "c", opId: "o-device" },
-				origin: { ...validRow.envelope.origin, device: "tablet" },
-			},
-		};
-		foreignDevice.producerSig = signRowEnvelope(foreignDevice.envelope, fixture.consoleIdentity.sign.priv);
-		expect(
-			await fixture.intake.handle(
-				op(fixture, "deliver", "foreign-device", {
-					value: { address: "owner:domain/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=", row: foreignDevice },
-				}),
-			),
-		).toMatchObject({ outcome: "refused" });
-	});
-
-	it("marks an accepted row waking when push does not take it", async () => {
-		const fixture = setup({ pushResult: false });
-		const row = {
-			envelope: {
-				origin: { kind: "console" as const, domainId: "domain", device: "phone" },
-				opKey: { conversationId: "c", opId: "o-wake" },
-				epoch: "peer" as const,
-				kind: "message" as const,
-				contentRefs: [],
-			},
-			producerSig: "",
-			body: { ephemeralPub: "YQ==", nonce: "Yg==", ciphertext: "Yw==", signature: "ZA==" },
-		};
-		row.producerSig = signRowEnvelope(row.envelope, fixture.consoleIdentity.sign.priv);
-		const result = await fixture.intake.handle(
-			op(fixture, "deliver", "wake", {
-				value: { address: "owner:domain/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=", row },
-			}),
-		);
-		expect(result).toMatchObject({ outcome: "accepted" });
-		expect(fixture.waking).toHaveLength(1);
-	});
-
-	it("refuses console delivery to an old gateway protocol", async () => {
-		const fixture = setup();
-		const row = {
-			envelope: {
-				origin: { kind: "console" as const, domainId: "domain", device: "phone" },
-				opKey: { conversationId: "c", opId: "o-old-console" },
-				epoch: "peer" as const,
-				kind: "console_op" as const,
-				contentRefs: [],
-			},
-			producerSig: "",
-			body: { ephemeralPub: "YQ==", nonce: "Yg==", ciphertext: "Yw==", signature: "ZA==" },
-		};
-		row.producerSig = signRowEnvelope(row.envelope, fixture.consoleIdentity.sign.priv);
-		fixture.intake.setGatewayProtocol(() => 1);
-		expect(
-			await fixture.intake.handle(
-				op(fixture, "deliver", "old-console", {
-					value: { address: "session:domain/gateway/session", row },
-				}),
-			),
-		).toEqual({
-			opKey: { conversationId: "c", opId: "o-old-console" },
-			outcome: "refused",
-			reason: "unsupported",
-		});
-	});
-
-	it("answers durability uncertainty for a quarantined inbox", async () => {
-		const fixture = setup({ quarantined: true });
-		const row = {
-			envelope: {
-				origin: { kind: "console" as const, domainId: "domain", device: "phone" },
-				opKey: { conversationId: "c", opId: "o-quarantine" },
-				epoch: "peer" as const,
-				kind: "message" as const,
-				contentRefs: [],
-			},
-			producerSig: "",
-			body: { ephemeralPub: "YQ==", nonce: "Yg==", ciphertext: "Yw==", signature: "ZA==" },
-		};
-		row.producerSig = signRowEnvelope(row.envelope, fixture.consoleIdentity.sign.priv);
-		expect(
-			await fixture.intake.handle(
-				op(fixture, "deliver", "quarantine", {
-					value: { address: "owner:domain/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=", row },
-				}),
-			),
-		).toMatchObject({ outcome: "durability_uncertain" });
-	});
-
-	it("refuses a nonce accepted by a previous intake over the same store", async () => {
-		const root = fs.mkdtempSync(path.join(os.tmpdir(), "owner-op-nonce-"));
-		const owner = generateIdentity();
-		const consoleIdentity = generateIdentity();
-		const admission = signAdmission(
-			{
-				kind: "console",
-				signPub: consoleIdentity.sign.pub,
-				boxPub: consoleIdentity.box.pub,
-				issuedAt: 1,
-				nonce: "admit",
-			},
-			owner.sign.priv,
-			owner.sign.pub,
-		);
-		const registry = new OwnerStoreRegistry({
-			dataDir: root,
-			ownerOf: () => owner.sign.pub,
-			quotaFor: () =>
-				new DomainQuota({ dir: root, limitBytes: 100_000_000, statfs: () => ({ available: 100_000_000 }) }),
-			now: () => 1_000_000,
-		});
-		const router = generateIdentity();
-		const inbox = new InboxService(registry, { signPub: router.sign.pub, signPriv: router.sign.priv });
-		const params = {
-			inbox,
-			getDomain: () => ({ ownerSignPub: owner.sign.pub, admissions: [admission], revocations: [] }),
-			push: () => true,
-			now: () => 1_000_000,
-		};
-		const first = new OwnerOpIntake(params);
-		const second = new OwnerOpIntake(params);
-		const fixture = { owner, consoleIdentity, gateway: generateIdentity() } as ReturnType<typeof setup>;
-		expect(
-			await first.handle(op(fixture, "consumer_register", "durable", { signer: consoleIdentity.sign.pub })),
-		).toMatchObject({
-			cursor: 0,
-		});
-		expect(
-			await second.handle(op(fixture, "consumer_register", "durable", { signer: consoleIdentity.sign.pub })),
-		).toMatchObject({
-			outcome: "refused",
-			reason: "replay",
-		});
-		registry.close();
-		fs.rmSync(root, { recursive: true, force: true });
-	});
-
-	it("sweeps only nonces older than the skew window", () => {
-		const root = fs.mkdtempSync(path.join(os.tmpdir(), "owner-op-sweep-"));
-		const now = 1_000_000;
-		const owner = generateIdentity();
-		const registry = new OwnerStoreRegistry({
-			dataDir: root,
-			ownerOf: () => owner.sign.pub,
-			quotaFor: () =>
-				new DomainQuota({ dir: root, limitBytes: 100_000_000, statfs: () => ({ available: 100_000_000 }) }),
-			now: () => now,
-		});
-		const router = generateIdentity();
-		const inbox = new InboxService(registry, { signPub: router.sign.pub, signPriv: router.sign.priv });
-		inbox.acceptOwnerOpNonce("domain", "exact", "n", now - REGISTER_MAX_SKEW_MS);
-		inbox.acceptOwnerOpNonce("domain", "past", "n", now - REGISTER_MAX_SKEW_MS - 1);
-		inbox.acceptOwnerOpNonce("domain", "inside", "n", now - REGISTER_MAX_SKEW_MS + 1);
-		inbox.sweep(now);
-		expect(inbox.ownerOpNonce("domain", "exact", "n")).not.toBeNull();
-		expect(inbox.ownerOpNonce("domain", "past", "n")).toBeNull();
-		expect(inbox.ownerOpNonce("domain", "inside", "n")).not.toBeNull();
-		inbox.sweep(now);
-		expect(inbox.ownerOpNonce("domain", "inside", "n")).not.toBeNull();
-		registry.close();
-		fs.rmSync(root, { recursive: true, force: true });
+				["listeningToken", "pin", "requesterOwnerSignPub", "requesterDomainId", "requesterGatewayId"],
+			],
+			[{ kind: "cross_domain_unlink", domainId: "d" }, ["domainId"]],
+		] as const;
+		for (const [value, required] of cases) {
+			expect(ConsoleOpSchema.safeParse(value).success).toBe(true);
+			for (const field of required) {
+				const rejected = { ...value } as Record<string, unknown>;
+				delete rejected[field];
+				expect(ConsoleOpSchema.safeParse(rejected).success).toBe(false);
+			}
+		}
 	});
 });
+
+function setToFields(set: ReturnType<typeof mintIdentitySet>) {
+	return {
+		v: 1 as const,
+		domainId: set.domain.id,
+		signerSignPub: set.console.identity.sign.pub,
+		conversationId: set.console.conversationId,
+		device: set.console.device,
+		opId: "quarantine",
+		at: 1_000_000,
+		nonce: Buffer.from("quarantine").toString("base64"),
+	};
+}

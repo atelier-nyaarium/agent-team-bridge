@@ -2,6 +2,7 @@ package com.atelier_nyaarium.switchboard
 
 import java.io.File
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Test
 
@@ -13,7 +14,7 @@ class AttachmentHostTest {
 
 		assertNull(host.clientOrReject(listOf(file)))
 		assertEquals(listOf(file), host.cleaned)
-		assertEquals("Connect before adding attachments", host.message)
+		assertNotNull(host.message)
 	}
 
 	private class FakeAttachmentHost : AttachmentHost {

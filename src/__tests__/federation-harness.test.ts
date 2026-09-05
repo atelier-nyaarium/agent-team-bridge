@@ -51,6 +51,7 @@ describe("federation harness", () => {
 		if (boundSession) return boundSession;
 		h.host.handlers.onCreateSession = (op) =>
 			session(composeSessionName(op.target.name, op.target.sessionName), op.sessionToken);
+		const before = sessions.length;
 		const { envelope, result } = await h.phone.value({
 			kind: "create_session",
 			target: "host",
@@ -58,8 +59,7 @@ describe("federation harness", () => {
 		});
 		expect(envelope.outcome).toBe("accepted");
 		expect(result).toMatchObject({ created: true });
-		const created = sessions.at(-1);
-		if (!created) throw new Error("the daemon was never asked to launch");
+		const created = await h.waitFor(() => sessions[before], "the daemon's launch");
 		await created.ready();
 		boundSession = created;
 		return created;
@@ -255,7 +255,7 @@ describe("federation harness", () => {
 		expect(notice.from).toContain(bound.team);
 	});
 
-	// Last: earlier sessions die here.
+	// The restart drops earlier sessions.
 	it("drains a reply queued while the Router link was down once the gateway restarts", async () => {
 		const late = session("fixture-app.late");
 		await late.ready();

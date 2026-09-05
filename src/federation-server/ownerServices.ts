@@ -40,6 +40,7 @@ export interface OwnerServicesDeps {
 	getDomain: (domainId: string) => DomainSnapshot | null;
 	hasLinkEdge: (srcDomainId: string, dstDomainId: string) => boolean;
 	linkEdgeId: (srcDomainId: string, dstDomainId: string) => string | null;
+	dropLinkEdge: (srcDomainId: string, dstDomainId: string) => void;
 	/** Owner rows wait for the next read. */
 	consoleSockets?: Pick<ConsoleSockets, "pushOwnerRow" | "pushPlane" | "forget" | "readPlanes">;
 	leases?: ReturnType<typeof createLeaseService>;
@@ -147,7 +148,7 @@ export function createOwnerServices(deps: OwnerServicesDeps) {
 		registry,
 		isLinked: (domainId, friendDomainId) => deps.hasLinkEdge(domainId, friendDomainId),
 		linkEdgeId: (domainId, friendDomainId) => deps.linkEdgeId(domainId, friendDomainId),
-		dropLinkEdge: () => undefined,
+		dropLinkEdge: (domainId, friendDomainId) => deps.dropLinkEdge(domainId, friendDomainId),
 		retireRevokedPeerRows: (domainId, sessionTarget, friendDomainId) => {
 			inbox.retireRevokedPeerRows(domainId, sessionTarget, friendDomainId);
 		},

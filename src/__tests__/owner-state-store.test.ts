@@ -1,11 +1,20 @@
-import fs from "node:fs";
+import fs, { readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { InboxService } from "../federation-server/inbox/inboxService.js";
+import { OwnerOpIntake } from "../federation-server/inbox/ownerOpIntake.js";
+import { OwnerStoreRegistry } from "../federation-server/inbox/ownerStoreRegistry.js";
 import { DomainQuota } from "../federation-server/owner/domainQuota.js";
+import { OwnerLock, OwnerLockHeld } from "../federation-server/owner/ownerLock.js";
 import { OwnerQuarantined, OwnerStateStore } from "../federation-server/owner/ownerStateStore.js";
+import { createConsolePushOps, ownerRowBody } from "../gateway/consolePushOps.js";
+import { REGISTER_MAX_SKEW_MS, signAdmission } from "../shared/admission.js";
 import * as atomicWrite from "../shared/atomic-write.js";
-import { fingerprint } from "../shared/crypto.js";
+import { fingerprint, generateIdentity } from "../shared/crypto.js";
+import { ownerKeyId } from "../shared/owner-id.js";
+import { OwnerOpSchema, signOwnerOp, signRowEnvelope } from "../shared/schemasInbox.js";
+import { Address } from "../shared/session-id.js";
 
 const roots: string[] = [];
 const key = { domainId: "domain", ownerSignPub: Buffer.alloc(32, 7).toString("base64") };
@@ -223,7 +232,7 @@ describe("OwnerStateStore", () => {
 	it("rejects a second live open and takes over stale ownership", () => {
 		const dir = root();
 		const first = open(dir);
-		expect(() => open(dir)).toThrow();
+		expect(() => open(dir)).toThrow(OwnerLockHeld);
 		const lock = path.join(ownerDir(dir), "owner.lock");
 		const value = JSON.parse(fs.readFileSync(lock, "utf8")) as {
 			pid: number;
@@ -295,11 +304,16 @@ describe("OwnerStateStore", () => {
 
 	it("settles quota on open and compact", () => {
 		const dir = root();
-		const quota = new DomainQuota({ dir, limitBytes: 10_000_000, statfs: () => ({ available: 100_000_000 }) });
-		const settle = vi.spyOn(quota, "settle");
+		const seeded = open(dir);
+		for (let n = 0; n < 50; n += 1) seeded.append("a", { n, pad: "x".repeat(1_000) });
+		seeded.close();
+		const quota = new DomainQuota({ dir, limitBytes: 100_000, statfs: () => ({ available: 100_000_000 }) });
+		expect(quota.reserve(ownerDir(dir), 100_000)).toEqual({ ok: true });
+		quota.release(ownerDir(dir), 100_000);
 		const store = open(dir, quota);
+		expect(quota.reserve(ownerDir(dir), 100_000)).toMatchObject({ ok: false, reason: "quota" });
 		store.compact();
-		expect(settle).toHaveBeenCalledTimes(2);
+		expect(quota.reserve(ownerDir(dir), 100_000)).toMatchObject({ ok: false, reason: "quota" });
 		store.close();
 	});
 
@@ -349,5 +363,279 @@ describe("OwnerStateStore", () => {
 		expect(store.put("share", "lost", null, { clear: {} })).toMatchObject({ kind: "durability_failure" });
 		expect(JSON.parse(fs.readFileSync(lock, "utf8")).generation).toBe(value.generation + 1);
 		store.close();
+	});
+});
+
+describe("owner state boundaries", () => {
+	it("rejects a live lock with OwnerLockHeld", () => {
+		const dir = root();
+		const lock = OwnerLock.open(dir, 60_000);
+		try {
+			expect(() => OwnerLock.open(dir, 60_000)).toThrow(OwnerLockHeld);
+		} finally {
+			lock.stop();
+		}
+	});
+
+	it("matches the shared owner id vectors", () => {
+		const vectors = JSON.parse(
+			readFileSync(new URL("../../tests/fixtures/owner-id/vectors.json", import.meta.url), "utf8"),
+		) as { cases: Array<{ signPub: string; ownerKeyId: string }> };
+		expect(vectors.cases.map((vector) => ownerKeyId(vector.signPub))).toEqual(
+			vectors.cases.map((vector) => vector.ownerKeyId),
+		);
+	});
+
+	it("takes over a stale lock and fences the previous store", () => {
+		const dir = root();
+		const first = open(dir);
+		const lockPath = path.join(ownerDir(dir), "owner.lock");
+		const value = JSON.parse(fs.readFileSync(lockPath, "utf8")) as { heartbeatAt: number };
+		fs.writeFileSync(lockPath, JSON.stringify({ ...value, heartbeatAt: Date.now() - 1000 }));
+		const second = open(dir);
+		expect(first.put("share", "old", null, { clear: {} })).toMatchObject({ kind: "durability_failure" });
+		second.close();
+		first.close();
+	});
+});
+
+function durableIntake() {
+	const dir = root();
+	const owner = generateIdentity();
+	const consoleIdentity = generateIdentity();
+	const router = generateIdentity();
+	const admission = signAdmission(
+		{
+			kind: "console",
+			signPub: consoleIdentity.sign.pub,
+			boxPub: consoleIdentity.box.pub,
+			issuedAt: 1,
+			nonce: "admit",
+		},
+		owner.sign.priv,
+		owner.sign.pub,
+	);
+	const registry = new OwnerStoreRegistry({
+		dataDir: dir,
+		ownerOf: (domainId) => (domainId === "domain" ? owner.sign.pub : null),
+		quotaFor: () => new DomainQuota({ dir, limitBytes: 10_000_000, statfs: () => ({ available: 100_000_000 }) }),
+		now: () => 1_000_000,
+	});
+	const inbox = new InboxService(registry, { signPub: router.sign.pub, signPriv: router.sign.priv });
+	const intake = new OwnerOpIntake({
+		inbox,
+		getDomain: () => ({ ownerSignPub: owner.sign.pub, admissions: [admission], revocations: [] }),
+		push: () => true,
+		now: () => 1_000_000,
+	});
+	return { dir, owner, consoleIdentity, admission, registry, inbox, intake };
+}
+
+function signedOwnerOp(
+	fixture: ReturnType<typeof durableIntake>,
+	kind: string,
+	nonce: string,
+	value: Record<string, unknown> = {},
+) {
+	const fields = {
+		v: 1 as const,
+		domainId: "domain",
+		signerSignPub: fixture.consoleIdentity.sign.pub,
+		conversationId: "conversation",
+		device: "phone",
+		opId: `op-${nonce}`,
+		at: 1_000_000,
+		nonce: Buffer.from(nonce).toString("base64"),
+		op: { kind, ...value },
+	};
+	return signOwnerOp(fields, fixture.consoleIdentity.sign.priv);
+}
+
+function consoleRow(fixture: ReturnType<typeof durableIntake>, opId: string) {
+	const envelope = {
+		origin: { kind: "console" as const, domainId: "domain", device: "phone" },
+		opKey: { conversationId: "conversation", opId },
+		epoch: "peer" as const,
+		kind: "message" as const,
+		contentRefs: [],
+	};
+	return {
+		envelope,
+		producerSig: signRowEnvelope(envelope, fixture.consoleIdentity.sign.priv),
+		body: { ephemeralPub: "YQ==", nonce: "Yg==", ciphertext: "Yw==", signature: "ZA==" },
+	};
+}
+
+describe("OwnerOpIntake", () => {
+	it("persists registration, cursor state, and replay answers", async () => {
+		const fixture = durableIntake();
+		const registered = await fixture.intake.handle(signedOwnerOp(fixture, "consumer_register", "register"));
+		const cursorEpoch = (registered as { cursorEpoch: number }).cursorEpoch;
+		expect(registered).toMatchObject({ cursor: 0 });
+		expect(await fixture.intake.handle(signedOwnerOp(fixture, "consumer_register", "register"))).toEqual(
+			registered,
+		);
+		expect(await fixture.intake.handle(signedOwnerOp(fixture, "inbox_read", "read"))).toEqual([]);
+		expect(
+			await fixture.intake.handle(signedOwnerOp(fixture, "inbox_advance", "advance", { cursor: 1, cursorEpoch })),
+		).toEqual({
+			outcome: "ok",
+		});
+		expect(
+			fixture.registry.for("domain").get("consumer", `consumer:${fixture.consoleIdentity.sign.pub}`),
+		).toMatchObject({
+			clear: { cursor: 1, cursorEpoch },
+		});
+		fixture.registry.close();
+	});
+
+	it("persists delivered rows and their result ledger", async () => {
+		const fixture = durableIntake();
+		const result = await fixture.intake.handle(
+			signedOwnerOp(fixture, "deliver", "deliver", {
+				address: `owner:domain/${fixture.owner.sign.pub}`,
+				row: consoleRow(fixture, "op-deliver"),
+			}),
+		);
+		expect(result).toMatchObject({ outcome: "accepted", seq: 1 });
+		expect(
+			fixture.inbox.rows({ kind: "owner", domainId: "domain", ownerSignPub: fixture.owner.sign.pub }, 1, 10),
+		).toHaveLength(1);
+		expect(fixture.inbox.opResult("domain", { conversationId: "conversation", opId: "op-deliver" })).toEqual({
+			opKey: { conversationId: "conversation", opId: "op-deliver" },
+			outcome: "accepted",
+			seq: 1,
+		});
+		fixture.registry.close();
+	});
+
+	it("stores accepted nonces and rejects them after intake recreation", async () => {
+		const fixture = durableIntake();
+		const op = signedOwnerOp(fixture, "consumer_register", "durable");
+		expect(await fixture.intake.handle(op)).toMatchObject({ cursor: 0 });
+		const second = new OwnerOpIntake({
+			inbox: fixture.inbox,
+			getDomain: () => ({
+				ownerSignPub: fixture.owner.sign.pub,
+				admissions: [fixture.admission],
+				revocations: [],
+			}),
+			push: () => true,
+			now: () => 1_000_000,
+		});
+		const replay = await second.handle(op);
+		expect(replay).toMatchObject({ outcome: "refused", reason: "replay" });
+		expect(
+			fixture.inbox.ownerOpNonce(
+				"domain",
+				fixture.consoleIdentity.sign.pub,
+				Buffer.from("durable").toString("base64"),
+			),
+		).toEqual({ at: 1_000_000 });
+		fixture.registry.close();
+	});
+
+	it("sweeps only expired durable nonces", () => {
+		const fixture = durableIntake();
+		const nonce = Buffer.from("n").toString("base64");
+		fixture.inbox.acceptOwnerOpNonce("domain", "exact", nonce, 1_000_000 - REGISTER_MAX_SKEW_MS);
+		fixture.inbox.acceptOwnerOpNonce("domain", "past", nonce, 1_000_000 - REGISTER_MAX_SKEW_MS - 1);
+		fixture.inbox.acceptOwnerOpNonce("domain", "inside", nonce, 1_000_000 - REGISTER_MAX_SKEW_MS + 1);
+		fixture.inbox.sweep(1_000_000);
+		expect(fixture.inbox.ownerOpNonce("domain", "exact", nonce)).not.toBeNull();
+		expect(fixture.inbox.ownerOpNonce("domain", "past", nonce)).toBeNull();
+		expect(fixture.inbox.ownerOpNonce("domain", "inside", nonce)).not.toBeNull();
+		fixture.registry.close();
+	});
+});
+
+describe("OwnerOpSchema", () => {
+	it("accepts fixture values and rejects each field rule violation", () => {
+		const rules = JSON.parse(
+			readFileSync(new URL("../../tests/fixtures/owner-op/field-rules.json", import.meta.url), "utf8"),
+		) as {
+			fields: Record<string, { pattern: string; maxLength?: number; violation: string }>;
+		};
+		const vector = JSON.parse(
+			readFileSync(new URL("../../tests/fixtures/owner-op/vectors.json", import.meta.url), "utf8"),
+		) as {
+			ownerOp: { value: Record<string, unknown>; signature: string };
+		};
+		const value = { ...vector.ownerOp.value, signature: vector.ownerOp.signature };
+		expect(OwnerOpSchema.safeParse(value).success).toBe(true);
+		const rejected = Object.entries(rules.fields).map(([field, rule]) => [field, rule.violation]);
+		expect(
+			rejected.every(([field, candidate]) => !OwnerOpSchema.safeParse({ ...value, [field]: candidate }).success),
+		).toBe(true);
+	});
+});
+
+describe("OwnerRowOutbox", () => {
+	it("persists queued rows across recreation and deduplicates replacement keys", async () => {
+		const dir = root();
+		const producer = generateIdentity();
+		const push = createConsolePushOps({
+			dataDir: dir,
+			ownerId: () => "owner",
+			routerClient: {
+				isConnected: () => false,
+				isRegistered: () => false,
+				callInboxTool: async () => ({}) as never,
+			},
+			localGatewayId: "gateway",
+			localDomainId: "domain",
+			producerSignPriv: producer.sign.priv,
+			ownerSignPub: () => key.ownerSignPub,
+			contentKeyStore: { seal: () => ({ kind: "no_key" as const }) },
+			localAddress: () => Address.local("domain", "gateway", "spawn", "session"),
+			refuseImpersonation: () => null,
+		});
+		push.deliverToOwner({ entry: { kind: "notice", session_id: "notice.one", body: "one" }, dedupeKey: "same" });
+		push.deliverToOwner({ entry: { kind: "notice", session_id: "notice.one", body: "two" }, dedupeKey: "same" });
+		const stored = JSON.parse(fs.readFileSync(path.join(dir, "owner-row-outbox.json"), "utf8")) as Array<{
+			entry: { body: string };
+		}>;
+		expect(stored.map((row) => row.entry.body)).toEqual(["two"]);
+	});
+
+	it("persists mirrored peer entries", () => {
+		const dir = root();
+		const producer = generateIdentity();
+		const push = createConsolePushOps({
+			dataDir: dir,
+			ownerId: () => "owner",
+			routerClient: {
+				isConnected: () => false,
+				isRegistered: () => false,
+				callInboxTool: async () => ({}) as never,
+			},
+			localGatewayId: "gateway",
+			localDomainId: "domain",
+			producerSignPriv: producer.sign.priv,
+			ownerSignPub: () => key.ownerSignPub,
+			contentKeyStore: { seal: () => ({ kind: "no_key" as const }) },
+			localAddress: () => Address.local("domain", "gateway", "spawn", "session"),
+			refuseImpersonation: () => null,
+		});
+		push.mirrorPeer(
+			Address.local("domain", "gateway", "spawn", "session"),
+			"from",
+			"to",
+			{ body: "peer" },
+			"peer-row",
+		);
+		const stored = JSON.parse(fs.readFileSync(path.join(dir, "owner-row-outbox.json"), "utf8")) as Array<{
+			entry: { kind: string };
+		}>;
+		expect(stored[0]?.entry.kind).toBe("peer");
+	});
+
+	it("produces the pinned mailbox value", () => {
+		const pinned = JSON.parse(
+			readFileSync(new URL("../../tests/fixtures/protocol/owner-row-reply.json", import.meta.url), "utf8"),
+		);
+		expect(
+			ownerRowBody({ kind: "reply", session_id: "host.82d560", body: "done", status: "ok" }, 1757000000000),
+		).toEqual(pinned);
 	});
 });

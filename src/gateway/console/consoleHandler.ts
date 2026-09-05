@@ -505,10 +505,13 @@ export function createConsoleDispatcher({
 
 			case "cross_domain_request": {
 				if (!crossDomain) throw new Error("cross-Domain linking is not available on this Gateway");
+				// The Domain root, not the device.
+				const root = domain?.()?.snapshot.ownerSignPub;
+				if (!root) throw new Error("this Gateway has no Domain owner yet");
 				return crossDomain.request({
 					listeningToken: op.listeningToken,
 					pin: op.pin,
-					requesterOwnerSignPub: ownerSignPub,
+					requesterOwnerSignPub: root,
 					requesterDomainId: op.requesterDomainId,
 					requesterGatewayId: op.requesterGatewayId,
 				});

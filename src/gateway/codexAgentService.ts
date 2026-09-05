@@ -542,9 +542,15 @@ export class CodexAgentService {
 							catalogRevision: result.catalogRevision,
 						};
 					}
-					return result.unresolved
-						? { disposition: "reconcile", owner: result.owner, agent: result.agent }
-						: ignore("delivery could not be verified against its record");
+					if (result.unresolved)
+						return { disposition: "reconcile", owner: result.owner, agent: result.agent };
+					// A refusal settles the operation.
+					return {
+						disposition: "applied",
+						owner: result.owner,
+						agent: result.agent,
+						catalogRevision: result.catalogRevision,
+					};
 				} catch {
 					return ignore("delivery receipt did not resolve to one managed operation");
 				}

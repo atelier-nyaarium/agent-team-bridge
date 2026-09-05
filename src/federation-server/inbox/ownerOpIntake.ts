@@ -50,7 +50,7 @@ export const OWNER_STATE_MUTATION_KINDS = new Set([
 	"cross_domain_unlink",
 	"report_read",
 	"capabilities_report",
-	"deliver",
+	OWNER_OP_KINDS.deliver,
 ]);
 
 const isMigrating = (result: unknown): boolean =>

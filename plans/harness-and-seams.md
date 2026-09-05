@@ -711,53 +711,75 @@ mailbox with no console socket open.
 - Not held: stale-incarnation fencing is pinned through the roster, not by replaying an old
   frame; a second device's boot binds the local owner key, which predates this phase.
 
-## Phase 2 - Kill and rewrite
+## Phase 2 - Kill and rewrite ✅
 
-### Slices
+### Slices, as shipped ✅
 
-Reassessed after Phase 4.
+**Kill:** About 23,000 lines of tests removed. The twelve fake helpers and their suites
+(websocket, console seam and delivery, routes, codex-agent, codex-persistence, codex-relay,
+cross-domain-handshake, cross-domain-presence, tenant-admin, federation, blobWire, replyTool)
+went with the by-kind categories, the seven rotting residue inventories, the structure probes
+(`data-dir-inventory`, `host-spawn-wiring`, `s10-residue`, the `session-authority` file scan),
+the three Kotlin-scanning probes, and the gateway-board no-ops with their forwarders and the one
+test over them. `bootstrap-residue`, `phone-identity-residue`, and the six fence consumers of
+`helpers/residue.ts` stay. `helpers/federation-router.ts` serves the five socket suites, trimmed
+of the no-op upgrade smoke test and the cases the harness covers.
 
-1. **Kill:** The suites behind the twelve fake helpers (about 480 cases) and the helpers; the
-   harness composes `RouterServer` directly and brings its own `createFakeSocket`, so
-   `federation-router` and `createMockWs` go too once no survivor uses them. The by-kind
-   categories: 167 prose assertions, 76 call-order keys, 49 stubbed answers. The seven rotting
-   residue files (`federation-manager`, `gateway-retained-state`, `inbox-service`,
-   `install-layer`, `module`, `resolve-bun`, `setup-verify`) and the structure-pinning probes
-   Phase 1 had to patch (`data-dir-inventory`, `host-spawn-wiring`, `s10-residue`, the file scan
-   in `session-authority`). Of the Kotlin-scanning probes, `board-door-residue`,
-   `federation-manager-residue`, and `reprovision-wipe-residue` go where a behavior test or the
-   identity door covers the rule; `bootstrap-residue` and `phone-identity-residue` stay, since
-   their invariants have no runtime expression. The gateway-board era's empty bodies go with
-   their forwarders and tests: `BoardManager.applySnapshot`, `retainGateways`,
-   `truncatedGateways`, `strugglingEntries`, and the four `BoardOps` methods over them.
-2. **Merge:** One module, one file: `routes` (five files), `session-store` (five),
-   `websocket` (three), `codex-agent` (four), `owner state` (four).
-3. **Rewrite:** Survivors assert a sequence of actions and the state or output it produces, on
-   the harness and the fixture feeders as the bench. String tests stay only where the string is
-   the behavior: `agent-screen`, `pane-trim`, `limit-notice`, canonical bytes, signing vectors.
-   The decision rules the killed suites carried (send addressing, wake bounds, refusal mapping,
-   the presence protocol invariants) are re-expressed as scenarios or pure-rule tests before
-   their suite is deleted, the way `PresenceMergeTest` keeps `keepPriorRow` and `mergePresence`
-   beside the behavior test. `fakeHost` and `fakeSession` validate the frames they send and
-   receive against the shared schemas. No consumer walks a producer's JSON by hand: the
-   `WireFixturesDecodeTest` no-op is the instance. On the phone, `PhoneIdentityTest` is the bench
-   for lifecycle rules; `connect()` still lives in `ChatRepository` and has no JVM seat until
-   Phase 5 splits it.
-4. **Catalog:** The residue fences derive from the schemas instead of curated lists: annotate the
-   Zod discriminators, outcomes, and reasons, generate one catalog into `Protocol.Wire`, and
-   point `wire-vocabulary-residue`, `aad-kinds-residue`, and `preimage-tag-twins` at it.
-   `outcome: "complete"` joins `OpOutcomeSchema` or gets its own family; `presence_read`,
-   `schedule_send`, `capabilities_read`, `cursor_translate` join the owner-op kinds; the raw
-   comparisons of `cursor_stale`, `stale_incarnation`, `no_waiter`, `accepted`, `applied` on both
-   runtimes read the constants.
-5. **Kotlin:** The same pass: 45 prose asserts; the reflection tests reviewed;
-   `ClearsOnReprovisionTest` stays as a roster pin. Test doubles that throw at construction
-   (`error("unused") as X`) become getters.
+**Merge:** `routes`, `session-store`, `websocket-live-incarnation`, `codex-agent`, and
+`owner-state-store` are one file each.
+
+**Rewrite:** Eight harness scenario files replace the killed suites on the real Router and
+gateway graph: sessions (bindings, impostors, worker answers, transcript handover, duplicated
+deliveries, reply authority, the wake boundary, create, rename, close, forget, tmux, peek,
+notify, capabilities), handshake (verifying before confirmation, retained reconnects, a stale
+close), domains (two and three Domains linked through the real handshake, shares and the Router
+record, send and reply, unshare, unlink, colliding gateway ids, a forged reply, a repeated opId),
+xdomain (the share gate, the wake authorization, return-route authentication, a relay retried
+across a Router outage, unlink of in-flight work, share auto-forget), router (tenant provision
+with replay across a restart, first root, rename and its refusals, removal, deletion, device
+approval, the trust rendezvous), codex (start, message, list, stop, replayed frames, gateway and
+daemon restarts), and boot (one presence row per team after a restart, a notice held through a
+Router outage). The harness grew `mintIdentitySet`, `addDomain`, `link`, `restartHost`, the
+fake Codex daemon with schema-checked frames, the phone driver's `console()` and `enroll()`, and
+fake sessions that answer as workers or present binding tokens. Pure survivors assert sequences
+on named rules: `federation-pure-rules`, `cross-domain-handshake` (the coordinator's limits and
+mismatch refusals), `router-coordinators` (rendezvous, approval, and tenant limits),
+`owner-op-intake` (one answer per in-flight duplicate, Domain-scoped caps, the admission
+refusals, quarantine), `cross-domain-presence` (consumer, pusher, reconciler, source),
+`share-rules`, `codex-relay`, `codex-turn-tracker`, `local-agent-publication`, `channel-file`,
+`reply-attachments`. `codex-daemon-service` drives the real `ThreadLifecycle`, tracker, and
+transport over a scripted JSONL App Server in 25 sequences; only the launcher is a double.
+
+**Catalog:** `presence_read`, `schedule_send`, `capabilities_read`, `cursor_translate` joined
+`OWNER_OP_KINDS`; `accepted`, `applied`, `cursor_stale`, `stale_incarnation`, `no_waiter` are
+constants the codegen emits into `Protocol.Wire` and both runtimes read; `preimage-tag-twins`
+reads `SIGNING_TAGS`. The TypeScript fence keeps paths, the header, and the tags: owner-op kinds
+are typed by the schemas and serve as hook keys, so a literal there is not residue. The catalog
+is still a hand list the codegen reads; deriving it from the schemas is Phase 5's registry.
+
+**Kotlin:** Asserts on rendered sentences became kind, presence, or distinctness asserts; text
+formatters keep their outputs. The eager stubs were already getters. The Proxy-based OkHttp fakes
+stay. A share posts the Router record before the Gateway mirror and withdraws it when the mirror
+refuses, pinned in `ConsoleClientOwnerOpsTest`.
+
+### Defects the scenarios found
+
+Six shipped defects, fixed in the same commit: the Router client dropped
+`cross_domain_handshake_reveal`, so linking never completed; the requester's pairing carried the
+console key instead of the Domain root, so the confirm refused; the phone never wrote the Router
+share record, so every cross-Domain send was refused at the Router while `relayToGateway`
+reported the refusal as running; a peer reply into the origin Domain failed the share gate;
+Router unlink never dropped the link edge; a refused Codex delivery never woke the route's
+waiter, so the call held for the whole budget.
 
 ### Bug classes
 
-- The hidden class: tests programming the code, green for the wrong reason.
-- False confidence from a hand-built peer.
+- The hidden class: held. No survivor asserts a fake's bookkeeping, a call order, or a sentence.
+- False confidence from a hand-built peer: held for the Router, the gateway, the sessions, and
+  the daemon boundary. The six defects above lived under green fake-backed suites.
+- Not held: the daemon's App Server is a scripted child, not `codex app-server`; the phone is the
+  TypeScript driver, not the app; host and session frames the fakes exchange are not
+  schema-checked, since no shared schema names them.
 
 ## Phase 5 - Split
 
@@ -776,16 +798,20 @@ Reassessed after Phase 4.
    sessions, persistence, host, agents, awareness, federation, websockets, routes, router
    handlers, HTTP router, listener); the four late-bound cycles stay closures. `GatewayGraph`
    shrinks to `router`, `wsHandlers`, `close`, and an explicit fault port (link down, keyring
-   state) that replaces the harness's `federation().routerClient.stop()` and
-   `contentKeyStore.epochs()` reads. `RouterHandlers` splits frame dispatch from the
-   presence-push lifecycle. The gateway takes the phone door's shape: one active federation
-   context published atomically on a bootstrap install replaces the outer `gatewayBoot` and
-   `localDomainId` captures and the `routerCertFp` the routes read, which go stale after an
-   install today.
+   state) that replaces the harness's `federation().routerClient.stop()`,
+   `contentKeyStore.epochs()`, `federation().sealer`, and `crossDomainPeers` reads.
+   `RouterHandlers` splits frame dispatch from the presence-push lifecycle. The gateway takes the
+   phone door's shape: one active federation context published atomically on a bootstrap install
+   replaces the outer `gatewayBoot` and `localDomainId` captures and the `routerCertFp` the
+   routes read, which go stale after an install today. That context owns the share record: it
+   posts the Router record when it writes its own mirror, replacing the phone's two posts and the
+   compensating unshare.
 4. **Ambient context:** One injected record (clock, entropy, ids, timers) through
    `composeGateway` and `RouterServerParams` replaces the per-module `now?`, `randomBytes?`,
    `newId?` defaults (25 `Date.now` sites; the timers in `routes`, `wake`, the relays,
-   `crossDomainPresence`, `routerClient`, `gatewayBridge`, `consoleSockets`). A residue test
+   `crossDomainPresence`, `routerClient`, `gatewayBridge`, `consoleSockets`, and the websocket
+   handshake re-send and expiry, which read the process clock behind `createWebSocketHandlers`
+   and so have no harness scenario). A residue test
    fences direct `Date.now`, `randomBytes`, `randomUUID`, `Math.random`, `setTimeout`, and
    `setInterval` outside the adapters. Closes the clock-defaults bug class from Phase 1. The
    phone's fold shipped as `PhoneAmbient` in Phase 4; the two share the vocabulary (clock,
@@ -793,7 +819,9 @@ Reassessed after Phase 4.
 5. **Router:** One body reader feeds both `resolve` and `handle`. A typed owner-op registry:
    definitions carry kind, value schema, handler, and mutation class; built-ins register through
    the same path as the services; `OwnerOp.op` stops being `z.record`; the per-kind answer shapes
-   become schemas the phone driver, the fixtures, and Kotlin read.
+   become schemas the phone driver, the fixtures, and Kotlin read. The registry is the catalog:
+   the codegen and the residue fences read the kinds, outcomes, and reasons from it, and the hand
+   list in `wire-vocabulary.ts` goes.
 6. **Names:** The two `Provisioning` types (the generated `proto.Provisioning`, eleven optional
    fields and positional hazards, and the parsed one in `ConsoleClientTypes.kt`) become a wire
    type and a credential blob; `Provisioning.parse` stops saving the conversation id, the last
@@ -895,5 +923,26 @@ into the app; no wire field changes. Gateway first as usual.
 - **Structure probes read as tests to every auditor.** Every audit slice flags the regex fences as
   non-behavior tests, and each lap pays the triage. A fence guards an invariant with no runtime
   expression; name it so, keep the set small, or derive it from the schemas (Phase 2).
+- **Gateway ids collide across Domains.** A listening token names the receiver's gateway id and
+  a requester refuses its own, so two Domains whose Gateways share an id pair only from a third
+  Gateway. The token should carry the Domain id.
+- **A receipt path that did not settle its waiter.** `applyReceipt` returned a disposition per
+  branch; the refused-delivery branch returned none, and every call on that agent held for the
+  whole budget. One settle site per operation, not one per branch.
+- **The Router share record was the phone's to write, and nothing said so.** The gateway kept a
+  mirror the phone did write, and the Router refused every cross-Domain row for want of the
+  record the phone never posted. A share is one operation with one owner; Phase 5 moves the
+  record to the gateway.
+- **The first follow-up after a daemon restart is indeterminate.** The gateway reconciles the
+  agent on the daemon's hello and refuses the delivery that raced it; the caller retries. The
+  gateway could hold the delivery until the reconcile answers.
+- **The `virtual` peer flag is dead code.** Nothing sets it; the eviction path and three
+  liveness reads test it. Phase 5's websocket module drops it.
+- **Codex cannot bind a socket.** Every harness scenario a Codex agent writes is unverified until
+  the orchestrator runs it, and two agents shipped `describe.skip` around theirs. Harness
+  scenarios are orchestrator work or a second pass; pure-rule tests delegate cleanly.
+- **A fake that reimplements the lifecycle.** `codex-daemon-service` proved 63 rules against a
+  `FakeSession` that copied `ThreadLifecycle`; the real lifecycle disagreed on where a terminal
+  is archived. The scripted App Server at the JSONL boundary is the double; nothing above it is.
 - **The fixture world built the client's transport over a store that never held the identity.**
   The reach fixture lost its signer; one store per case, or the world hands out both from one.

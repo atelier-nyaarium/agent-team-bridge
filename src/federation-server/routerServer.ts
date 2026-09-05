@@ -192,6 +192,9 @@ export class RouterServer {
 				this.coordinatorFor(srcDomainId)?.hasLinkEdge(srcDomainId, dstDomainId) ?? false,
 			linkEdgeId: (srcDomainId, dstDomainId) =>
 				this.coordinatorFor(srcDomainId)?.linkEdgeId(srcDomainId, dstDomainId) ?? null,
+			dropLinkEdge: (srcDomainId, dstDomainId) => {
+				this.coordinatorFor(srcDomainId)?.dropLinkEdge(dstDomainId);
+			},
 			leases: this.domain.leases,
 		});
 		this.console = new ConsoleSurface({

@@ -23,7 +23,9 @@ that must keep working for one more console build goes into `TOLERATED_DELIVERY_
   `value_op` frame. The answer is sealed under `valueResultAadKind`. Results use typed `unreachable`
   or `timeout` outcomes.
 - Other OwnerOps are `consumer_register`, `inbox_read`, `inbox_advance`, `planes_read`, `report_read`,
-  and `capabilities_report`.
+  and `capabilities_report`. Sharing a session with a friend Domain posts `cross_domain_share` to the
+  Router first, then the Gateway's `cross_domain_share` value op; unsharing posts both in the same
+  order.
 - The phone socket uses `ConsoleSocketMode.INBOX`.
 - `PollDrain.drainTick` calls `inbox_read` and `planes_read`. It sends one `inbox_advance` after
   rows drain.

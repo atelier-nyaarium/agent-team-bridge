@@ -73,8 +73,6 @@ internal class ChatRepositoryProvisioningHost(private val repo: ChatRepository) 
 		}
 		if (ids != repo._state.value.admittedGateways || nextHome != repo._state.value.homeGatewayId)
 			repo._state.update { it.copy(admittedGateways = ids, homeGatewayId = nextHome) }
-		// Remove revoked Gateway columns.
-		repo.boardOps.boardRetainGateways(ids)
 	}
 
 	override fun localDomain(): String = repo.readyOrNull()?.domainId.orEmpty()

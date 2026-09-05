@@ -14,6 +14,7 @@ import {
 	sealContent,
 	valueResultAadKind,
 } from "../shared/content-envelope.js";
+import { type EnrollOp, type EnrollResult, EnrollResultSchema } from "../shared/federation-enroll-ops.js";
 import { type BoardReadResult, BoardReadResultSchema } from "../shared/schemasBoardState.js";
 import { MailboxEntrySchema } from "../shared/schemasConsoleOp.js";
 import { type ContentEnvelope, ContentEnvelopeSchema } from "../shared/schemasContentKey.js";
@@ -65,6 +66,10 @@ export interface ValueAnswer {
 export interface PhoneDriver {
 	ownerOp(op: Record<string, unknown>, opId?: string): OwnerOp;
 	post(op: OwnerOp): Promise<PostAnswer>;
+	/** Any console-surface body under the app token: firstRoot, trustHandshake, consoleApproval. */
+	console(body: Record<string, unknown>): Promise<PostAnswer>;
+	/** The Router's enroll answer with whatever else it carried, such as an invite nonce. */
+	enroll(op: EnrollOp): Promise<EnrollResult & Record<string, unknown>>;
 	reach(): Promise<ReachAnswer>;
 	/** Signs and posts; answers the response body. */
 	send(op: Record<string, unknown>, opId?: string): Promise<unknown>;
@@ -120,20 +125,27 @@ export function createPhoneDriver(deps: PhoneDriverDeps): PhoneDriver {
 		return signOwnerOp(fields, set.console.identity.sign.priv);
 	}
 
-	async function post(op: OwnerOp): Promise<PostAnswer> {
+	async function consolePost(body: Record<string, unknown>): Promise<PostAnswer> {
 		const response = await deps.handle(
 			new Request("https://router.test/console", {
 				method: "POST",
 				headers: { [APP_TOKEN_HEADER]: `Bearer ${set.tokens.console}`, "content-type": "application/json" },
-				body: JSON.stringify({ ownerOp: op }),
+				body: JSON.stringify(body),
 			}),
 		);
 		const text = await response.text();
-		let body: unknown = text;
+		let answer: unknown = text;
 		try {
-			body = JSON.parse(text);
+			answer = JSON.parse(text);
 		} catch {}
-		return { status: response.status, body };
+		return { status: response.status, body: answer };
+	}
+
+	const post = (op: OwnerOp): Promise<PostAnswer> => consolePost({ ownerOp: op });
+
+	async function enroll(op: EnrollOp): Promise<EnrollResult & Record<string, unknown>> {
+		const body = (await consolePost({ enrollOp: op })).body as Record<string, unknown>;
+		return { ...body, ...EnrollResultSchema.parse(body) };
 	}
 
 	async function reach(): Promise<ReachAnswer> {
@@ -238,6 +250,8 @@ export function createPhoneDriver(deps: PhoneDriverDeps): PhoneDriver {
 	return {
 		ownerOp,
 		post,
+		console: consolePost,
+		enroll,
 		reach,
 		send,
 		value,

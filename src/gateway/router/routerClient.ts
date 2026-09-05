@@ -220,7 +220,8 @@ export function startRouterClient(config: RouterClientConfig): RouterClient {
 					config.onGatewayRelay?.(frame);
 					break;
 				}
-				case "cross_domain_handshake": {
+				case "cross_domain_handshake":
+				case "cross_domain_handshake_reveal": {
 					config.onCrossDomainHandshake?.(frame);
 					break;
 				}

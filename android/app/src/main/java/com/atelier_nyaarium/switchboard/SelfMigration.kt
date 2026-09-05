@@ -87,7 +87,7 @@ internal class SelfMigration(
 	}
 
 	private fun accepted(answer: JsonElement?): Boolean = answer?.let {
-		it.jsonObject["outcome"]?.jsonPrimitive?.content == "accepted"
+		it.jsonObject["outcome"]?.jsonPrimitive?.content == Protocol.Wire.OP_OUTCOME_ACCEPTED
 	} == true
 
 	private suspend fun upload(team: String, record: ScheduledSend): UploadOutcome {
@@ -120,7 +120,7 @@ internal class SelfMigration(
 		val answer = send(sign(wireJson.encodeToJsonElement(ScheduleSendValue.serializer(), value).jsonObject, opId) ?: return UploadOutcome.UNANSWERED)
 		val outcome = answer?.jsonObject?.get("outcome")?.jsonPrimitive?.content
 		return when (outcome) {
-			"accepted" -> {
+			Protocol.Wire.OP_OUTCOME_ACCEPTED -> {
 				journal.transition(opId, MutationState.ACKED)
 				UploadOutcome.ACCEPTED
 			}

@@ -116,13 +116,6 @@ class BoardManagerTest {
 	}
 
 	@Test
-	fun anEmptyKeyringPrunesNothing() {
-		val board = BoardManager(storeStub())
-		board.retainGateways(emptyList())
-		assertNull(board.attachmentBuckets())
-	}
-
-	@Test
 	fun aPreviousBlobWithGatewayColumnsLoadsRouterEntriesWithoutGatewayState() {
 		val oldBlob = """
 			{"gateways":{"old-gateway":{"entries":[]}},"routerRevision":7,"stored":[{"clear":{"id":"old-entry","state":"open","rank":"m","version":1},"sealed":{"title":{"v":1,"epoch":1,"nonce":"","ciphertext":""}}}]}

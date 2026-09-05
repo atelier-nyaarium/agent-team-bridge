@@ -63,6 +63,10 @@ cannot run. `agent_unreachable` means its App Server may still be running, so do
 thread, and adopts its running or settled turn before accepting a follow-up. Reconciliation emits its
 receipt before an adopted terminal, preserving the fence. It reads and never deletes a thread.
 
+**A refusal settles the operation.** The route's waiter wakes on it and answers `indeterminate` with
+a retryable error. The first follow-up after a daemon restart is answered that way while the gateway
+reconciles the agent; the retry lands once the agent is idle again.
+
 **The model is a start parameter, not configuration.** It is checked against `model/list` at use time
 and is never silently substituted.
 

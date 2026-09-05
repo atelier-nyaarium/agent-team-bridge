@@ -70,6 +70,9 @@ Gateway, so revocation still applies while the Router is unreachable.
 - Phone OwnerOps are sealed and signed by the enrolled console key. The Router checks the owner-signed
   `kind:console` admission.
 - `CONSOLE_BRIDGE_TOKEN` remains the shared app-token gate for the console surface.
+- A cross-Domain pairing names the Domain root, never the signing device. The listening token
+  names the receiver's gateway id, and a requester refuses a token naming its own id, so two Domains
+  whose Gateways share an id pair only from a Gateway whose id differs from the receiver's.
 
 ## Content keys
 
@@ -104,7 +107,10 @@ Gateway, so revocation still applies while the Router is unreachable.
 - Every owner-scoped record lives in the per-owner store under `DATA_DIR/owner/`, keyed by kind and id with a CAS version. A service answers only the Domain named in the call.
 - Services register their ops and frames through `ownerServiceHooks.ts`. A frame handler receives the authenticated registration; the bridge deletes `domainId` and `gatewayId` from the payload first, so no handler can read one.
 - Presence: a gateway sends `presence_baseline` after registering and `presence_delta` with a sequence; a gap answers `presence_resync`. A dropped socket marks the gateway's rows unreachable; the next baseline replaces them. The owner projection folds rows, roster, coverage, spawn points, and each linked Domain's friend projection; a friend sees shared sessions only.
-- Shares: records per session target and friend, a generation per pair bumped by unshare and unlink. A peer row is admitted only while shared, stamped with the generation, and retired `target_revoked` when the generation moves before delivery. A gateway attests live cross-Domain jobs with `share_job_live`; the 30-day sweep keeps attested shares.
+- Shares: records per session target and friend, a generation per pair bumped by unshare and unlink. A peer row is admitted only while shared, stamped with the generation, and retired `target_revoked` when the generation moves before delivery. A gateway attests live cross-Domain jobs with `share_job_live`. The 30-day sweep keeps attested shares.
+- The phone posts `cross_domain_share` to the Router before the Gateway's own mirror. The record is what admits the friend's rows. A refused mirror withdraws the record.
+- A peer reply back into the origin Domain targets a job key, not a registered session. It is admitted by the origin's own link edge instead of a share. A linked Domain can therefore append reply rows for jobs the gateway does not hold; the gateway drops them at delivery, and the inbox row cap bounds the flood.
+- `cross_domain_unlink` drops the Domain's link edge as well as its shares.
 - Board: entries with a clear envelope and sealed title, body, and names; writes carry `expectedRevision` and no actor, because the receiver names the writer from the authenticated channel; the same authority and cascade rules the gateway used, plus `mayTake` for claim and release; observations land as `board_observation` rows in the affected sessions' inboxes. Attachments must be held in the reference-held store.
 - Scheduled sends: one record per target; replace and cancel are versioned; a Router timer fires through the op ledger under the send's own op id and writes a `scheduled_result` row the phones fold.
 - Capabilities and read anchors are tier-1 records with their own OwnerOps.

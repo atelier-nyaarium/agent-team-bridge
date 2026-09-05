@@ -1,6 +1,10 @@
 import { z } from "zod";
 import { InboxRowSchema, OwnerOpSchema } from "./schemasInbox.js";
 
+export const ConsoleRefusalReasonSchema = z
+	.enum(["cursor_stale"])
+	.meta({ id: "ConsoleRefusalReason", catalog: "reason" });
+
 ////////////////////////////////
 //  Console socket frames
 

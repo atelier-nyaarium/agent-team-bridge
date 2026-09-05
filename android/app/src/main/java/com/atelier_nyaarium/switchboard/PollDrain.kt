@@ -1,6 +1,7 @@
 package com.atelier_nyaarium.switchboard
 
 import com.atelier_nyaarium.switchboard.proto.MailboxEntry
+import com.atelier_nyaarium.switchboard.proto.Protocol
 import com.atelier_nyaarium.switchboard.proto.SessionKey
 import com.atelier_nyaarium.switchboard.proto.SyncPollResult
 import com.atelier_nyaarium.switchboard.proto.parseStoreKey
@@ -46,7 +47,7 @@ internal suspend fun drainTick(
 		inboxAdvanceSent = true
 		when (advanceOutcome(advance)) {
 			"ok" -> coordinator.clearPendingAdvance()
-			"cursor_stale" -> {
+			Protocol.Wire.CONSOLE_REASON_CURSOR_STALE -> {
 				coordinator.clearPendingAdvance()
 				coordinator.adoptFloor(advanceFloor(advance, coordinator.cursor()))
 				return TickOutcome(0, 0, true, known, true)
@@ -91,7 +92,7 @@ internal suspend fun drainTick(
 				inboxAdvanceSent = true
 				when (advanceOutcome(advance)) {
 					"ok" -> coordinator.clearPendingAdvance()
-					"cursor_stale" -> {
+					Protocol.Wire.CONSOLE_REASON_CURSOR_STALE -> {
 						coordinator.clearPendingAdvance()
 						coordinator.adoptFloor(advanceFloor(advance, coordinator.cursor()))
 						return TickOutcome(rowsDrained, 0, true, known, true)
@@ -104,7 +105,7 @@ internal suspend fun drainTick(
 				}
 			}
 		}
-	} else if (answer is JsonObject && answer["outcome"]?.jsonPrimitive?.content == "cursor_stale") {
+	} else if (answer is JsonObject && answer["outcome"]?.jsonPrimitive?.content == Protocol.Wire.CONSOLE_REASON_CURSOR_STALE) {
 		coordinator.adoptFloor(answer["floor"]?.jsonPrimitive?.content?.toLongOrNull() ?: coordinator.cursor())
 		return TickOutcome(0, 0, false, known, true)
 	}

@@ -33,6 +33,7 @@ import {
 	parseInboxAddress,
 } from "../shared/schemasInbox.js";
 import { OP_LEDGER_PROTOCOL } from "../shared/schemasRegister.js";
+import { GATEWAY_ERROR_STALE_INCARNATION, GATEWAY_REASON_NO_WAITER } from "../shared/wire-vocabulary.js";
 import type { ReferenceHeldStore } from "./blobs/referenceHeldStore.js";
 import type { BlobOrigin, RouterBlobCache } from "./blobs/routerBlobCache.js";
 import { type DomainMeta, sanitizeDomainId } from "./enrollmentCoordinator.js";
@@ -446,7 +447,7 @@ export class GatewayBridge implements ToolProvider {
 			if (!reg?.signPub || reg.incarnation === null) return { ok: false, error: "inbox_unavailable" };
 			if (incarnation !== reg.incarnation) {
 				console.warn(`[BridgeServer] stale gateway incarnation for ${name}`);
-				return { ok: false, error: "stale_incarnation" };
+				return { ok: false, error: GATEWAY_ERROR_STALE_INCARNATION };
 			}
 			if (name === "inbox_append") return this.handleInboxAppend(connId, params);
 			if (name === "inbox_ack") return this.handleInboxAck(connId, params);
@@ -463,7 +464,7 @@ export class GatewayBridge implements ToolProvider {
 			if (!reg?.signPub || reg.incarnation === null) return { ok: false, error: "inbox_unavailable" };
 			if (params.incarnation !== reg.incarnation) {
 				console.warn(`[BridgeServer] stale gateway incarnation for ${name}`);
-				return { ok: false, error: "stale_incarnation" };
+				return { ok: false, error: GATEWAY_ERROR_STALE_INCARNATION };
 			}
 			if (
 				readRouterMigrationWindow().fenced &&
@@ -648,14 +649,17 @@ export class GatewayBridge implements ToolProvider {
 		// Migration-fenced gateways must reconcile before writing.
 		if (this.migrationFenced?.(reg.domainId, reg.gatewayId)) return { ok: false, error: "migrating" };
 		const origin = row.data.envelope.origin;
-		// Linked peers reach registered sessions only.
+		const peerRow = origin.kind === "gateway" && row.data.envelope.epoch === "peer" && address.kind === "session";
+		// A reply targets a job key.
+		const peerReply = peerRow && row.data.envelope.kind === "reply";
+		// Replies need the return edge.
 		const allowedDomain =
 			address.domainId === reg.domainId ||
-			(origin.kind === "gateway" &&
-				row.data.envelope.epoch === "peer" &&
-				address.kind === "session" &&
+			(peerRow &&
 				this.hasLinkEdge(reg.domainId, address.domainId) &&
-				this.inbox.hasSession(address.domainId, address.gatewayId, address.sessionId));
+				(peerReply
+					? this.hasLinkEdge(address.domainId, reg.domainId)
+					: this.inbox.hasSession(address.domainId, address.gatewayId, address.sessionId)));
 		const addressOwned =
 			address.kind === "owner" || address.domainId !== reg.domainId || address.gatewayId === reg.gatewayId;
 		const originAllowed =
@@ -668,7 +672,7 @@ export class GatewayBridge implements ToolProvider {
 		if (!allowedDomain || !addressOwned || !originAllowed || !reg.signPub) return { ok: false, error: "refused" };
 		// Share state authorizes friend rows and supplies generation.
 		let shareGeneration: number | undefined;
-		if (address.domainId !== reg.domainId && this.peerRowGate) {
+		if (address.domainId !== reg.domainId && this.peerRowGate && !peerReply) {
 			const target = sessionTargetOf(address);
 			const generation = target ? this.peerRowGate(address.domainId, target, reg.domainId) : null;
 			if (generation === null) return { ok: false, error: "refused" };
@@ -814,11 +818,12 @@ export class GatewayBridge implements ToolProvider {
 		const parsed = ValueResultParamsSchema.safeParse(params);
 		const reg = this.connGateways.get(connId);
 		if (!parsed.success) return { settled: false, reason: "malformed" };
-		if (!reg || reg.incarnation !== parsed.data.incarnation) return { settled: false, reason: "stale_incarnation" };
+		if (!reg || reg.incarnation !== parsed.data.incarnation)
+			return { settled: false, reason: GATEWAY_ERROR_STALE_INCARNATION };
 		const key = `${reg.domainId}/${reg.gatewayId}/${parsed.data.conversationId}/${parsed.data.opId}`;
 		const pending = this.pendingValues.get(key);
 		if (!pending || pending.every((waiter) => waiter.connId !== connId))
-			return { settled: false, reason: "no_waiter" };
+			return { settled: false, reason: GATEWAY_REASON_NO_WAITER };
 		for (const waiter of pending) clearTimeout(waiter.timer);
 		this.pendingValues.delete(key);
 		for (const waiter of pending) waiter.resolve(parsed.data.result);

@@ -233,16 +233,18 @@ export function verifyOwnerOp(op: OwnerOp): boolean {
 	return verify(ownerOpSigningBytes(op), op.signature, op.signerSignPub);
 }
 
-export const OpOutcomeSchema = z.enum([
-	"accepted",
-	"refused",
-	"expired",
-	"target_revoked",
-	"failed",
-	"durability_failure",
-	"durability_uncertain",
-	"conflict",
-]);
+export const OpOutcomeSchema = z
+	.enum([
+		"accepted",
+		"refused",
+		"expired",
+		"target_revoked",
+		"failed",
+		"durability_failure",
+		"durability_uncertain",
+		"conflict",
+	])
+	.meta({ id: "OpOutcome", catalog: "outcome" });
 
 export const OpResultEnvelopeSchema = z
 	.object({

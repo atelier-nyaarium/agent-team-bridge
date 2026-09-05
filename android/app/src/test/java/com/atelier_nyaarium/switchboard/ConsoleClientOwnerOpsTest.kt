@@ -7,6 +7,7 @@ import com.atelier_nyaarium.switchboard.crypto.opResultAadKind
 import com.atelier_nyaarium.switchboard.crypto.valueResultAadKind
 import com.atelier_nyaarium.switchboard.proto.ConsoleOp
 import com.atelier_nyaarium.switchboard.proto.ContentEnvelope
+import com.atelier_nyaarium.switchboard.proto.CrossDomainShareTarget
 import com.atelier_nyaarium.switchboard.proto.InboxRow
 import com.atelier_nyaarium.switchboard.proto.OpKey
 import com.atelier_nyaarium.switchboard.proto.OwnerOp
@@ -206,6 +207,29 @@ class ConsoleClientOwnerOpsTest {
 	}
 
 	@Test
+	fun aShareWritesTheRouterRecordBeforeTheGatewayMirror() = runBlocking {
+		val result = client.crossDomainShare("domain.gateway.spawn.session", CrossDomainShareTarget.Domain("friend"))
+
+		assertTrue(result.ok)
+		assertEquals(listOf("cross_domain_share", "gateway_value"), sent.map { it.op["kind"]?.jsonPrimitive?.content })
+		assertEquals("domain.gateway.spawn.session", sent[0].op["sessionTarget"]?.jsonPrimitive?.content)
+	}
+
+	@Test
+	fun aRefusedMirrorWithdrawsTheRouterRecord() = runBlocking {
+		valueResultMode = ValueResultMode.Refused
+		val failure = runCatching {
+			client.crossDomainShare("domain.gateway.spawn.session", CrossDomainShareTarget.Domain("friend"))
+		}.exceptionOrNull()
+
+		assertNotNull(failure)
+		assertEquals(
+			listOf("cross_domain_share", "gateway_value", "cross_domain_unshare"),
+			sent.map { it.op["kind"]?.jsonPrimitive?.content },
+		)
+	}
+
+	@Test
 	fun aValueResultOpensUnderTheValueResultAad() = runBlocking {
 		val answer = client.sendValueOp("gateway", ConsoleOp.ListDirs("/", "spawn"), "value-op")
 
@@ -383,6 +407,7 @@ class ConsoleClientOwnerOpsTest {
 				)
 			}
 			"report_read" -> wireJson.encodeToJsonElement(com.atelier_nyaarium.switchboard.proto.ConsoleReportReadResult.serializer(), com.atelier_nyaarium.switchboard.proto.ConsoleReportReadResult(true))
+			"cross_domain_share", "cross_domain_unshare" -> buildJsonObject { put("ok", true) }
 			else -> null
 		}
 	}
@@ -403,6 +428,7 @@ class ConsoleClientOwnerOpsTest {
 			"blob_put" -> buildJsonObject { put("have", 6); put("complete", true) }
 			"blob_get" -> buildJsonObject { put("chunk", "AQI="); put("eof", true) }
 			"reload_plugins" -> buildJsonObject { put("initiated", true) }
+			"cross_domain_share", "cross_domain_unshare" -> buildJsonObject { put("ok", true) }
 			"cross_domain_listen" -> buildJsonObject {
 				put("listeningToken", "listen-token"); put("receiverOwnerSignPub", "owner")
 				put("receiverGatewaySignPub", "gateway"); put("receiverGatewayBoxPub", "box")

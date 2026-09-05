@@ -21,6 +21,7 @@ import {
 	BoardWriteSchema,
 } from "../../shared/schemasBoardState.js";
 import type { InboxAddress, InboxRow } from "../../shared/schemasInbox.js";
+import { BOARD_OUTCOME_APPLIED, OP_OUTCOME_ACCEPTED } from "../../shared/wire-vocabulary.js";
 import type { InboxService } from "../inbox/inboxService.js";
 import { OwnerOpRefused } from "../inbox/ownerOpIntake.js";
 import type { OwnerStoreRegistry } from "../inbox/ownerStoreRegistry.js";
@@ -328,7 +329,7 @@ export function createBoardService(deps: Deps) {
 					clear: {
 						hash,
 						createdAt: now(),
-						outcome: "applied",
+						outcome: BOARD_OUTCOME_APPLIED,
 						revision: next.revision,
 						cascaded: cascaded.map(({ id, from, to, reason }) => ({ id, from, to, reason })),
 					},
@@ -359,12 +360,12 @@ export function createBoardService(deps: Deps) {
 				body: { identity: o.identity, pre: o.pre ? stored(o.pre) : null, post: o.post ? stored(o.post) : null },
 			});
 			if (appended.row) deps.deliver?.(domainId, address, appended.row);
-			else if (appended.outcome !== "accepted")
+			else if (appended.outcome !== OP_OUTCOME_ACCEPTED)
 				console.warn(`[board] observation for ${o.sessionKey} not written: ${appended.outcome}`);
 		}
 		deps.pokeOwner?.(domainId, next.revision);
 		return {
-			outcome: "applied" as const,
+			outcome: BOARD_OUTCOME_APPLIED,
 			revision: next.revision,
 			entries: [...next.entries.values()].map(stored),
 			cascaded: cascaded.map(({ id, from, to, reason }) => ({ id, from, to, reason })),
@@ -432,7 +433,7 @@ export function createBoardService(deps: Deps) {
 				{ expectedRevision: b.revision, ops: removable.map((e) => ({ kind: "remove", id: e.id })) },
 				{ kind: "owner" },
 			);
-			removed = result.outcome === "applied" ? removable.length : 0;
+			removed = result.outcome === BOARD_OUTCOME_APPLIED ? removable.length : 0;
 		}
 		const records = store.list("board.op");
 		const expired = records.filter((record) => at - Number(record.clear.createdAt) > BOARD_OP_TTL_MS);

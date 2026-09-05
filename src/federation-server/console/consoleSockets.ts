@@ -8,6 +8,7 @@ import {
 	type ConsoleSocketOutbound,
 } from "../../shared/schemasConsoleSocket.js";
 import type { InboxRow } from "../../shared/schemasInbox.js";
+import { CONSOLE_REASON_CURSOR_STALE } from "../../shared/wire-vocabulary.js";
 import { readRouterMigrationWindow } from "../migration/leaseService.js";
 
 export interface ConsoleSocket {
@@ -29,7 +30,10 @@ export interface ConsoleSocketsDeps {
 		fromSeq: number,
 		limit: number,
 		cursorEpoch?: number,
-	) => InboxRow[] | { outcome: "cursor_stale"; floor: number; dropped: number } | { outcome: "durability_uncertain" };
+	) =>
+		| InboxRow[]
+		| { outcome: typeof CONSOLE_REASON_CURSOR_STALE; floor: number; dropped: number }
+		| { outcome: "durability_uncertain" };
 	readOwnerKeyRows: (
 		domainId: string,
 		ownerSignPub: string,
@@ -41,7 +45,7 @@ export interface ConsoleSocketsDeps {
 		signerSignPub: string,
 		cursor: number,
 		cursorEpoch: number,
-	) => { outcome: "ok" } | { outcome: "cursor_stale"; floor: number; dropped: number };
+	) => { outcome: "ok" } | { outcome: typeof CONSOLE_REASON_CURSOR_STALE; floor: number; dropped: number };
 	/** Lowest retained sequence. */
 	ownerFloor: (domainId: string) => number;
 	/** Current plane versions. */
@@ -110,7 +114,7 @@ export function createConsoleSockets(deps: ConsoleSocketsDeps) {
 			return;
 		}
 		if (!Array.isArray(rows)) {
-			refuse(socket, "cursor_stale", { floor: rows.floor, dropped: rows.dropped });
+			refuse(socket, CONSOLE_REASON_CURSOR_STALE, { floor: rows.floor, dropped: rows.dropped });
 			return;
 		}
 		if (rows.length === 0) return;
@@ -216,7 +220,7 @@ export function createConsoleSockets(deps: ConsoleSocketsDeps) {
 		}
 		const advanced = deps.advanceCursor(at.domainId, at.signerSignPub, frame.data.cursor, frame.data.cursorEpoch);
 		if (advanced.outcome !== "ok") {
-			refuse(socket, "cursor_stale", { floor: advanced.floor, dropped: advanced.dropped });
+			refuse(socket, CONSOLE_REASON_CURSOR_STALE, { floor: advanced.floor, dropped: advanced.dropped });
 			return;
 		}
 		at.cursorEpoch = frame.data.cursorEpoch;

@@ -1,5 +1,7 @@
 package com.atelier_nyaarium.switchboard
 
+import com.atelier_nyaarium.switchboard.proto.Protocol
+
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
@@ -39,7 +41,7 @@ internal class CursorTranslationOps(
 		if (fromEpoch == migrationEpoch) return
 		val opId = ambient.newOpId()
 		val op = buildJsonObject {
-			put("kind", "cursor_translate")
+			put("kind", Protocol.Wire.OWNER_OP_CURSOR_TRANSLATE)
 			put("address", address())
 			put("epoch", fromEpoch)
 			put("seq", fromSeq)
