@@ -154,7 +154,7 @@ no TTL.
 - **Plane acknowledgement** (`ChatRepository.applyPlane`): a plane version is noted only when the
   answer is true. The presence plane applies its payload; the board and vault planes carry a
   revision and answer true only once the held revision has reached it, so a list that failed is
-  offered again.
+  offered again; the fetch behind an unacknowledged plane runs at most once a minute.
 - **Plugin retract** (`PluginHost.onRetract`): a plugin that holds state outside the registries
   drops it here when it goes off; the vault clears its pending requests.
 - **Row re-render** (`ThreadRenderer`): any changing row payload must enter its fingerprint. JS

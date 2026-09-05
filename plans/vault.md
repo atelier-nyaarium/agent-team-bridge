@@ -448,8 +448,9 @@ Shipped beyond the bullets: the Router pokes the `vault` plane from every applie
 and `planeVersions` reports it, so a socket welcome carries the revision. The gateway keys a helper's
 request row to the console's own conversation and the capture notice to the capturing session as a
 `notice` key with `from`; the phone drops any row it cannot key to a team, which the earlier
-`gateway.<id>.vault` id was. The phone answers a plane bump with a delta list and retries twice when
-the list fails, since the bump is acknowledged before the list lands. A write's own entry lands at
+`gateway.<id>.vault` id was. The phone answers a plane bump with a delta list and acknowledges the
+version only once its held revision reaches it; an unacknowledged bump is fetched again at most once
+a minute, and a bump the socket pushed retries twice on its own. A write's own entry lands at
 once and the held revision advances only when nothing was skipped. Expired requests are dropped at
 load, on refresh, and when the deadline passes on the gateway's side. Notification buttons Once and
 30 min appear only while Vault approvals is Off; a typed request offers Deny alone and the tap opens
@@ -470,15 +471,13 @@ phone cannot open, and the gateway chips never widen a scope by emptying it: onl
 clears it. A typed value saved as an entry is scoped to the gateway that asked, and the gateway
 settles a typed answer as once whatever tier the phone named. The secret fields use the password
 keyboard. Known and left: a second admitted phone keeps a request the first one answered until its
-deadline, and a phone clock ahead of the gateway drops a request early. The architecture pass
-folded the three list consumers (gateway client, phone vault, phone board) through one shared rule,
-`versioned-list.ts` with its Kotlin twin and vectors, and made the phone acknowledge a revision
-plane only once its list landed. `ContentSealing` is the one sealing door the board and vault
-subclass. `ApprovalGate` owns the policy, the window, and the prompt. `sealDraft` is the pure
-draft-to-sealed rule. `PluginHost.onRetract` lets the vault drop its pending requests when it goes
-off, without a settings special case. Left for a later pass: a plugin-owned request surface (pending
-items, their notification, their modal) as one registration, so a later plugin's request kind costs
-one claim instead of edits in the service, the receiver, and the activity.
+deadline, and a phone clock ahead of the gateway drops a request early. The three list consumers
+(gateway client, phone vault, phone board) fold through one shared rule, `versioned-list.ts` with its
+Kotlin twin and vectors. `ContentSealing` is the one sealing door the board and vault subclass.
+`ApprovalGate` owns the policy, the window, and the prompt. `sealDraft` is the pure draft-to-sealed
+rule. `PluginHost.onRetract` is how the vault drops its pending requests when it goes off. A
+plugin-owned request surface (pending items, their notification, their modal) is not registered: a
+later plugin's request kind costs edits in the service, the receiver, and the activity.
 
 ## Phase 4 - Askpass helper
 

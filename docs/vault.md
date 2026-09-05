@@ -97,8 +97,8 @@ and the delta list are in `docs/federation.md` under Owner state.
 - **A revision plane is acknowledged once its list has landed:** the Router pushes the `vault`
   plane on every applied write and reports it in `planes_read`. The phone answers a bump with a list
   after its held revision and acknowledges the version only when the held revision reaches it, so
-  an unacknowledged bump is offered again. A bump the socket pushed is not offered again, so the
-  refresh retries twice on its own.
+  an unacknowledged bump is offered again, and fetched at most once a minute. A bump the socket
+  pushed is not offered again, so the refresh retries twice on its own.
 - A request reaches `VaultPlugin` as the `vault:request` action and is held with the conversation
   it landed in; that conversation's gateway segment answers it. A duplicate dispatch and a request
   past its deadline are dropped. A restart drops expired ones.

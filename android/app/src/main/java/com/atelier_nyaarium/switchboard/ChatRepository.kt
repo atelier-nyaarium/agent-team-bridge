@@ -65,6 +65,7 @@ class ChatRepository(
 	@Volatile internal var homeGatewayId: String = store.loadGatewayId()
 	@Volatile internal var gapFloor: Long = 0L
 	@Volatile internal var gapDropped: Long = 0L
+	internal val planeFetchedAt = java.util.concurrent.ConcurrentHashMap<String, Long>()
 	internal var onScheduledResult: (com.atelier_nyaarium.switchboard.proto.ScheduledResultRow) -> Unit = {}
 	internal var onBoardObservation: (com.atelier_nyaarium.switchboard.proto.BoardObservationRow) -> Unit = {}
 

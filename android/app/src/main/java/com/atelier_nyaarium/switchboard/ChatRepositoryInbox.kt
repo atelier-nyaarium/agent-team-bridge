@@ -29,22 +29,29 @@ internal suspend fun ChatRepository.reportConsumerCapabilities() {
 
 /** True acknowledges the version; a revision plane is acknowledged only once the list has landed. */
 internal suspend fun ChatRepository.applyPlane(name: String, version: Long, payload: JsonElement?): Boolean {
-	if (name == "taskBoard") {
-		if (board.routerRevision >= version) return true
-		boardOps.refreshBoard()
-		return false
-	}
-	if (name == "vault") {
-		if (vault.routerRevision >= version) return true
-		vaultOps.refresh()
-		return false
-	}
+	if (name == "taskBoard") return revisionPlane(name, version, board.routerRevision) { boardOps.refreshBoard() }
+	if (name == "vault") return revisionPlane(name, version, vault.routerRevision) { vaultOps.refresh() }
 	if (name != "presence" || payload == null) return false
 	val projection = runCatching {
 		wireJson.decodeFromJsonElement(com.atelier_nyaarium.switchboard.proto.OwnerPresenceProjection.serializer(), payload)
 	}.getOrNull() ?: return false
 	presence.applyOwnerProjection(projection)
 	return true
+}
+
+// A plane the list never reaches is fetched at most once a minute.
+private const val PLANE_FETCH_RETRY_MS = 60_000L
+
+private fun ChatRepository.revisionPlane(name: String, version: Long, held: Long, fetch: () -> Unit): Boolean {
+	if (held >= version) {
+		planeFetchedAt.remove(name)
+		return true
+	}
+	val now = System.currentTimeMillis()
+	if (now - (planeFetchedAt[name] ?: 0L) < PLANE_FETCH_RETRY_MS) return false
+	planeFetchedAt[name] = now
+	fetch()
+	return false
 }
 
 private suspend fun ChatRepository.dispatchKeyRows(rows: List<com.atelier_nyaarium.switchboard.proto.InboxRow>) {
