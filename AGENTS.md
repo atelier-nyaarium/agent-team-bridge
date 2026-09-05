@@ -227,6 +227,7 @@ How each subsystem works lives in `docs/`:
 | `docs/console.md` | Console OwnerOp client, terminal view, armed goals, capability union, Android app |
 | `docs/agents.md` | Codex and Copilot delegation, local agent mode |
 | `docs/task-board.md` | Board, attachments, awareness |
+| `docs/vault.md` | Vault client, grants, request road, loopback routes |
 | `docs/references.md` | `ref://` grammar and matchers |
 | `docs/testing.md` | The federation harness, the minted wire fixtures, the identity set, the gates |
 | `docs/environment.md` | Every environment variable |

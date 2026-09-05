@@ -24,8 +24,9 @@ that must keep working for one more console build goes into `TOLERATED_DELIVERY_
   or `timeout` outcomes.
 - Other OwnerOps are `consumer_register`, `inbox_read`, `inbox_advance`, `planes_read`, `report_read`,
   `capabilities_report`, and the vault's `vault_list`, `vault_put`, and `vault_delete`. The value
-  kinds `vault_answer`, `vault_grants`, and `vault_revoke` are catalogued; a Gateway without the
-  vault refuses them. Sharing a session with a friend Domain is the Gateway's
+  kinds `vault_answer`, `vault_grants`, and `vault_revoke` are answered by the Gateway's vault stage
+  (`docs/vault.md`); a request to approve arrives as a `plugin_action` row with `pluginId`
+  `vault`. Sharing a session with a friend Domain is the Gateway's
   `cross_domain_share` value op alone; the Gateway writes its mirror and posts the Router record
   itself. Unsharing works the same way, record first.
 - The phone socket uses `ConsoleSocketMode.INBOX`.
