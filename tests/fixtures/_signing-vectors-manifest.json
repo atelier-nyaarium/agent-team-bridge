@@ -14,6 +14,7 @@
 		"provision-ops",
 		"refs",
 		"router-reach",
+		"runbook-grammar",
 		"sealed-blob",
 		"session-id",
 		"sync-cursor",

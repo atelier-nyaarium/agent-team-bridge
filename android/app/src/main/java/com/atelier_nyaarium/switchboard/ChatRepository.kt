@@ -56,6 +56,8 @@ class ChatRepository(
 
 	val vault = com.atelier_nyaarium.switchboard.vault.VaultManager(store)
 
+	val runbooks = com.atelier_nyaarium.switchboard.runbooks.RunbookManager(store)
+
 	internal val approvalGate = com.atelier_nyaarium.switchboard.vault.ApprovalGate(
 		policy = { store.vaultUnlock },
 		persist = { store.vaultUnlock = it },
@@ -277,7 +279,7 @@ class ChatRepository(
 	@Volatile internal var sttsClient: SttsClient? = null
 
 	internal val clearedOnReprovision: List<ClearsOnReprovision>
-		get() = listOf(this, board, vault, presence, trust, drain, playback)
+		get() = listOf(this, board, vault, runbooks, presence, trust, drain, playback)
 
 	override suspend fun clearInMemory() {
 		invalidateClient()

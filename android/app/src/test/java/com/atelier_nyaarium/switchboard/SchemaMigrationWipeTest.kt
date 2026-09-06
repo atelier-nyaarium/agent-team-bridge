@@ -28,6 +28,7 @@ class SchemaMigrationWipeTest {
 			"sync_acked",
 			"sync_dropped",
 			"task_board",
+			"runbooks",
 		)
 		for (k in mustWipe) assertTrue("$k must be wiped by migrateSchemaIfNeeded", k in wiped)
 	}

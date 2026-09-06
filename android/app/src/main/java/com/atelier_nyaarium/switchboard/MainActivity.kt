@@ -129,6 +129,8 @@ fun App(
 	var boardModal by remember { mutableStateOf<Pair<String, String>?>(null) }
 	var vaultModal by remember { mutableStateOf<VaultModal?>(null) }
 	var fireRunbookId by remember { mutableStateOf<String?>(null) }
+	// Null inside means a new one, which is why the intent is wrapped rather than a bare id.
+	var editRunbook by remember { mutableStateOf<RunbookEdit?>(null) }
 	// Clear reveal after handoff.
 	val revealAtState = remember { mutableStateOf<Pair<String, Long>?>(null) }
 	var revealAt by revealAtState
@@ -236,8 +238,9 @@ fun App(
 	}
 
 	// Back follows render order.
-	BackHandler(enabled = overlays.isNotEmpty() || showSettings || openTeam != null) {
+	BackHandler(enabled = editRunbook != null || overlays.isNotEmpty() || showSettings || openTeam != null) {
 		when {
+			editRunbook != null -> editRunbook = null
 			overlays.isNotEmpty() -> closeOverlay()
 			// Mirrors SettingsScreen's own back: Federation was entered from Domain & Trust.
 			showSettings && settingsRoute == SettingsRoute.FEDERATION ->
@@ -501,6 +504,7 @@ fun App(
 						repo = repo,
 						state = state,
 						onFire = { fireRunbookId = it },
+						onEdit = { editRunbook = RunbookEdit(it) },
 						modifier = modifier,
 					)
 				},
@@ -600,7 +604,13 @@ fun App(
 	fireRunbookId?.let { id ->
 		com.atelier_nyaarium.switchboard.runbooks.RunbookFireSheet(repo, state, id) { fireRunbookId = null }
 	}
+	editRunbook?.let { intent ->
+		com.atelier_nyaarium.switchboard.runbooks.RunbookEditor(repo, intent.id) { editRunbook = null }
+	}
 }
+
+/** A runbook to edit, or a new one when the id is absent. */
+data class RunbookEdit(val id: String?)
 
 /** Log and skip plugin claim errors. */
 internal fun logPluginThrow(message: String, err: Throwable) {

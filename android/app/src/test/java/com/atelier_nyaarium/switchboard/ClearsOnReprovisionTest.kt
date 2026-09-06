@@ -34,6 +34,7 @@ class ClearsOnReprovisionTest {
 			.map { it.name }
 			.toSet()
 		// playback: the run names the previous owner's messages and every transport surface draws it.
-		assertEquals(setOf("board", "vault", "presence", "trust", "drain", "playback"), declared)
+		// runbooks: the library is the previous owner's own writing, and firing one sends it.
+		assertEquals(setOf("board", "vault", "runbooks", "presence", "trust", "drain", "playback"), declared)
 	}
 }

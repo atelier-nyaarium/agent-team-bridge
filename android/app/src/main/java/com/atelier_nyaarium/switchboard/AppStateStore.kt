@@ -56,6 +56,7 @@ class AppStateStore internal constructor(
 	IdleSilenceStore,
 	ChatPersistenceStore,
 	com.atelier_nyaarium.switchboard.board.BoardStore,
+	com.atelier_nyaarium.switchboard.runbooks.RunbookStore,
 	com.atelier_nyaarium.switchboard.vault.VaultStore {
 	private constructor(context: Context, secure: Pair<SharedPreferences, Boolean>) : this(
 		context.filesDir,
@@ -291,6 +292,11 @@ class AppStateStore internal constructor(
 
 	override fun loadVault(): String? = prefs.getString(KEY_VAULT, null)
 
+	/** The phone authors runbooks, so this is the library rather than a cache; the write must land. */
+	override fun saveRunbooks(json: String) = check(prefs.edit().putString(KEY_RUNBOOKS, json).commit())
+
+	override fun loadRunbooks(): String? = prefs.getString(KEY_RUNBOOKS, null)
+
 	/** Connected Gateway id. */
 	fun saveGatewayId(id: String) = prefs.edit().putString(KEY_GATEWAY_ID, id).apply()
 
@@ -493,6 +499,7 @@ class AppStateStore internal constructor(
 		const val KEY_PLUGIN_ENABLED_PREFIX = "plugin_enabled."
 		const val KEY_TASK_BOARD = "task_board"
 		const val KEY_VAULT = "vault"
+		const val KEY_RUNBOOKS = "runbooks"
 		const val KEY_VAULT_UNLOCK = "vault_unlock"
 		const val KEY_AUTO_TTS = "auto_tts"
 		const val KEY_AUTO_PLAY = "auto_play_tier"
@@ -523,7 +530,7 @@ class AppStateStore internal constructor(
 		/** Keep every grammar key here. */
 		val SCHEMA_WIPE_KEYS = listOf(
 			KEY_THREADS, KEY_READ_ANCHORS, KEY_LABELS, KEY_DRAFTS, KEY_SCHEDULED_SENDS, KEY_GOALS, KEY_ABSENCE_STREAKS,
-			KEY_SYNC_EPOCH, KEY_SYNC_ACKED, KEY_SYNC_DROPPED, KEY_TASK_BOARD, KEY_VAULT,
+			KEY_SYNC_EPOCH, KEY_SYNC_ACKED, KEY_SYNC_DROPPED, KEY_TASK_BOARD, KEY_VAULT, KEY_RUNBOOKS,
 		)
 
 		/** Keep every provisioning key here. */
@@ -536,7 +543,7 @@ class AppStateStore internal constructor(
 			KEY_THREADS, KEY_READ_ANCHORS, KEY_LABELS, KEY_DRAFTS, KEY_SCHEDULED_SENDS, KEY_GOALS, KEY_GATEWAY_ID,
 			KEY_CONVERSATION_ID,
 			KEY_SYNC_EPOCH, KEY_SYNC_ACKED, KEY_SYNC_DROPPED, KEY_ABSENCE_STREAKS, KEY_TASK_BOARD, KEY_VAULT,
-			KEY_LAST_PROJECT,
+			KEY_RUNBOOKS, KEY_LAST_PROJECT,
 		)
 	}
 }

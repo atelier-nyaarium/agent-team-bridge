@@ -6,11 +6,14 @@ export type RunbookToken = { kind: "literal"; text: string } | { kind: "placehol
 
 export type RunbookParse = { ok: true; tokens: RunbookToken[] } | { ok: false; reason: string };
 
+/** Explicit, because `\s` differs across runtimes and the Kotlin twin must agree character for character. */
+const SPACE = "[ \\t\\r\\n]*";
+
 /** Anchored, so a `{{` either opens a placeholder here or opens nothing. */
-const PLACEHOLDER_AT = /^\{\{\s*([A-Za-z][A-Za-z0-9_]*)\s*\}\}/;
+const PLACEHOLDER_AT = new RegExp(`^\\{\\{${SPACE}([A-Za-z][A-Za-z0-9_]*)${SPACE}\\}\\}`);
 
 /** The same form, found anywhere. Reads rendered text, which is prose rather than a template. */
-const PLACEHOLDER_ANYWHERE = /\{\{\s*[A-Za-z][A-Za-z0-9_]*\s*\}\}/;
+const PLACEHOLDER_ANYWHERE = new RegExp(`\\{\\{${SPACE}[A-Za-z][A-Za-z0-9_]*${SPACE}\\}\\}`);
 
 /** Only an opener can begin a placeholder, so a lone `}}` stays literal for prose about JSON. */
 export function parseBody(body: string): RunbookParse {

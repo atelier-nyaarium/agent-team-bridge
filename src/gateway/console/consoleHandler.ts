@@ -102,6 +102,8 @@ export function createConsoleDispatcher({
 		},
 	});
 	const ownerByConversation = new Map<string, string>();
+	/** Fires this process started, which a durable in-flight record cannot distinguish from a crash. */
+	const firingNow = new Set<string>();
 	const appendIfLive = (
 		conversationId: string,
 		entry: import("../../shared/console-protocol.js").MailboxInput,
@@ -329,15 +331,24 @@ export function createConsoleDispatcher({
 				const key = durableOpKey(op.kind, opId);
 				const held = durableOpStore.get(conversationId, key);
 				if (held?.state === "complete") return held.result;
-				if (held?.state === "in-flight") return { fired: false, reason: "this runbook is already firing" };
+				// A restored in-flight record is a crashed attempt the store means to be re-executed;
+				// only one this process started is a fire still going.
+				if (firingNow.has(key)) return { fired: false, reason: "this runbook is already firing" };
 				const generation = durableOpStore.markInFlight(conversationId, key);
+				firingNow.add(key);
 				const release = () => {
+					firingNow.delete(key);
 					if (generation !== null) durableOpStore.clear(conversationId, key, generation);
 				};
 				try {
 					const result = await runbookFire.fire(op, { conversationId, opId, device, ownerId });
-					if (result.fired) durableOpStore.markComplete(conversationId, key, result);
-					else release();
+					if (!result.fired) {
+						release();
+						return result;
+					}
+					durableOpStore.markComplete(conversationId, key, result);
+					// A completion the fence refused is not on disk, so this process holds the line instead.
+					if (durableOpStore.get(conversationId, key)?.state === "complete") firingNow.delete(key);
 					return result;
 				} catch (error) {
 					release();

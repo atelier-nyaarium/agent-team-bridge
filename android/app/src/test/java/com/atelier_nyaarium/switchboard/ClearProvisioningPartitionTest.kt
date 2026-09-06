@@ -46,6 +46,7 @@ class ClearProvisioningPartitionTest {
 			"sync_dropped",
 			"team_absence_streak",
 			"task_board",
+			"runbooks",
 			"create_last_project_by_gateway",
 		)
 		for (k in mustWipe) assertTrue("$k must be wiped by clearProvisioning", k in wiped)

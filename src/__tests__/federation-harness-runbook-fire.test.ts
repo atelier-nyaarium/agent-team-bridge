@@ -100,6 +100,27 @@ describe("federation harness: firing a runbook", () => {
 		expect(landed()).toBe(1);
 	});
 
+	it("refuses a second fire of the same op while the first is still going", async () => {
+		const target = "fixture-app.concurrent";
+		const attached = attachFakeSession(h.gateway, { team: target, conversationId: "conv-runbook-concurrent" });
+		sessions.push(attached);
+		await attached.ready();
+
+		const values = { level: "minor", repo: "switchboard" };
+		const body = "Cut a minor release of switchboard. Never hand-edit a version.";
+		const both = await Promise.all([
+			fire(values, { kind: "session", target }, "op-fire-concurrent"),
+			fire(values, { kind: "session", target }, "op-fire-concurrent"),
+		]);
+
+		// One attempt is refused, and the body still lands exactly once.
+		expect(both.some((answer) => !answer.fired)).toBe(true);
+		await h.waitFor(
+			async () => (attached.inbound.filter((frame) => frame.body === body).length === 1 ? true : undefined),
+			"exactly one delivery",
+		);
+	});
+
 	it("creates a session, waits for it to listen, then lands the runbook in it", async () => {
 		const launched = launchesInto(true);
 		const fired = await fire({ level: "patch", repo: "evie-bot" }, { kind: "new", target: "host" });

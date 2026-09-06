@@ -20,10 +20,16 @@ import com.atelier_nyaarium.switchboard.Authority
 import com.atelier_nyaarium.switchboard.Presence
 import com.atelier_nyaarium.switchboard.Team
 import com.atelier_nyaarium.switchboard.board.BoardBlob
-import com.atelier_nyaarium.switchboard.board.GatewayBoard
+import com.atelier_nyaarium.switchboard.board.BoardCachedText
 import com.atelier_nyaarium.switchboard.localFieldOrSelf
 import com.atelier_nyaarium.switchboard.proto.BoardAttachment
 import com.atelier_nyaarium.switchboard.proto.BoardEntry
+import com.atelier_nyaarium.switchboard.proto.BoardEntryClear
+import com.atelier_nyaarium.switchboard.proto.BoardEntrySealed
+import com.atelier_nyaarium.switchboard.proto.BoardSession
+import com.atelier_nyaarium.switchboard.proto.BoardStateAttachment
+import com.atelier_nyaarium.switchboard.proto.BoardStoredEntry
+import com.atelier_nyaarium.switchboard.proto.ContentEnvelope
 import com.atelier_nyaarium.switchboard.proto.RefFileMeta
 import com.atelier_nyaarium.switchboard.proto.RefKeyMeta
 import com.atelier_nyaarium.switchboard.proto.RefSpanMeta
@@ -375,6 +381,9 @@ class SandboxFixtures(private val filesDir: File, private val assets: AssetManag
 		 * the anchor resolves by (epoch, seq) equality, so both must be real values here. */
 		const val SANDBOX_EPOCH = 7L
 
+		/** No keyring here, so every sealed field falls through to the cache. */
+		private val UNREADABLE = ContentEnvelope(v = 1L, epoch = SANDBOX_EPOCH, nonce = "", ciphertext = "")
+
 		/**
 		 * The link destinations MUST match the keys in the committed manifest, or the tap declines and
 		 * the fixture silently proves nothing.
@@ -457,9 +466,30 @@ class SandboxFixtures(private val filesDir: File, private val assets: AssetManag
 			val rank = "d" + ('a' + (it - 1))
 			BoardEntry(id = "7$suffix".padEnd(32, 'f'), title = "Filler $it, so the backlog scrolls", state = "open", rank = rank)
 		}
-		val blob = BoardBlob(gateways = mapOf(gatewayId to GatewayBoard(entries = listOf(entry) + branch + backlog)))
+		val shown = listOf(entry) + branch + backlog
+		val blob = BoardBlob(
+			routerRevision = 1L,
+			stored = shown.map { it.stored(gatewayId) },
+			text = shown.associate { it.id to BoardCachedText(it.title, it.body) },
+		)
 		store.saveTaskBoard(Json { ignoreUnknownKeys = true }.encodeToString(BoardBlob.serializer(), blob))
 	}
+
+	/** Nothing here opens a title, so the cache beside these is what the board renders from. */
+	private fun BoardEntry.stored(gatewayId: String) = BoardStoredEntry(
+		clear = BoardEntryClear(
+			id = id,
+			state = state,
+			parent = parent,
+			rank = rank,
+			session = sessionId?.let { BoardSession(domainId = DOMAIN, gatewayId = gatewayId, sessionId = it) },
+			attachments = attachments?.map {
+				BoardStateAttachment(blobId = it.blobId, size = it.size, mime = it.mime, blobGateway = it.blobGateway)
+			},
+			version = 1L,
+		),
+		sealed = BoardEntrySealed(title = UNREADABLE, body = body?.let { UNREADABLE }),
+	)
 
 	/** A library to look at the tab and the fire sheet with, since no Gateway answers here. */
 	fun runbooks(): List<com.atelier_nyaarium.switchboard.proto.Runbook> = listOf(

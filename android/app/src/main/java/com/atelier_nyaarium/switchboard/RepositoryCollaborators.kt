@@ -116,6 +116,7 @@ internal class ChatRepositoryBoardCollaborators(private val repo: ChatRepository
 internal class ChatRepositoryRunbookHost(private val repo: ChatRepository) : RunbookHost {
 	override val client: ConsoleClient? get() = repo.clientOrNull()
 	override fun homeGatewayId() = repo.homeGatewayId
+	override val library get() = repo.runbooks
 }
 
 internal class ChatRepositoryVaultCollaborators(private val repo: ChatRepository) : VaultOpsCollaborators {

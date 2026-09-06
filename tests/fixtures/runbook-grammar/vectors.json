@@ -1,0 +1,105 @@
+{
+	"_comment": "Which names a body declares, forced through both runtimes so the Kotlin twin cannot drift. `names` is null when the body does not parse. Whitespace is an explicit class in both, never a shorthand: the two disagree about which characters count.",
+	"cases": [
+		{
+			"name": "each name once, in the order the body first mentions it",
+			"body": "bump {{level}} then tag {{level}} for {{repo}}",
+			"names": ["level", "repo"]
+		},
+		{
+			"name": "whitespace inside the braces is not part of the name",
+			"body": "{{ padded }} and {{tight}}",
+			"names": ["padded", "tight"]
+		},
+		{
+			"name": "a body with nothing to fill declares nothing",
+			"body": "just do it",
+			"names": []
+		},
+		{
+			"name": "a single brace pair opens no placeholder",
+			"body": "{single} brace",
+			"names": []
+		},
+		{
+			"name": "prose closing nested JSON is literal",
+			"body": "the config reads {\"a\": {\"b\": 1}}",
+			"names": []
+		},
+		{
+			"name": "an underscore and digits are part of a name after the first letter",
+			"body": "{{repo_2}} and {{aB9_c}}",
+			"names": ["repo_2", "aB9_c"]
+		},
+		{
+			"name": "a newline inside the braces still names the parameter",
+			"body": "cut {{\n  level\n}} now",
+			"names": ["level"]
+		},
+		{
+			"name": "a tab inside the braces still names the parameter",
+			"body": "cut {{\tlevel\t}} now",
+			"names": ["level"]
+		},
+		{
+			"name": "an opener that names nothing refuses the whole body",
+			"body": "cut {{level",
+			"names": null
+		},
+		{
+			"name": "a nested opener refuses, since one of them closes nothing",
+			"body": "{{a{{b}}}}",
+			"names": null
+		},
+		{
+			"name": "a name may not start with a digit",
+			"body": "{{2fast}}",
+			"names": null
+		},
+		{
+			"name": "empty braces name nothing",
+			"body": "{{ }}",
+			"names": null
+		},
+		{
+			"name": "a hyphen is not part of a name, so the placeholder never closes",
+			"body": "{{a-b}}",
+			"names": null
+		},
+		{
+			"name": "a placeholder at each end of the body is found",
+			"body": "{{first}} middle {{last}}",
+			"names": ["first", "last"]
+		},
+		{
+			"name": "an empty body declares nothing",
+			"body": "",
+			"names": []
+		},
+		{
+			"name": "the scan carries on past a good placeholder to refuse a later opener",
+			"body": "{{ok}} then {{bad",
+			"names": null
+		},
+		{
+			"name": "two placeholders touching, the second of them malformed",
+			"body": "{{ok}}{{2bad}}",
+			"names": null
+		},
+		{
+			"name": "a non-breaking space opens nothing, since the runtimes disagree about calling it whitespace",
+			"body": "{{\u00a0level\u00a0}}",
+			"names": null
+		},
+		{
+			"name": "a placeholder found after a long literal run",
+			"body": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx{{tail}}",
+			"names": ["tail"]
+		},
+		{
+			"name": "a repeated opener before a good one refuses rather than skipping to it",
+			"body": "{{ {{level}}",
+			"names": null
+		}
+	]
+}

@@ -66,7 +66,7 @@ fun RunbookFireSheet(repo: ChatRepository, state: ChatState, runbookId: String, 
 		delay(PREVIEW_SETTLE_MS)
 		val answer = repo.runbookOps.preview(runbookId, values, gatewayId)
 		sheet.preview = when {
-			answer == null -> PreviewState.Unreachable
+			answer == null -> PreviewState.Unreachable(repo.runbookOps.conflictOf(runbookId)?.reason)
 			answer.text != null -> PreviewState.Ready(answer.text, answer.revision)
 			else -> PreviewState.Refused(answer.reason ?: "these values do not render")
 		}
@@ -157,7 +157,9 @@ fun RunbookFireSheet(repo: ChatRepository, state: ChatState, runbookId: String, 
 							if (answer?.fired == true) {
 								onDismiss()
 							} else {
-								sheet.refusal = answer?.reason ?: "the fire did not reach this Gateway"
+								sheet.refusal = answer?.reason
+									?: repo.runbookOps.conflictOf(runbookId)?.reason
+									?: "the fire did not reach this Gateway"
 							}
 						}
 					},
@@ -191,7 +193,7 @@ private fun PreviewPane(preview: PreviewState) {
 					)
 					preview is PreviewState.Refused -> Text(preview.reason, style = MaterialTheme.typography.bodySmall)
 					preview is PreviewState.Unreachable -> Text(
-						"This Gateway did not answer",
+						preview.reason ?: "This Gateway did not answer",
 						style = MaterialTheme.typography.bodySmall,
 					)
 					else -> Text("Rendering", style = MaterialTheme.typography.bodySmall)
@@ -202,9 +204,9 @@ private fun PreviewPane(preview: PreviewState) {
 }
 
 /**
- * The sheet's state, holding both its lifetimes so neither can be keyed by mistake. A form belongs
- * to a runbook at a revision and `adopt` resets it; a fire in flight belongs to the sheet and does
- * not, or a revision landing mid-fire would offer Fire again with one still going.
+ * Two lifetimes, so neither can be keyed by mistake. A form belongs to a runbook at a revision and
+ * `adopt` resets it. A fire in flight belongs to the sheet, or a revision landing mid-fire would
+ * offer Fire again with one still going.
  */
 internal class FireSheetState(runbook: Runbook, gatewayId: String) {
 	var revision by mutableStateOf(runbook.revision)
@@ -232,7 +234,8 @@ internal class FireSheetState(runbook: Runbook, gatewayId: String) {
 
 internal sealed interface PreviewState {
 	data object Pending : PreviewState
-	data object Unreachable : PreviewState
+	/** No answer, carrying the standing conflict's reason when one explains it. */
+	data class Unreachable(val reason: String?) : PreviewState
 	/** The last render, kept visible while a newer one is asked for. Fire waits for it. */
 	data class Stale(val text: String) : PreviewState
 	data class Ready(val text: String, val revision: Long) : PreviewState

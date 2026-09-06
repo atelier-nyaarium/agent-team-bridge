@@ -355,6 +355,119 @@ draft is materially harder: parameters keyed by placeholder name, orphans kept w
 pruned on save, and a nested option list inside each choice. It wants its own draft model, holding
 its own two lifetimes the same way rather than reusing these fields.
 
+### Found in passing
+
+**Back did not close the editor.** It renders last, over everything, but the one `BackHandler` did
+not know about it, so Back fell through to whatever was underneath.
+
+**The emulator variant had not compiled since the board moved to the Router.** `SandboxFixtures`
+still built a `BoardBlob(gateways = ...)` of `GatewayBoard`, a shape that no longer exists, so no UI
+phase could be looked at. The fixture now maps its `BoardEntry` list into stored entries with an
+unopenable envelope plus the cached text beside it, which is the road `renderBoard` already takes
+when a device cannot open a title.
+
+**A foreground resume threw before a Domain existed.** `RepositoryFocusHost.onForeground` asked
+`repo.ownerOps.domainId() != null`, and `ownerOps` throws exactly when there is no Domain, so the
+question could never be answered no. It now asks `ownerOpsOrNull()`. Every other `ownerOps` call
+site signs an op, where the throw is the right answer.
+
+**The sandbox still cannot show a screen, for a third reason.** Seeding runs, then `connect()`
+reaches a signing path with no confirmed Domain and the state resets to unprovisioned, leaving the
+onboarding screen. Deciding what the sandbox should do about Domain confirmation is scaffolding
+work, not this feature's, so the runbook screens were verified by their rules and the compiler
+rather than by eye.
+
+**Two residue rosters did not pin `runbooks`.** `SCHEMA_WIPE_KEYS` and `PROVISIONING_KEYS` both hold
+the key, but `SchemaMigrationWipeTest` and `ClearProvisioningPartitionTest` did not, so dropping it
+from either roster would have gone unnoticed.
+
+**A refused push carried half of what it needs.** `ConsoleRunbookPutResult` has answered both a
+reason and the held revision since Phase 1; the phone kept only the reason, in a field nothing read.
+Now `conflictsAfterPut` keeps both per runbook, the fire sheet shows the reason where it used to say
+"This Gateway did not answer", and the editor offers Overwrite, which rebases the draft onto the
+held revision so the next save wins. `standingConflict` is the guard: below the draft's revision the
+offer is withdrawn, because rebasing backwards would mint a revision the library's merge discards.
+
+### Bug Classes
+
+**Revision arithmetic is split across four owners, and three rounds moved it around rather than
+settling it.** The mechanism: `RunbookEditor` snapshots a revision, `RunbookOps.save` decides what
+to mint, `RunbookManager.merge` decides what wins, and the gateway's put refuses at or below what it
+holds. No one of them owns the rule, so a change to any one of them shifts which side loses.
+
+- Round 1, align-fix: `standingConflict` withdraws the rebase offer once the draft passes the held
+  revision, because rebasing backwards mints a revision `merge` would discard.
+- Round 2, red-team-fix: `save` lifts above whatever the library holds, because a stale draft was
+  otherwise discarded in silence with the editor closing as if it had saved. The blocking road in
+  was Overwrite, but any draft that goes stale loses the same way, so guarding Overwrite would have
+  fixed the instance and left the class.
+- Round 3, re-audit of round 2: that lift lets a stale draft outrank and replace a newer copy from
+  another phone, which round 2 introduced. Round 2 is still the better trade, because losing the
+  save the owner is watching is the common case and needs one phone, while the new loss needs two
+  phones and a gateway switch mid-edit.
+
+Left as it stands, and raised for `architecture-fan-out`. The fix is not a fourth patch: it is one
+owner for the rule, so that a save from a stale base is a conflict the owner is told about through
+the offer already built, rather than a silent win for whichever side the arithmetic favors today.
+
+A test asserting round 2's old behavior through `save` was asserting the bug, and now says what each
+road means.
+
+**A durable in-flight marker cannot tell a crash from a fire in flight.** `durableOpStore`'s own
+test names the contract: a restored in-flight record means re-execute, not replay. The fire guard
+read the record instead and answered "this runbook is already firing", so a Gateway that died
+mid-fire wedged that op until the record expired. The process now keeps its own set of fires it
+started, and the durable record no longer stands in for one. The re-audit found the other end of
+the same seam: `markComplete` returns without writing while the migration fence is up, so releasing
+the key on a fenced success would let a retry deliver twice. The key is released only once the
+store confirms the completion is on disk.
+
+**Published before persisted.** `RunbookManager.commit` set the in-memory library, then wrote, then
+swallowed the failure, so a refused write left the phone showing a library that a restart would
+undo. It writes first now and keeps what the owner still has when the write refuses. `clearInMemory`
+is the deliberate exception, since a re-provision must take the previous owner's writing out of
+memory whether or not the disk cooperates.
+
+### Declined
+
+**Always-expanded parameter cards.** The design says "expandable to a label, a Text/Choice segment";
+the cards open out from their placeholder title into exactly those fields, with no collapse. Runbooks
+carry one to three parameters, and collapsing hides the only fields worth opening the editor for.
+
+**`ChatState.runbooks` as a second copy.** It is a projection, which is how every ops class feeds
+Compose. `RunbookManager` stays authoritative.
+
+**A second lifetime holder for the editor.** `RunbookDraft` is the draft model the phase asked for.
+There is no async save to hold, and the one piece of editor-lifetime state, the pending option text,
+is already keyed by its parameter.
+
+**A conflict raised while the editor is open.** Only a preview or a fire pushes, both of which live
+in the fire sheet, and a modal sheet cannot be open behind the editor. The conflict is set before
+the editor opens and read once at composition, so an observable holder would buy nothing.
+
+**Unbounded retention for fired op ids.** The 256-op and 14-day eviction is `durableOpStore`'s
+contract for every value op, and a retry of a fortnight-old id is not a thing the phone does. The
+alternative is the unbounded growth the store exists to prevent.
+
+**Quarantining a poisoned gateway snapshot.** `openDurable` already quarantines and rebuilds, and
+the phone republishes its copy on the next sync.
+
+**Decoding the library on the construction thread.** `BoardManager` and `VaultManager` read their
+blobs the same way at the same moment. A runbook library is a handful of records; changing this one
+alone would leave three siblings disagreeing about when their state exists.
+
+### Left for the owner to weigh
+
+**`awaitRegister` cannot hear a registration that already happened.** `WakeCoordinator.waitFor`
+records a future waiter only, so a session that registers before `createSession` resolves is missed
+and the fire answers `fired: false` while the target is listening. `consoleSessionLifecycle` waits
+the same way, so this is shared session machinery rather than the fire's own, and a fix belongs in
+the coordinator where every caller gets it.
+
+**The harness coalesces two answers to one op id.** Firing the same op id twice concurrently, both
+promises read the refusal, though exactly one delivery lands. The delivery count is what the test
+asserts. Worth knowing before writing another test that expects two distinct answers.
+
 ## Open, to settle inside the phases
 
 - What a fire does when the gateway is offline, or the session never registers.
@@ -451,6 +564,15 @@ its own two lifetimes the same way rather than reusing these fields.
   currently run. Fixing it means rewriting `seedBoard` against the sealed-entry shape, which is that
   migration's work rather than this feature's. The runbook fixtures are seeded and will show the tab
   the moment it compiles. Adding `compileEmulatorKotlin` to the gate is the cheap half.
+
+- **A second load-sensitive flake, this one in Kotlin.** `PlaybackOpsTest > enqueueOrderSurvivesPause`
+  failed twice while the machine was busy, once as `NoSuchElementException` and once as
+  `AssertionError`, both at the same line. Two different exceptions from one line across runs is the
+  tell: it is a timing assumption, not a broken assertion. It passed three consecutive times under
+  `--rerun-tasks` once the machine was quiet. It cost a real detour, because a Kotlin test failing
+  right after adding a Kotlin file reads as cause and effect, and ruling that out meant moving the
+  new files aside and back. Same shape as the federation harness flake above, and the same cost:
+  the expensive part is not the rerun, it is disbelieving a red gate.
 
 - **The federation harness flake recurred, named, and got worse under load.**
   `federation-harness-boot.test.ts`, the case `converges to one presence row per team when a session

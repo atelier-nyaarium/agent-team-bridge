@@ -1,5 +1,6 @@
 package com.atelier_nyaarium.switchboard
 
+import com.atelier_nyaarium.switchboard.proto.ConsoleRunbookPutResult
 import com.atelier_nyaarium.switchboard.proto.Runbook
 import com.atelier_nyaarium.switchboard.proto.RunbookParameter
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -7,9 +8,16 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class RunbookOpsTest {
-	private class NoGateway : RunbookHost {
+	private class MemoryStore : com.atelier_nyaarium.switchboard.runbooks.RunbookStore {
+		private var blob: String? = null
+		override fun loadRunbooks() = blob
+		override fun saveRunbooks(json: String) { blob = json }
+	}
+
+	private class NoGateway(store: MemoryStore = MemoryStore()) : RunbookHost {
 		override val client: ConsoleClient? = null
 		override fun homeGatewayId() = ""
+		override val library = com.atelier_nyaarium.switchboard.runbooks.RunbookManager(store)
 	}
 
 	private fun book(id: String, name: String = id, revision: Long = 1L) = Runbook(
@@ -21,21 +29,20 @@ class RunbookOpsTest {
 	)
 
 	private fun opsOver(library: List<Runbook>): Pair<RunbookOps, MutableStateFlow<ChatState>> {
-		val state = MutableStateFlow(ChatState(runbooks = library))
-		return RunbookOps(state, NoGateway()) to state
+		val state = MutableStateFlow(ChatState())
+		val host = NoGateway()
+		host.library.merge(library)
+		return RunbookOps(state, host) to state
 	}
 
 	@Test
-	fun savingOrdersByNameAndKeepsTheHigherRevision() {
+	fun savingOrdersByNameThenById() {
 		val (ops, state) = opsOver(listOf(book("b", name = "Zebra"), book("a", name = "Apple")))
 
 		ops.save(book("c", name = "Apple"))
 		assertEquals(listOf("a", "c", "b"), state.value.runbooks.map { it.id })
 
 		ops.save(book("a", name = "Apple", revision = 4L))
-		assertEquals(4L, state.value.runbooks.first { it.id == "a" }.revision)
-
-		ops.save(book("a", name = "Apple", revision = 2L))
 		assertEquals(4L, state.value.runbooks.first { it.id == "a" }.revision)
 	}
 
@@ -58,6 +65,40 @@ class RunbookOpsTest {
 		val (ops, state) = opsOver(listOf(book("a"), book("b")))
 		kotlinx.coroutines.runBlocking { ops.delete("a") }
 		assertEquals(listOf("b"), state.value.runbooks.map { it.id })
+	}
+
+	@Test
+	fun aSaveAlwaysLandsAboveTheLibrarySoTheOwnersOwnEditIsNeverDiscarded() {
+		val (ops, state) = opsOver(listOf(book("a", revision = 8L)))
+		val bodyOf = { state.value.runbooks.first { it.id == "a" }.body }
+
+		// The editor was opened at revision 6 and something newer landed underneath it.
+		ops.save(book("a", revision = 6L).copy(body = "edited while stale"))
+		assertEquals("edited while stale", bodyOf())
+		assertEquals(9L, state.value.runbooks.first { it.id == "a" }.revision)
+
+		// Overwrite rebases onto a held revision the library has since passed.
+		ops.save(book("a", revision = 7L).copy(body = "rebased onto a spent conflict"))
+		assertEquals("rebased onto a spent conflict", bodyOf())
+	}
+
+	@Test
+	fun aRefusedPushIsAConflictTheOwnerCanRebaseOn() {
+		val refused = ConsoleRunbookPutResult(stored = false, revision = 7L, reason = "held newer")
+		val raised = conflictsAfterPut(emptyMap(), "a", refused)
+		assertEquals(RunbookConflict("held newer", 7L), raised["a"])
+
+		// An unreachable Gateway is not evidence the conflict went away.
+		assertEquals(raised, conflictsAfterPut(raised, "a", null))
+		assertEquals(emptyMap<String, RunbookConflict>(), conflictsAfterPut(raised, "a", refused.copy(stored = true)))
+	}
+
+	@Test
+	fun aConflictBelowTheDraftIsSpentSoTheEditorStopsOfferingIt() {
+		val conflict = RunbookConflict("held newer", 7L)
+		assertEquals(conflict, standingConflict(conflict, 7L))
+		// Rebasing onto 7 from 8 would mint 8 again, which the library's merge would discard.
+		assertEquals(null, standingConflict(conflict, 8L))
 	}
 
 	@Test

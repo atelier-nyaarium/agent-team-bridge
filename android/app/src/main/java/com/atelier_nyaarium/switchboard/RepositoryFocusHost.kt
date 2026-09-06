@@ -25,8 +25,8 @@ internal class ChatRepositoryFocusHost(private val repo: ChatRepository) : Repos
 		repo._state.update { it.copy(error = null, pollFailStreak = 0, enrollingSince = 0L, foreground = true) }
 		declareFocus(lastVisibleFocus)
 		repo.drain.kickPoll()
-		// Polling remains the fallback.
-		if (repo.ownerOps.domainId() != null) runCatching { repo.socket.connect() }
+		// Polling remains the fallback, and no Domain yet is an answer rather than a throw.
+		if (repo.ownerOpsOrNull()?.domainId() != null) runCatching { repo.socket.connect() }
 	}
 
 	override fun onBackground() {
