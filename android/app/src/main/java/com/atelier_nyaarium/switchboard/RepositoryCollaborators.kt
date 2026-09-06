@@ -113,6 +113,11 @@ internal class ChatRepositoryBoardCollaborators(private val repo: ChatRepository
 	override fun command(block: () -> Unit) = repo.command { block() }
 }
 
+internal class ChatRepositoryRunbookHost(private val repo: ChatRepository) : RunbookHost {
+	override val client: ConsoleClient? get() = repo.clientOrNull()
+	override fun homeGatewayId() = repo.homeGatewayId
+}
+
 internal class ChatRepositoryVaultCollaborators(private val repo: ChatRepository) : VaultOpsCollaborators {
 	override val vault: com.atelier_nyaarium.switchboard.vault.VaultManager get() = repo.vault
 	override val writer: com.atelier_nyaarium.switchboard.vault.VaultRouterWriter get() = repo.vaultRouter

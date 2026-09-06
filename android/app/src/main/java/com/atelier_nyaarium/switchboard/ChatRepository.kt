@@ -373,6 +373,7 @@ class ChatRepository(
 		repoScope = repoScope,
 		collaborators = vaultCollaborators,
 	)
+	internal val runbookOps = RunbookOps(state = _state, host = ChatRepositoryRunbookHost(this))
 	internal val attachments = AttachmentOps(
 		state = _state,
 		persistence = persistence,

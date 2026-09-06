@@ -48,6 +48,8 @@ class SandboxApp : Application() {
 			fixtures.goals(),
 			fixtures.admittedGateways(),
 		)
+		// The tab reads the library, and nothing here answers a runbook_list to fill it.
+		for (runbook in fixtures.runbooks()) repo.runbookOps.save(runbook)
 		// Seeding writes rows straight into state, bypassing the mailbox drain where the inbound
 		// handlers run, so the dock would stay empty however correct the ingest is. Run the same
 		// wire-declared conversion the handler runs, so the gallery is inspectable here.

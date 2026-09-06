@@ -297,6 +297,33 @@ changes, and pins the Fire it sends to the revision the preview answered.
 no subsystem to describe that this plan does not already describe better, and a second copy would
 only drift.
 
+### Bug Classes
+
+- **One `remember` key for state with two lifetimes, in the fire sheet:** the sheet holds form state
+  that belongs to a runbook AT A REVISION (the values, the target, the preview) and operation state
+  that belongs to the SHEET (whether a fire is in flight). Keying them the same way is wrong in
+  whichever direction it is uniform, and two rounds proved it by going both ways. Round one keyed
+  everything on the runbook id, so a revision landing while the sheet was open left the owner filling
+  a form for a body that had changed underneath them. Round two keyed everything on the edition,
+  which fixed the form and broke the fire: a revision arriving mid-fire rebuilt `firing` as false and
+  offered Fire again with the first still in flight. Each is now keyed to its own lifetime. The
+  structural version is a single sheet state object holding both, so the two cannot be keyed
+  together, and Phase 4's editor will want exactly that shape for its own longer-lived form.
+
+**A runbook id is the owner's, not a gateway's.** The library keys by id alone, so the newest copy of
+an id wins wherever it came from, and firing at a gateway holding an older one pushes the library's
+over it. That is the sync Question 1 asked for, and it is only sound because the phone authors every
+runbook, which makes the id space the phone's. Two gateways cannot legitimately hold different
+runbooks under one id once Phase 4 mints them here. Until then the library is filled from gateways,
+so the ids are theirs, and the guard is the preview: it renders what would actually be sent, from
+the gateway it would be sent to, before Fire is offered.
+
+**The library is a cache in this phase, and persistence waits for Phase 4.** Nothing on the phone
+authors a runbook yet, so everything the tab shows came from a gateway and `refresh` refills it. A
+gateway that cannot be reached leaves the tab empty, which is honest rather than lossy. The moment
+the editor exists the library holds work no gateway has, and it has to survive a restart; that is
+Phase 4's to build, alongside the slot in `ChatPersistence`.
+
 ## Phase 4 - The editor
 
 Name, body, and the derived parameter list with its nested options. The largest interface piece, and
@@ -357,6 +384,17 @@ last because everything else is provable without it.
   bill the store's three ops paid, and the preview paid it a third time in the same phase. Nothing
   new to say beyond the entry above, except that a checklist that recurs three times inside one
   feature is not an unlucky feature.
+
+- **The emulator variant does not compile, on `main`, and nothing notices.** `SandboxFixtures.kt`
+  imports `com.atelier_nyaarium.switchboard.board.GatewayBoard` and builds
+  `BoardBlob(gateways = mapOf(...))`. Neither exists: `BoardBlob` is now Router-held sealed entries
+  with `routerRevision`, `stored`, `text` and `pending`, and the board's move to that shape left its
+  fixture behind. `kotlin-gate.sh` builds only debug, so `compileEmulatorKotlin` is in no gate and
+  the breakage sat there. The variant exists precisely so a screen can be looked at without a
+  Gateway, which is the recorded complaint against the vault, and it is the one build that cannot
+  currently run. Fixing it means rewriting `seedBoard` against the sealed-entry shape, which is that
+  migration's work rather than this feature's. The runbook fixtures are seeded and will show the tab
+  the moment it compiles. Adding `compileEmulatorKotlin` to the gate is the cheap half.
 
 - **The federation harness flake recurred, now named.** `federation-harness-boot.test.ts`, the case
   `converges to one presence row per team when a session reattaches after a gateway restart`,

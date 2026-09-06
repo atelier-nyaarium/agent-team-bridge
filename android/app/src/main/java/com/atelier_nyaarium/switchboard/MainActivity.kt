@@ -128,6 +128,7 @@ fun App(
 	var boardStripHeight by remember { mutableStateOf(repo.store.boardStripHeight) }
 	var boardModal by remember { mutableStateOf<Pair<String, String>?>(null) }
 	var vaultModal by remember { mutableStateOf<VaultModal?>(null) }
+	var fireRunbookId by remember { mutableStateOf<String?>(null) }
 	// Clear reveal after handoff.
 	val revealAtState = remember { mutableStateOf<Pair<String, Long>?>(null) }
 	var revealAt by revealAtState
@@ -494,6 +495,15 @@ fun App(
 						modifier = modifier,
 					)
 				},
+				runbooksEnabled = true,
+				runbooks = { modifier ->
+					com.atelier_nyaarium.switchboard.runbooks.RunbooksScreen(
+						repo = repo,
+						state = state,
+						onFire = { fireRunbookId = it },
+						modifier = modifier,
+					)
+				},
 				snackbarHostState = snackbarHostState,
 				onRefresh = {
 					repo.command { presence.refreshTeams() }
@@ -586,6 +596,9 @@ fun App(
 		is VaultModal.Request ->
 			com.atelier_nyaarium.switchboard.vault.VaultRequestSheet(repo, state, modal.id) { vaultModal = null }
 		null -> {}
+	}
+	fireRunbookId?.let { id ->
+		com.atelier_nyaarium.switchboard.runbooks.RunbookFireSheet(repo, state, id) { fireRunbookId = null }
 	}
 }
 

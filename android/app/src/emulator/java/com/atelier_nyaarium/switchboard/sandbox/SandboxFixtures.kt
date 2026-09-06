@@ -461,6 +461,45 @@ class SandboxFixtures(private val filesDir: File, private val assets: AssetManag
 		store.saveTaskBoard(Json { ignoreUnknownKeys = true }.encodeToString(BoardBlob.serializer(), blob))
 	}
 
+	/** A library to look at the tab and the fire sheet with, since no Gateway answers here. */
+	fun runbooks(): List<com.atelier_nyaarium.switchboard.proto.Runbook> = listOf(
+		com.atelier_nyaarium.switchboard.proto.Runbook(
+			id = "release",
+			name = "Release the plugin",
+			body = "Cut a {{level}} release of {{repo}}.\n\nNever hand-edit a version: the build derives them.",
+			parameters = listOf(
+				com.atelier_nyaarium.switchboard.proto.RunbookParameter(
+					name = "level",
+					label = "Level",
+					kind = "choice",
+					default = "patch",
+					options = listOf("patch", "minor", "major"),
+				),
+				com.atelier_nyaarium.switchboard.proto.RunbookParameter(
+					name = "repo",
+					label = "Repo",
+					kind = "text",
+					default = "switchboard",
+				),
+			),
+			revision = 3L,
+		),
+		com.atelier_nyaarium.switchboard.proto.Runbook(
+			id = "triage",
+			name = "Morning triage",
+			body = "Read the overnight CI failures on {{branch}} and tell me which are real.",
+			parameters = listOf(
+				com.atelier_nyaarium.switchboard.proto.RunbookParameter(
+					name = "branch",
+					label = "Branch",
+					kind = "text",
+					default = "main",
+				),
+			),
+			revision = 1L,
+		),
+	)
+
 	/** Real bytes where the gallery will look for them, so a row can actually open. */
 	private fun writeBoardBytes(entryId: String, label: String, bytes: Int): BoardAttachment {
 		val png = ByteArrayOutputStream().also { out ->
