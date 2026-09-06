@@ -1,6 +1,6 @@
 {
 	"content_id": "vault",
-	"version": "8.7.4",
+	"version": "8.7.5",
 	"display_name": "Vault",
 	"description": "Secrets and notes the owner approves per use from this phone.",
 	"agent_instructions": "The owner's Vault is enabled. It holds secrets and notes sealed to the owner's phones and gateways. Each use is approved from the owner's phone, which names the operation asked for.",
