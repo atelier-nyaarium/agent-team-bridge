@@ -42,7 +42,11 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
 - `src/gateway/vault/operationSet.ts` - the one shape rule, the wrapper table read from each program's help, and the set a window grant covers
 - `src/gateway/compose/composeVault.ts` - vault client, decisions, requests, routes, and console operations
 - `src/gateway/runbooks/store.ts` - gateway-held runbooks; sole writer, so a stored record has passed the rules
-- `src/gateway/compose/composeRunbooks.ts` - the runbook store, its console operations, and the read the fire takes
+- `src/gateway/compose/composeRunbooks.ts` - the runbook store and its console operations
+- `src/gateway/console/consoleRunbookFire.ts` - renders a stored runbook and lands it in a session, creating one first
+  - **A preview and a fire reach the same words:** `textOf` is the one road from an id and values to
+    text, so `runbook_preview` cannot answer something a `runbook_fire` would not send. A fire may
+    name the revision it previewed, and a stored record that has moved past it is refused.
 - `src/gateway/boardAwareness.ts` - board awareness recipients and net-change classification
 - `src/gateway/awarenessBank.ts` - subscriber state, deadlines, and liveness reads
 - `src/gateway/daemonCapabilities.ts` - daemon capability answer
@@ -150,11 +154,16 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
 - `src/federation-server/board/` - board records with sealed text, authority and cascade on the clear envelope, observation rows
 - `src/federation-server/vault/` - vault entries: sealed fields, revision CAS, phone writes, gateway creates, unopened fields
 - `src/shared/schemasVault.ts` - vault wire truth: entries, puts, results, requests, grants, console answers
-- `src/shared/schemasRunbook.ts` - runbook wire truth, its caps, the `{{name}}` grammar, and `runbookRefusal`
+- `src/shared/schemasRunbook.ts` - runbook wire truth and `runbookRefusal`, the rules a stored record passes
   - **A body's placeholders ARE its parameter list:** `runbookRefusal` refuses either without the
-    other, so no stored runbook carries a blank nothing can fill or a parameter nothing uses. The
-    grammar recognises well-formed placeholders only; text merely shaped like one is caught by
-    guards beside it, and `plans/runbooks.md` records why that seam belongs to the renderer.
+    other, so no stored runbook carries a blank nothing can fill or a parameter nothing uses. It
+    bounds nothing by size; a record is refused for what it means.
+- `src/shared/runbook-grammar.ts` - the `{{name}}` grammar and the render, shared by the store and the fire
+  - **One parse owns the grammar:** `parseBody` refuses a `{{` that opens no placeholder, so text
+    shaped like one is a parse decision rather than a guard beside the scan. A lone `}}` stays
+    literal, since prose about JSON closes nested braces.
+  - **`renderRunbook` reads its own output:** a value and the literals around it can each be
+    innocent and compose a placeholder only after substitution, which no check on the body can see.
 - `src/federation-server/scheduled/` - scheduled sends: versioned records, timers, fire through the op ledger, result rows
 - `src/federation-server/tier1/` - capability fold and read anchors
 - `src/federation-server/migration/` - leases, serve gate, and cursor translation
