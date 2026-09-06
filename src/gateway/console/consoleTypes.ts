@@ -3,7 +3,6 @@ import type { Ambient } from "../../shared/ambient.js";
 import type { BlobStore } from "../../shared/blob-store.js";
 import type { BoardDisposition } from "../../shared/board-authority.js";
 import type {
-	ConsoleOp,
 	CrossDomainConfirmResult,
 	CrossDomainListenResult,
 	CrossDomainListenStateResult,
@@ -169,31 +168,3 @@ export const SEND_BOUND_MS = 25_000;
 export const CREATE_SESSION_BOUND_MS = 25_000;
 
 export const HOLD_CAP_MS = MAX_POLL_HOLD_MS;
-
-// Board retries align mutation caching with durable replay.
-export function isBoardMutationKind(kind: string): boolean {
-	return kind.startsWith("board_") && kind !== "board_read";
-}
-
-export function isMutatingOp(op: ConsoleOp): boolean {
-	return (
-		op.kind === "send" ||
-		op.kind === "respond" ||
-		// Board writes are absolute, so replay instead of reapplying them.
-		isBoardMutationKind(op.kind) ||
-		op.kind === "tmux_send" ||
-		op.kind === "create_session" ||
-		op.kind === "reload_plugins" ||
-		op.kind === "forget" ||
-		op.kind === "close_session" ||
-		op.kind === "rename_session" ||
-		op.kind === "cross_domain_listen" ||
-		op.kind === "cross_domain_request" ||
-		op.kind === "cross_domain_confirm" ||
-		op.kind === "cross_domain_cancel" ||
-		op.kind === "cross_domain_share" ||
-		op.kind === "cross_domain_unshare" ||
-		op.kind === "cross_domain_unlink" ||
-		op.kind === "cross_domain_untrust"
-	);
-}
