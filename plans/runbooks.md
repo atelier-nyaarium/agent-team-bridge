@@ -229,6 +229,10 @@ Its first slice is the phone-side client plumbing, which Phase 1 deliberately le
 generated the Kotlin types and stopped; nothing on the phone calls `sendValueOp` for the three
 runbook ops yet, so a `ConsoleClient` method and a repository ops class come before any screen.
 
+`docs/runbooks.md` and its row in the `AGENTS.md` table land here too. Until a tab exists there is
+no subsystem to describe that this plan does not already describe better, and a second copy would
+only drift.
+
 ## Phase 4 - The editor
 
 Name, body, and the derived parameter list with its nested options. The largest interface piece, and

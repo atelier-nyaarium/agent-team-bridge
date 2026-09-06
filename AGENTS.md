@@ -41,6 +41,8 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
 - `src/gateway/vault/decisions.ts` / `requests.ts` / `helperTokens.ts` / `vaultRoutes.ts` - grants and `displayShape`; request rows that settle once, admit a joining caller, and cap open requests per target; helper tokens; loopback routes
 - `src/gateway/vault/operationSet.ts` - the one shape rule, the wrapper table read from each program's help, and the set a window grant covers
 - `src/gateway/compose/composeVault.ts` - vault client, decisions, requests, routes, and console operations
+- `src/gateway/runbooks/store.ts` - gateway-held runbooks; sole writer, so a stored record has passed the rules
+- `src/gateway/compose/composeRunbooks.ts` - the runbook store, its console operations, and the read the fire takes
 - `src/gateway/boardAwareness.ts` - board awareness recipients and net-change classification
 - `src/gateway/awarenessBank.ts` - subscriber state, deadlines, and liveness reads
 - `src/gateway/daemonCapabilities.ts` - daemon capability answer
@@ -148,6 +150,11 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
 - `src/federation-server/board/` - board records with sealed text, authority and cascade on the clear envelope, observation rows
 - `src/federation-server/vault/` - vault entries: sealed fields, revision CAS, phone writes, gateway creates, unopened fields
 - `src/shared/schemasVault.ts` - vault wire truth: entries, puts, results, requests, grants, console answers
+- `src/shared/schemasRunbook.ts` - runbook wire truth, its caps, the `{{name}}` grammar, and `runbookRefusal`
+  - **A body's placeholders ARE its parameter list:** `runbookRefusal` refuses either without the
+    other, so no stored runbook carries a blank nothing can fill or a parameter nothing uses. The
+    grammar recognises well-formed placeholders only; text merely shaped like one is caught by
+    guards beside it, and `plans/runbooks.md` records why that seam belongs to the renderer.
 - `src/federation-server/scheduled/` - scheduled sends: versioned records, timers, fire through the op ledger, result rows
 - `src/federation-server/tier1/` - capability fold and read anchors
 - `src/federation-server/migration/` - leases, serve gate, and cursor translation
