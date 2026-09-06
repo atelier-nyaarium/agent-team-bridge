@@ -124,6 +124,11 @@ boolean is `True` in Python and `true` in most others, so no shared list survive
   no descriptor path, which `isWithin` refuses outright, so no provider was ever at risk. The entry
   was right that the gap existed and wrong about who fell in it, and nothing between writing it and
   reading it said so. An entry naming the symbol it doubts, rather than the story, would have.
+- `git add -A` in switchboard sweeps the lexicon submodule pointer to whatever the submodule happens
+  to have checked out, and nothing says so. It moved the pin onto a plan-file commit twice today,
+  and the only thing that caught it was `bun run build` refusing a pin that is not a `Build x.y.z`
+  commit, two steps later. Staging `lexicon` by name, or leaving the submodule detached at its pin,
+  are the two habits that avoid it.
 - Only one provider's unit tests call `withOccurrences`; every other provider tests its extractor
   directly, and the wire applies the settlement in `serve.ts`. So a change to the settlement is
   invisible to thirteen provider suites, and only conformance, which runs the real wire, sees it.
