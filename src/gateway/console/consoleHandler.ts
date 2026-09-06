@@ -44,6 +44,7 @@ export function createConsoleDispatcher({
 	untrustOwner,
 	durableOpStore,
 	vault,
+	runbooks,
 	onSessionEnded,
 }: ConsoleHandlerDeps) {
 	const targets = createConsoleTargets({ localDomainId, localGatewayId, isTrustedCatalogProject });
@@ -283,12 +284,26 @@ export function createConsoleDispatcher({
 
 			case "vault_revoke":
 				return requireVault().revoke(op.grantId);
+
+			case "runbook_list":
+				return requireRunbooks().list();
+
+			case "runbook_put":
+				return requireRunbooks().put(op.runbook);
+
+			case "runbook_delete":
+				return requireRunbooks().remove(op.runbookId);
 		}
 	}
 
 	function requireVault() {
 		if (!vault) throw new Error("vault is not available on this Gateway");
 		return vault;
+	}
+
+	function requireRunbooks() {
+		if (!runbooks) throw new Error("runbooks are not available on this Gateway");
+		return runbooks;
 	}
 
 	function durableOpKey(kind: string, opId: string): string {

@@ -132,6 +132,9 @@ object Protocol {
 			const val VAULT_ANSWER: String = "vault_answer"
 			const val VAULT_GRANTS: String = "vault_grants"
 			const val VAULT_REVOKE: String = "vault_revoke"
+			const val RUNBOOK_LIST: String = "runbook_list"
+			const val RUNBOOK_PUT: String = "runbook_put"
+			const val RUNBOOK_DELETE: String = "runbook_delete"
 		}
 
 		object SocketFrame {
@@ -454,6 +457,22 @@ sealed class ConsoleOp {
 	@SerialName("vault_revoke")
 	data class VaultRevoke(
 		val grantId: String,
+	) : ConsoleOp()
+
+	@Serializable
+	@SerialName("runbook_list")
+	data object RunbookList : ConsoleOp()
+
+	@Serializable
+	@SerialName("runbook_put")
+	data class RunbookPut(
+		val runbook: Runbook,
+	) : ConsoleOp()
+
+	@Serializable
+	@SerialName("runbook_delete")
+	data class RunbookDelete(
+		val runbookId: String,
 	) : ConsoleOp()
 }
 
@@ -1525,6 +1544,41 @@ data class ConsoleVaultGrantsResult(
 @Serializable
 data class ConsoleVaultRevokeResult(
 	val revoked: Boolean,
+)
+
+@Serializable
+data class RunbookParameter(
+	val name: String,
+	val label: String,
+	val kind: String,
+	val default: String? = null,
+	val options: List<String>? = null,
+)
+
+@Serializable
+data class Runbook(
+	val id: String,
+	val name: String,
+	val body: String,
+	val parameters: List<RunbookParameter>,
+	val revision: Long,
+)
+
+@Serializable
+data class ConsoleRunbookListResult(
+	val runbooks: List<Runbook>,
+)
+
+@Serializable
+data class ConsoleRunbookPutResult(
+	val stored: Boolean,
+	val revision: Long,
+	val reason: String? = null,
+)
+
+@Serializable
+data class ConsoleRunbookDeleteResult(
+	val deleted: Boolean,
 )
 
 @Serializable

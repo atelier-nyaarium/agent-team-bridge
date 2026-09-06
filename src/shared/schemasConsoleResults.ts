@@ -15,6 +15,11 @@ import {
 	TeamInfoSchema,
 } from "./schemasPresence.js";
 import {
+	ConsoleRunbookDeleteResultSchema,
+	ConsoleRunbookListResultSchema,
+	ConsoleRunbookPutResultSchema,
+} from "./schemasRunbook.js";
+import {
 	ConsoleVaultAnswerResultSchema,
 	ConsoleVaultGrantsResultSchema,
 	ConsoleVaultRevokeResultSchema,
@@ -463,6 +468,9 @@ export const ConsoleOpResultSchema = z.union([
 	ConsoleVaultAnswerResultSchema,
 	ConsoleVaultGrantsResultSchema,
 	ConsoleVaultRevokeResultSchema,
+	ConsoleRunbookListResultSchema,
+	ConsoleRunbookPutResultSchema,
+	ConsoleRunbookDeleteResultSchema,
 ]);
 
 ////////////////////////////////

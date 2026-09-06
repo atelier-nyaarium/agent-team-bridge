@@ -141,6 +141,41 @@ gateway. Kotlin codegen and the gate. No interface yet.
 Caps belong here, since nothing downstream can add them: the body, the rendered message, the
 parameter count, and the options per parameter.
 
+### Bug Classes
+
+- **Brace text the placeholder grammar does not see, in `runbookRefusal`:** the grammar is one
+  regex that recognises a well-formed `{{name}}` and is blind to everything else shaped like one,
+  so each new way of writing braces is a separate guard rather than a case the grammar already
+  covers. Three rounds found three instances. Round one: a nested `{{a{{b}}}}` matched only the
+  inner placeholder, so the record stored and a render left `{{a` behind. Round two: a choice
+  option or default could itself be `{{other}}`, which a renderer substituting more than once would
+  expand, making the output depend on substitution order. Round three: a body and a value can each
+  be innocent and still compose, since `{{a}}{foo}}` filled with a value ending in `{` renders
+  `{{foo}}`; no guard over the body alone can see it, because the brace pair does not exist until
+  the substitution happens. Rounds one and two were patched with a guard beside the scan; round
+  three was left, because a third guard on the same mechanism is the design bug rather than the
+  cure. The structural fix is to tokenize the body once and check the rendered result, which makes
+  the class inexpressible rather than enumerated. Phase 2 owns the renderer and is where it belongs.
+
+- **Where the semantic rule gets applied, in the store's restore path:** `RunbookSchema` checks the
+  shape and `runbookRefusal` checks the meaning, and the two are consulted at different boundaries,
+  so each round moved the second one and broke something new. Round one found restore consulting
+  only the schema, so a record the rules refuse could be served. The patch filtered those records
+  out on restore; round two found that this silently erased them from disk on the next write, up to
+  every record at once after a rule change, with the phone unable to tell a discarded runbook from
+  one it never pushed. Reverted. Restore now keeps whatever the schema accepts, which is sound
+  because `put` is the only writer and the meaning was checked before anything landed. Phase 2's
+  fire re-checks before it renders, which is where a stale record actually matters and where a
+  refusal can reach the owner instead of deleting their work.
+
+### Found in passing
+
+- **`isMutatingOp` in `consoleTypes.ts` is dead.** It reads like live policy, naming the ops whose
+  results are replayed rather than reapplied, and nothing imports it. `durableOpStore` is consulted
+  only on the delivery paths, so no value op is replay-cached, `vault_revoke` included. Phase 1
+  briefly added the two runbook writes to it and removed them again, because an entry there claims
+  a behaviour the gateway does not have. Not this feature's to fix, and worth someone's attention.
+
 ## Phase 2 - The fire
 
 One gateway op taking a runbook id, the values, and where it lands. It renders, refusing and naming
@@ -154,6 +189,10 @@ cannot fire twice.
 The Runbooks tab, the row with Fire, and the bottom sheet: values, target, preview, Fire. The phone
 pushes a runbook the gateway does not have, or has at an older version, before firing it.
 
+Its first slice is the phone-side client plumbing, which Phase 1 deliberately left out. Phase 1
+generated the Kotlin types and stopped; nothing on the phone calls `sendValueOp` for the three
+runbook ops yet, so a `ConsoleClient` method and a repository ops class come before any screen.
+
 ## Phase 4 - The editor
 
 Name, body, and the derived parameter list with its nested options. The largest interface piece, and
@@ -162,5 +201,12 @@ last because everything else is provable without it.
 ## Open, to settle inside the phases
 
 - What a fire does when the gateway is offline, or the session never registers.
-- Whether a pushed body should be sealed. A console op's request is not content-sealed the way a
-  vault value is, so the Router relays it in the clear. Today the Router is on the same machine.
+
+## Settled inside a phase
+
+**A pushed body is already sealed.** Settled in Phase 1, against the premise it was written on. The
+open question said a console op's request is not content-sealed the way a vault value is, so the
+Router relays it in the clear. That is false: the phone seals the whole `ConsoleOp` under the
+`op.payload` AAD before it leaves the device, on both runtimes, and the gateway opens it after the
+Router has relayed the envelope. A `runbook_put` body therefore crosses sealed like every other op,
+and needs nothing of its own.

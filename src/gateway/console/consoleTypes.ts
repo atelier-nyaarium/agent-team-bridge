@@ -18,6 +18,7 @@ import type { SignedXDomainLink } from "../../shared/federation-protocol.js";
 import type { HostOp, HostOpResult } from "../../shared/host-op.js";
 import { MAX_POLL_HOLD_MS } from "../../shared/schemas.js";
 import type { ContentEnvelope } from "../../shared/schemasContentKey.js";
+import type { Runbook } from "../../shared/schemasRunbook.js";
 import type { VaultDecision, VaultGrant } from "../../shared/schemasVault.js";
 import type { SessionStore } from "../../shared/session-store.js";
 import type { GatewaySpawnPoints, TeamInfo } from "../../shared/types.js";
@@ -98,7 +99,14 @@ export interface ConsoleHandlerDeps {
 	untrustOwner?: (ownerSignPub: string) => CrossDomainUnlinkResult;
 	durableOpStore?: DurableOpStore;
 	vault?: VaultConsoleHandlers;
+	runbooks?: RunbookConsoleHandlers;
 	onSessionEnded?: (team: string) => void;
+}
+
+export interface RunbookConsoleHandlers {
+	list: () => { runbooks: Runbook[] };
+	put: (runbook: Runbook) => { stored: boolean; revision: number; reason?: string };
+	remove: (runbookId: string) => { deleted: boolean };
 }
 
 export interface VaultConsoleHandlers {

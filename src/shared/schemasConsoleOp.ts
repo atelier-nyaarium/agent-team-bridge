@@ -3,6 +3,7 @@ import { ChannelFilesSchema } from "./channel-file.js";
 import { SignedXDomainLinkSchema } from "./federation-protocol.js";
 import { BlobGetOpSchema, BlobPutOpSchema, BlobStatOpSchema } from "./schemasBlob.js";
 import { ContentEnvelopeSchema } from "./schemasContentKey.js";
+import { RunbookSchema } from "./schemasRunbook.js";
 import { VaultDecisionSchema } from "./schemasVault.js";
 
 export { SealedEnvelopeSchema } from "./crypto.js";
@@ -135,6 +136,10 @@ export const ConsoleOpSchema = z
 		}),
 		z.object({ kind: z.literal("vault_grants") }),
 		z.object({ kind: z.literal("vault_revoke"), grantId: z.string().min(1).max(128) }),
+		z.object({ kind: z.literal("runbook_list") }),
+		// Whole record, never a patch.
+		z.object({ kind: z.literal("runbook_put"), runbook: RunbookSchema }),
+		z.object({ kind: z.literal("runbook_delete"), runbookId: z.string().min(1).max(64) }),
 	])
 	.meta({ id: "ConsoleOp" });
 
@@ -172,6 +177,9 @@ export const VALUE_OP_KINDS = new Set([
 	"vault_answer",
 	"vault_grants",
 	"vault_revoke",
+	"runbook_list",
+	"runbook_put",
+	"runbook_delete",
 ]);
 
 export const MailboxEntrySchema = z

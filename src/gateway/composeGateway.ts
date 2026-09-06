@@ -17,6 +17,7 @@ import {
 	type RouterPresenceStage,
 } from "./compose/composeRouterPresence.js";
 import { composeRoutes, type GatewayRoutes, type RoutesStage } from "./compose/composeRoutes.js";
+import { composeRunbooks } from "./compose/composeRunbooks.js";
 import { composeSessions } from "./compose/composeSessions.js";
 import { composeStores } from "./compose/composeStores.js";
 import { composeVault, type VaultStage } from "./compose/composeVault.js";
@@ -170,6 +171,7 @@ export function composeGateway(deps: GatewayDeps): GatewayGraph {
 		federation,
 		routes: requireRoutes,
 	});
+	const runbooks = composeRunbooks({ dataDir: bootstrap.dataDir });
 	routerFrames = composeRouterFrames({
 		localGatewayId: bootstrap.localGatewayId,
 		wakeTimeoutMs: config.wakeTimeoutMs,
@@ -180,6 +182,7 @@ export function composeGateway(deps: GatewayDeps): GatewayGraph {
 		host,
 		routes: requireRoutes,
 		vault,
+		runbooks,
 	});
 
 	if (bootstrap.gatewayBoot.kind === "arming") enrollment.enterArming(bootstrap.gatewayBoot.nonce);
