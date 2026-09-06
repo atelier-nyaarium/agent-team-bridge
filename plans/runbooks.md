@@ -399,6 +399,11 @@ its own two lifetimes the same way rather than reusing these fields.
   cure it. Where the fan-out does not need to keep tool output out of the caller's context, calling
   Codex directly is simply more reliable.
 
+  Settled by the owner: relay through Sonnet instead. Nine of nine relays landed after the switch,
+  against eight of eleven before it, and the reports came back better calibrated as well as
+  complete. The relay is worth keeping for what it is for, which is holding a fan-out's output out
+  of the caller's context; it just cannot be run on the cheapest model available.
+
 - **`routes.send` answers success for a message it only queued.** A fire reports that it landed, and
   the route it went through returns `{status: "running"}` whether a session socket took the body or
   the delivery coordinator merely accepted it for later. Nothing in the return value separates the
@@ -410,6 +415,31 @@ its own two lifetimes the same way rather than reusing these fields.
   bill the store's three ops paid, and the preview paid it a third time in the same phase. Nothing
   new to say beyond the entry above, except that a checklist that recurs three times inside one
   feature is not an unlucky feature.
+
+- **`kotlin-gate.sh` runs its import check before the compiler, so a real error arrives as a
+  cosmetic one.** Refactoring the fire sheet dropped a `val scope = rememberCoroutineScope()` while
+  leaving `scope.launch` behind. The gate answered `1 unused import(s) across 423 files`, naming
+  `rememberCoroutineScope`, and stopped. It never reached the compile that would have said
+  `Unresolved reference 'scope'`. Reasoning backwards from a lint message to a missing declaration
+  is a minute of confusion every time, and the ordering guarantees it: any error that also orphans
+  an import is reported as the orphan. Compiling first would cost nothing.
+
+- **One missing Kotlin import reported as twelve errors, none of them at the import.** Omitting
+  `import ...proto.Runbook` made `FireSheetState`'s constructor parameter unresolved, so every
+  `by mutableStateOf` in the class failed to infer, and those surfaced as
+  `Property delegate must have a 'getValue(...)' method` at lines far below, plus three phantom
+  errors in an unrelated `FilterChip`. The actual cause was the fifth error in the list. Kotlin's
+  inference cascade means reading the error list top-down sends you to the wrong file region, and
+  the habit that works is scanning for `Unresolved reference` first and ignoring everything else.
+
+- **`ChatState` says nothing about which of its sixty fields survive a restart.** Adding `runbooks`
+  meant opening `ChatPersistence.kt` to find out there is no generic mechanism: each persisted field
+  has hand-rolled JSON and its own save call, and a field that is not there simply is not persisted.
+  Nothing in `ChatState` distinguishes `drafts`, which survives, from `wakingTeams`, which does not,
+  except a comment on the latter. A new field is persistent or not by whether someone remembered,
+  and the failure is silent in the direction that loses data. This was harmless here, since the
+  runbook library is deliberately a cache until Phase 4, but it was harmless by luck rather than by
+  the type saying so.
 
 - **The emulator variant does not compile, on `main`, and nothing notices.** `SandboxFixtures.kt`
   imports `com.atelier_nyaarium.switchboard.board.GatewayBoard` and builds
