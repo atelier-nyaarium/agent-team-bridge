@@ -89,6 +89,13 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
 - `android/.../PlaybackOps.kt` / `PlaybackReadModels.kt` - playback serialization and lock-free read models
 - `android/.../BoardOps.kt` - repository board operations
 - `android/.../VaultOps.kt` - repository vault operations: refresh, save, delete, reveal, answer, grants
+- `android/.../RunbookOps.kt` - the phone's runbook library, the gateway sync, and `pushDecision`
+- `android/.../runbooks/RunbooksScreen.kt` / `RunbookFireSheet.kt` - the tab with Fire per row, and the fire sheet
+  - **The preview is the gateway's render, never the phone's:** the sheet calls `runbook_preview`, so
+    one implementation of the grammar serves both it and the fire. An edit marks the shown text
+    stale rather than blanking it, and Fire waits for a preview whose revision matches the runbook.
+  - **`FireSheetState` holds two lifetimes:** the values and the preview belong to a runbook at a
+    revision and `adopt` resets them; the target and a fire in flight belong to the sheet.
 - `android/.../AttachmentOps.kt` - attachment fetch-and-sweep state
 - `android/.../ScheduledSendOps.kt` - scheduled sends and single fire mutex
 - `android/.../GoalOps.kt` / `Goal.kt` - armed goals and `/goal` line production
@@ -254,6 +261,7 @@ How each subsystem works lives in `docs/`:
 | `docs/agents.md` | Codex and Copilot delegation, local agent mode |
 | `docs/task-board.md` | Board, attachments, awareness |
 | `docs/vault.md` | Vault client, grants, request road, loopback routes |
+| `docs/runbooks.md` | The `{{name}}` grammar, the gateway store, the fire, the tab and its preview |
 | `docs/references.md` | `ref://` grammar and matchers |
 | `docs/testing.md` | The federation harness, the minted wire fixtures, the identity set, the gates |
 | `docs/environment.md` | Every environment variable |
