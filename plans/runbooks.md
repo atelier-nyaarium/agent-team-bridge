@@ -131,7 +131,7 @@ the editor needs a text area with room to scroll.
 
 # Plan
 
-## Phase 1 - The record and the store
+## Phase 1 - The record and the store ✅
 
 The wire shape of a runbook and its parameters, in `shared/`: an id, a name, a body, and a list of
 `{ name, label, kind, default, options }` where kind is `text` or `choice`. A durable store on the
@@ -140,6 +140,31 @@ gateway. Kotlin codegen and the gate. No interface yet.
 
 Caps belong here, since nothing downstream can add them: the body, the rendered message, the
 parameter count, and the options per parameter.
+
+Four things the phase line did not name, settled while building it.
+
+**The record carries a `revision`, and nothing else beyond the four fields.** Question 2 asked for a
+version check, so the revision is the field that answers it. A timestamp was written and then taken
+back out, because nothing in the locked design reads one and a wire field no consumer needs becomes
+a field nobody validates.
+
+**A revision is the whole of the concurrency control.** A higher one replaces, a lower one is
+refused and told what to rebase on, and an equal one is a retry when the content matches and a
+refusal when it does not. That last case is the one worth having: the owner can enroll a second
+device, and without it whichever device pushed last would silently erase the other's edit.
+
+**A held record is frozen, and the copy is made on the way in.** A reader cannot edit the store by
+editing what it read, and the store does not take ownership of the caller's object either. This
+guards Phase 2 in particular, where a renderer that assigned to `runbook.body` would otherwise
+corrupt the store and persist it.
+
+**Restore keeps whatever the schema accepts.** The semantic rules run in `put`, which is the only
+writer, so a stored record passed them when it landed. Re-running them on restore was tried and
+reverted: it silently erased the owner's work on the next write, which is worse than serving a
+record a later rule dislikes. Phase 2's fire re-checks instead, where a refusal can reach the owner.
+
+The wire crossing is nothing. `runbook_put` is sealed phone to gateway like every console op, and no
+field takes a deploy-order shim because no peer reads a runbook yet.
 
 ### Bug Classes
 
@@ -154,8 +179,14 @@ parameter count, and the options per parameter.
   `{{foo}}`; no guard over the body alone can see it, because the brace pair does not exist until
   the substitution happens. Rounds one and two were patched with a guard beside the scan; round
   three was left, because a third guard on the same mechanism is the design bug rather than the
-  cure. The structural fix is to tokenize the body once and check the rendered result, which makes
-  the class inexpressible rather than enumerated. Phase 2 owns the renderer and is where it belongs.
+  cure. The structural fix has two halves, and only the first is a tokenizer. One parse of the body
+  into literal and placeholder tokens, with `placeholdersOf`, `worstCaseRender`, validation and the
+  render all derived from it, makes malformed template text one grammar decision instead of a
+  growing row of guards. It does not reach round three, because that pair composes only once a
+  value is substituted, so the render must also check its own output rather than only its input.
+  Both halves belong in Phase 2, beside the renderer. The grammar is a pure shared rule rather than
+  wire truth, so it goes in `shared/` and takes a hand-written Kotlin twin pinned by fixtures when
+  Phase 4 derives the parameter list on the phone, as `versioned-list` and `RefGrammar` already do.
 
 - **Where the semantic rule gets applied, in the store's restore path:** `RunbookSchema` checks the
   shape and `runbookRefusal` checks the meaning, and the two are consulted at different boundaries,
@@ -183,6 +214,11 @@ the parameter when a value is missing rather than shipping a raw placeholder as 
 target creates the session, waits for it to register, then delivers; an existing session target
 delivers straight away. Idempotent through the `op-idempotency` store already there, so a retry
 cannot fire twice.
+
+Two bounds the record cannot carry, since neither exists until a fire. Every supplied value is
+capped at `RUNBOOK_VALUE_MAX` and a choice's value must be one it offers, which is what makes the
+stored `worstCaseRender` bound hold. And the fire re-checks the runbook it is about to render, so a
+record a stricter rule would now refuse is reported to the owner rather than fired or deleted.
 
 ## Phase 3 - The tab and the fire sheet
 
