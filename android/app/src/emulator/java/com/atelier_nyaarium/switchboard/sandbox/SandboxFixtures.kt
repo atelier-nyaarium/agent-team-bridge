@@ -491,6 +491,18 @@ class SandboxFixtures(private val filesDir: File, private val assets: AssetManag
 		sealed = BoardEntrySealed(title = UNREADABLE, body = body?.let { UNREADABLE }),
 	)
 
+	/**
+	 * Before the repository exists, since `RunbookManager` reads its blob once at construction. Only
+	 * into an empty store, or every launch would delete what was authored in the last one.
+	 */
+	fun seedRunbooks(store: AppStateStore) {
+		if (store.loadRunbooks() != null) return
+		val serializer = kotlinx.serialization.builtins.ListSerializer(
+			com.atelier_nyaarium.switchboard.proto.Runbook.serializer(),
+		)
+		store.saveRunbooks(Json { ignoreUnknownKeys = true }.encodeToString(serializer, runbooks()))
+	}
+
 	/** A library to look at the tab and the fire sheet with, since no Gateway answers here. */
 	fun runbooks(): List<com.atelier_nyaarium.switchboard.proto.Runbook> = listOf(
 		com.atelier_nyaarium.switchboard.proto.Runbook(

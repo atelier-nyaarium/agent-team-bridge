@@ -328,32 +328,39 @@ gateway that cannot be reached leaves the tab empty, which is honest rather than
 the editor exists the library holds work no gateway has, and it has to survive a restart; that is
 Phase 4's to build, alongside the slot in `ChatPersistence`.
 
-## Phase 4 - The editor
+## Phase 4 - The editor ✅
 
 Name, body, and the derived parameter list with its nested options. The largest interface piece, and
 last because everything else is provable without it.
 
-Four things it inherits, settled while building the phases under it.
+**`RunbookManager` holds the library, beside `RunbookOps`.** The split its durable siblings use:
+`BoardManager` and `VaultManager` own their blob and its persistence while an ops class owns the
+gateway calls. It takes a `RunbookStore`, which `AppStateStore` implements, and it is in
+`clearedOnReprovision` with them. It writes before it publishes, so a refused write leaves the owner
+the library they still have, and `clearInMemory` is the one exception, since a re-provision takes
+the previous owner's writing out of memory whether or not the disk cooperates.
 
-**A `RunbookManager` beside `RunbookOps`, holding the library.** Both durable phone-held siblings
-split that way: `BoardManager` and `VaultManager` own their blob and its persistence while an ops
-class owns the gateway calls. `RunbookOps` currently holds both because nothing on the phone authors
-a runbook yet. The editor is what makes the library real work rather than a cache, and it needs the
-`ChatPersistence` slot that comes with the manager.
+**Ids are opaque and random, minted by `newRunbookId`.** The library keys by id alone, which is only
+sound while one id means one runbook. A name-derived or counter-derived id would break that the
+first time two phones author independently.
 
-**Ids are minted here, opaque and random.** The library keys by id alone and the newest copy wins
-wherever it came from, which is only sound while one id means one runbook. A name-derived or
-counter-derived id breaks that the first time two phones author independently.
+**The parameter list is derived, and settings are keyed by placeholder name.** `RunbookDraft` holds
+name, body, and a settings map; `declared` reads the body through `RunbookGrammar`, the recognition
+twin of the gateway's parse, pinned to it by a shared vector corpus. A deleted placeholder keeps its
+settings while editing and is pruned by `toRunbook`. `refusal()` carries every rule the gateway
+would refuse on, so Save is never offered for a runbook that would be rejected.
 
-**A refused push is a conflict, not an outage.** `sync` reduces `runbookPut(...).stored` to a
-boolean, so the gateway's equal-revision refusal, which is exactly the lost-update it exists to
-catch, reaches the owner as "this Gateway did not answer". The editor is where a rebase can be
-offered, so that is where the refusal should carry its reason and the revision to rebase on.
+**A refused push is a conflict, not an outage.** `ConsoleRunbookPutResult` answers both a reason and
+the revision held. `conflictsAfterPut` keeps both per runbook, `standingConflict` withdraws the
+offer once the draft has passed that revision, the fire sheet shows the reason where it used to say
+"This Gateway did not answer", and the editor offers Overwrite, which rebases the draft onto the
+held revision.
 
-**The fire sheet's state holder is the lifetime pattern, not a shared form class.** The editor's
-draft is materially harder: parameters keyed by placeholder name, orphans kept while editing and
-pruned on save, and a nested option list inside each choice. It wants its own draft model, holding
-its own two lifetimes the same way rather than reusing these fields.
+**Save answers the editor.** `RunbookOps.save` pushes before it returns. Stored, and the library
+takes it and the editor closes. Refused, and the library is untouched and the editor stays open with
+the conflict. Unreachable, and the copy is local, which is what a phone-owned library means with no
+Gateway listening. `keep` decides that last part by whether the library actually took the candidate,
+so a save the merge would drop is a conflict rather than a silence.
 
 ### Found in passing
 
@@ -406,9 +413,31 @@ holds. No one of them owns the rule, so a change to any one of them shifts which
   save the owner is watching is the common case and needs one phone, while the new loss needs two
   phones and a gateway switch mid-edit.
 
-Left as it stands, and raised for `architecture-fan-out`. The fix is not a fourth patch: it is one
-owner for the rule, so that a save from a stale base is a conflict the owner is told about through
-the offer already built, rather than a silent win for whichever side the arithmetic favors today.
+**The shape chosen: the save answers the editor.** Four shapes were weighed. The arithmetic is not
+the defect; it is where the defect keeps surfacing. `RunbookOps.save` writes locally and returns
+nothing, and the editor closes on the spot, so a refusal has nowhere to land and the rounds above
+were each choosing which side loses in silence.
+
+Save becomes a suspending call that pushes before it answers. Stored, and the library takes it and
+the editor closes. Refused, and the library is left alone and the editor stays open with the
+conflict card already built. Unreachable, and the save is local and the editor closes, which is
+what a phone-owned library means when no Gateway is listening. The lift in `save` goes away
+entirely: it exists only to beat a library that moved underneath the draft, and a library can only
+move while a Gateway is reachable, which is exactly when a stale candidate is now refused before it
+can land.
+
+Costs Kotlin only. No wire field, no fixture corpus, and `RunbookConflict`, `conflictsAfterPut`,
+`standingConflict` and the Overwrite card are all reused. Its weakness is that Save now depends on
+the Gateway to be sure, which the offline road answers by saying plainly that the copy is local.
+
+Built. `put` is now the one push both `save` and `sync` take, so the two cannot drift about what a
+refusal means.
+
+Base-carrying compare-and-swap is the honest second step if two phones authoring at once ever stops
+being rare. It was not chosen now because it adds two wire fields, a `RunbookContent` type and a
+fixture corpus to fix a window that needs two phones editing one runbook at the same moment. The
+shared authority module and content-addressed identity were both larger still, and neither closes
+the silent part, which is the part that actually bit three times.
 
 A test asserting round 2's old behavior through `save` was asserting the bug, and now says what each
 road means.
@@ -456,7 +485,44 @@ the phone republishes its copy on the next sync.
 blobs the same way at the same moment. A runbook library is a handful of records; changing this one
 alone would leave three siblings disagreeing about when their state exists.
 
+### The answered save, after red team
+
+**A refusal was read from shared state after a suspend point.** `save` re-read `conflicts` to build
+its answer, which a concurrent `sync` could have cleared between the push and the read.
+`conflictOfRefusal` is the one reading of a refusal now, and both roads take it.
+
+**A save the Gateway took but the disk refused reported the wrong thing.** `synced` was recorded
+before the library confirmed, and a failed write came back as "This phone holds a newer copy", which
+is the opposite of true. `keep` answers what the library holds afterwards, `synced` is recorded only
+once it confirms, and `localConflict` tells an outranked save apart from one that could not be
+written.
+
+**Sandbox seeding deleted the last session's work.** Seeding writes the fixture library straight
+into the store before the repository exists, which the board already does for the same reason. It
+now writes only into an empty store.
+
+**Two claimed blockers were wrong, and checking cost less than believing.** `toRunbook` mints
+`revision + 1`, so Overwrite does advance past the held revision. And the gateway's `put` returns
+`stored: false` rather than throwing, so `resultOf` decodes it and a refusal reaches the phone as an
+answer, not as a swallowed exception.
+
 ### Left for the owner to weigh
+
+**The suite is red in its default parallel run, and was before this work.**
+`federation-harness-boot.test.ts`, "converges to one presence row per team when a session reattaches
+after a gateway restart", fails in the full run and passes three for three alone. It also fails with
+this feature's whole working tree stashed, and the entire suite passes with `--no-file-parallelism`.
+It is a timing flake in presence convergence rather than a regression, but it fails often enough now
+that `bun run test` no longer answers reliably.
+
+**A save cancelled mid-flight can leave the Gateway holding what the phone does not.** Back or
+Cancel while Save is going cancels the composition scope, so the put may land after the local write
+was abandoned. The next `refresh` adopts it back, so it heals, and holding the save open past the
+editor's own lifetime would need a repository-scoped coroutine.
+
+**A local save closes the editor without saying it is local.** The library is phone-owned and `sync`
+pushes before any preview or fire, so a Gateway copy is a cache rather than the save. Saying so on
+every offline save would be noise on the common path.
 
 **`awaitRegister` cannot hear a registration that already happened.** `WakeCoordinator.waitFor`
 records a future waiter only, so a session that registers before `createSession` resolves is missed

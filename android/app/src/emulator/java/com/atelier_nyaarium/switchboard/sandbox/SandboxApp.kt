@@ -38,6 +38,7 @@ class SandboxApp : Application() {
 		// BEFORE the repository exists. BoardManager reads its durable blob once at construction and
 		// never re-reads, so a board seeded afterwards is written to disk and then ignored.
 		fixtures.seedBoard(AppStateStore(this))
+		fixtures.seedRunbooks(AppStateStore(this))
 		val repo = Repo.get(this)
 		val threads = fixtures.threads()
 		repo.seedSandbox(
@@ -48,8 +49,6 @@ class SandboxApp : Application() {
 			fixtures.goals(),
 			fixtures.admittedGateways(),
 		)
-		// The tab reads the library, and nothing here answers a runbook_list to fill it.
-		for (runbook in fixtures.runbooks()) repo.runbookOps.save(runbook)
 		// Seeding writes rows straight into state, bypassing the mailbox drain where the inbound
 		// handlers run, so the dock would stay empty however correct the ingest is. Run the same
 		// wire-declared conversion the handler runs, so the gallery is inspectable here.

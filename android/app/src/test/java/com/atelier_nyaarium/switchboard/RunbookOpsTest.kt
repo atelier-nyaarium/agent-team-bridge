@@ -36,13 +36,13 @@ class RunbookOpsTest {
 	}
 
 	@Test
-	fun savingOrdersByNameThenById() {
+	fun savingWithNoGatewayKeepsTheCopyAndSaysItIsLocal() {
 		val (ops, state) = opsOver(listOf(book("b", name = "Zebra"), book("a", name = "Apple")))
 
-		ops.save(book("c", name = "Apple"))
+		assertEquals(RunbookSaved.Local, kotlinx.coroutines.runBlocking { ops.save(book("c", name = "Apple")) })
 		assertEquals(listOf("a", "c", "b"), state.value.runbooks.map { it.id })
 
-		ops.save(book("a", name = "Apple", revision = 4L))
+		kotlinx.coroutines.runBlocking { ops.save(book("a", name = "Apple", revision = 4L)) }
 		assertEquals(4L, state.value.runbooks.first { it.id == "a" }.revision)
 	}
 
@@ -68,21 +68,6 @@ class RunbookOpsTest {
 	}
 
 	@Test
-	fun aSaveAlwaysLandsAboveTheLibrarySoTheOwnersOwnEditIsNeverDiscarded() {
-		val (ops, state) = opsOver(listOf(book("a", revision = 8L)))
-		val bodyOf = { state.value.runbooks.first { it.id == "a" }.body }
-
-		// The editor was opened at revision 6 and something newer landed underneath it.
-		ops.save(book("a", revision = 6L).copy(body = "edited while stale"))
-		assertEquals("edited while stale", bodyOf())
-		assertEquals(9L, state.value.runbooks.first { it.id == "a" }.revision)
-
-		// Overwrite rebases onto a held revision the library has since passed.
-		ops.save(book("a", revision = 7L).copy(body = "rebased onto a spent conflict"))
-		assertEquals("rebased onto a spent conflict", bodyOf())
-	}
-
-	@Test
 	fun aRefusedPushIsAConflictTheOwnerCanRebaseOn() {
 		val refused = ConsoleRunbookPutResult(stored = false, revision = 7L, reason = "held newer")
 		val raised = conflictsAfterPut(emptyMap(), "a", refused)
@@ -91,6 +76,22 @@ class RunbookOpsTest {
 		// An unreachable Gateway is not evidence the conflict went away.
 		assertEquals(raised, conflictsAfterPut(raised, "a", null))
 		assertEquals(emptyMap<String, RunbookConflict>(), conflictsAfterPut(raised, "a", refused.copy(stored = true)))
+	}
+
+	@Test
+	fun aSaveTheLibraryDidNotTakeIsAConflictRatherThanASilentLoss() {
+		val (ops, _) = opsOver(listOf(book("a", revision = 4L)))
+
+		// The editor opened at 3 and something newer landed underneath it.
+		val saved = kotlinx.coroutines.runBlocking { ops.save(book("a", revision = 4L).copy(body = "stale")) }
+		assertEquals(RunbookSaved.Refused(RunbookConflict("This phone holds a newer copy", 4L)), saved)
+	}
+
+	@Test
+	fun aGatewaysRefusalIsReadFromItsOwnAnswer() {
+		val refused = ConsoleRunbookPutResult(stored = false, revision = 7L, reason = "held newer")
+		assertEquals(RunbookConflict("held newer", 7L), conflictOfRefusal(refused))
+		assertEquals(7L, conflictOfRefusal(refused.copy(reason = null)).heldRevision)
 	}
 
 	@Test

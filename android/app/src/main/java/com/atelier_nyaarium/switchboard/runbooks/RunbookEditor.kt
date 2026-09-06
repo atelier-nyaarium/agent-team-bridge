@@ -33,13 +33,17 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.atelier_nyaarium.switchboard.ChatRepository
+import com.atelier_nyaarium.switchboard.RunbookConflict
+import com.atelier_nyaarium.switchboard.RunbookSaved
 import com.atelier_nyaarium.switchboard.hapticClick
 import com.atelier_nyaarium.switchboard.standingConflict
+import kotlinx.coroutines.launch
 
 /** Settings are keyed by placeholder name, so deleting one hides them and pasting it back restores them. */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -50,6 +54,9 @@ fun RunbookEditor(repo: ChatRepository, runbookId: String?, onClose: () -> Unit)
 		mutableStateOf(existing?.let { RunbookDraft.of(it) } ?: RunbookDraft(id = newRunbookId()))
 	}
 	val declared = draft.declared
+	val scope = rememberCoroutineScope()
+	var saving by remember(runbookId) { mutableStateOf(false) }
+	var refused by remember(runbookId) { mutableStateOf<RunbookConflict?>(null) }
 
 	Scaffold(
 		topBar = {
@@ -57,15 +64,23 @@ fun RunbookEditor(repo: ChatRepository, runbookId: String?, onClose: () -> Unit)
 				title = { Text(if (existing == null) "New runbook" else "Edit runbook") },
 				actions = {
 					TextButton(onClick = hapticClick(onClose)) { Text("Cancel") }
-					val ready = draft.refusal() == null
 					Button(
-						enabled = ready,
+						enabled = draft.refusal() == null && !saving,
 						onClick = hapticClick {
-							draft.toRunbook()?.let { repo.runbookOps.save(it) }
-							onClose()
+							val candidate = draft.toRunbook() ?: return@hapticClick
+							saving = true
+							refused = null
+							scope.launch {
+								// A refusal keeps the draft, so the owner can rebase it or walk away.
+								when (val saved = repo.runbookOps.save(candidate)) {
+									is RunbookSaved.Refused -> refused = saved.conflict
+									else -> onClose()
+								}
+								saving = false
+							}
 						},
 						modifier = Modifier.padding(end = 8.dp),
-					) { Text("Save") }
+					) { Text(if (saving) "Saving" else "Save") }
 				},
 			)
 		},
@@ -98,14 +113,18 @@ fun RunbookEditor(repo: ChatRepository, runbookId: String?, onClose: () -> Unit)
 				)
 			}
 
-			standingConflict(repo.runbookOps.conflictOf(draft.id), draft.revision)?.let { conflict ->
+			val standing = refused ?: standingConflict(repo.runbookOps.conflictOf(draft.id), draft.revision)
+			standing?.let { conflict ->
 				Card(Modifier.fillMaxWidth()) {
 					Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
 						Text(conflict.reason, style = MaterialTheme.typography.bodyMedium)
 						// Saving from their revision is what makes the next push win.
-						TextButton(onClick = hapticClick { draft = draft.copy(revision = conflict.heldRevision) }) {
-							Text("Overwrite")
-						}
+						TextButton(
+							onClick = hapticClick {
+								draft = draft.copy(revision = conflict.heldRevision)
+								refused = null
+							},
+						) { Text("Overwrite") }
 					}
 				}
 			}

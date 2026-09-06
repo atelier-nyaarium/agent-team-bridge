@@ -38,6 +38,10 @@ internal fun pushDecision(mine: Runbook, held: Runbook?): PushDecision = when {
 /** A gateway refusing this library's copy, and the revision a save must clear to win. */
 internal data class RunbookConflict(val reason: String, val heldRevision: Long)
 
+/** A refusal read as a conflict, so no caller re-reads the shared map for one. */
+internal fun conflictOfRefusal(answer: ConsoleRunbookPutResult): RunbookConflict =
+	RunbookConflict(answer.reason ?: "This Gateway holds a different copy", answer.revision)
+
 /** A stored put clears the conflict, a refused one raises it, and no answer leaves it standing. */
 internal fun conflictsAfterPut(
 	held: Map<String, RunbookConflict>,
@@ -46,15 +50,22 @@ internal fun conflictsAfterPut(
 ): Map<String, RunbookConflict> = when {
 	answer == null -> held
 	answer.stored -> held - runbookId
-	else -> held + (runbookId to RunbookConflict(
-		answer.reason ?: "This Gateway holds a different copy",
-		answer.revision,
-	))
+	else -> held + (runbookId to conflictOfRefusal(answer))
 }
 
 /** Below the draft's revision the conflict is spent, and rebasing onto it would lose the save. */
 internal fun standingConflict(conflict: RunbookConflict?, draftRevision: Long): RunbookConflict? =
 	conflict?.takeIf { it.heldRevision >= draftRevision }
+
+/** What became of a save, so the editor closes on one answer and stays open on another. */
+internal sealed interface RunbookSaved {
+	/** The Gateway took it. */
+	data object Stored : RunbookSaved
+	/** No Gateway answered, so the copy is the phone's alone. */
+	data object Local : RunbookSaved
+	/** The Gateway holds something else, and the draft is the owner's to rebase or abandon. */
+	data class Refused(val conflict: RunbookConflict) : RunbookSaved
+}
 
 /** The phone's library. A gateway holds a copy, which a fire brings up to date first. */
 internal class RunbookOps(
@@ -83,12 +94,36 @@ internal class RunbookOps(
 		show(host.library.merge(held.runbooks))
 	}
 
-	/** Lifted above whatever the library holds now, or `merge` would discard the owner's own save. */
-	fun save(runbook: Runbook) {
+	/**
+	 * Pushed before it answers, so a refusal reaches the editor while the draft is still open. A
+	 * Gateway that cannot be reached is not a refusal: the library is the phone's own.
+	 */
+	suspend fun save(runbook: Runbook, gatewayId: String = host.homeGatewayId()): RunbookSaved {
 		synced.removeAll { it.second == runbook.id }
-		val held = host.library.find(runbook.id)?.revision ?: 0L
-		val landing = if (runbook.revision > held) runbook else runbook.copy(revision = held + 1)
-		show(host.library.merge(listOf(landing)))
+		val client = host.client
+		val reachable = client != null && gatewayId.isNotBlank()
+
+		// Refused before the library is touched, so a lost update never lands at all.
+		val answer = if (reachable) put(client as ConsoleClient, gatewayId, runbook) else null
+		if (answer != null && !answer.stored) return RunbookSaved.Refused(conflictOfRefusal(answer))
+
+		val kept = keep(runbook) ?: return RunbookSaved.Refused(localConflict(runbook))
+		if (answer != null) synced += Triple(gatewayId, runbook.id, kept.revision)
+		return if (answer != null) RunbookSaved.Stored else RunbookSaved.Local
+	}
+
+	/** What the library holds for this runbook afterwards, or null when it did not take the save. */
+	private fun keep(runbook: Runbook): Runbook? {
+		val library = host.library.merge(listOf(runbook))
+		show(library)
+		return library.find { it.id == runbook.id }?.takeIf { it == runbook }
+	}
+
+	private fun localConflict(runbook: Runbook): RunbookConflict {
+		val landed = host.library.find(runbook.id)
+		val outranked = landed != null && landed.revision >= runbook.revision
+		val reason = if (outranked) "This phone holds a newer copy" else "This phone could not store it"
+		return RunbookConflict(reason, landed?.revision ?: 0L)
 	}
 
 	suspend fun delete(runbookId: String, gatewayId: String = host.homeGatewayId()) {
@@ -150,17 +185,18 @@ internal class RunbookOps(
 				true
 			}
 			// A delete that landed while this was in flight must not be undone by its put.
-			PushDecision.Put -> host.library.find(runbookId) != null && put(client, gatewayId, mine)
+			PushDecision.Put ->
+				host.library.find(runbookId) != null && put(client, gatewayId, mine)?.stored == true
 		}
 		if (settled) synced += Triple(gatewayId, runbookId, settledRevision)
 		return settled
 	}
 
-	/** A refusal here is an edit conflict, not an outage, so it is kept for the owner to read. */
-	private suspend fun put(client: ConsoleClient, gatewayId: String, mine: Runbook): Boolean {
+	/** The one push. A refusal here is an edit conflict, not an outage, so it is kept to be read. */
+	private suspend fun put(client: ConsoleClient, gatewayId: String, mine: Runbook): ConsoleRunbookPutResult? {
 		val answer = attempt { client.runbookPut(gatewayId, mine) }
 		conflicts = conflictsAfterPut(conflicts, mine.id, answer)
-		return answer?.stored == true
+		return answer
 	}
 
 	/** A cancelled call must stay cancelled; only a real failure answers null. */
