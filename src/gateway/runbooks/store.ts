@@ -2,7 +2,7 @@
 
 import { z } from "zod";
 import { type DurableStore, DurableStoreInstalledError } from "../../shared/durable-store.js";
-import { RUNBOOKS_MAX, type Runbook, RunbookSchema, runbookRefusal } from "../../shared/schemasRunbook.js";
+import { type Runbook, RunbookSchema, runbookRefusal } from "../../shared/schemasRunbook.js";
 
 export interface RunbookStoreDeps {
 	/** Opened through `openDurable`, so a poisoned file starts this store fresh. */
@@ -97,13 +97,6 @@ export function createRunbookStore(deps: RunbookStoreDeps) {
 		}
 		if (current && runbook.revision < current.revision) {
 			return { stored: false, revision: current.revision, reason: "a newer revision is already stored" };
-		}
-		if (!current && runbooks.length >= RUNBOOKS_MAX) {
-			return {
-				stored: false,
-				revision: 0,
-				reason: `this gateway already holds ${RUNBOOKS_MAX} runbooks; delete one first`,
-			};
 		}
 		const next = current
 			? runbooks.map((existing) => (existing.id === runbook.id ? runbook : existing))

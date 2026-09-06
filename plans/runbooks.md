@@ -138,10 +138,13 @@ The wire shape of a runbook and its parameters, in `shared/`: an id, a name, a b
 gateway beside `vault-decisions` and `vault-helper`. Console ops to list, put and delete, phone to
 gateway. Kotlin codegen and the gate. No interface yet.
 
-Caps belong here, since nothing downstream can add them: the body, the rendered message, the
-parameter count, and the options per parameter.
+Caps were built here and then taken back out, on the owner's word: "no hard limits. Their server,
+their responsibility." A runbook op reaches one gateway, authenticated as its owner, so a body large
+enough to hurt is the owner spending their own machine. The console path's 64 MiB body cap is the
+only ceiling left, and it answers 413 rather than something obscure. Removed with them was the
+rendered-size refusal, which existed only to keep a fire inside a cap that no longer exists.
 
-Four things the phase line did not name, settled while building it.
+Five things the phase line did not name, settled while building it.
 
 **The record carries a `revision`, and nothing else beyond the four fields.** Question 2 asked for a
 version check, so the revision is the field that answers it. A timestamp was written and then taken
@@ -162,6 +165,9 @@ corrupt the store and persist it.
 writer, so a stored record passed them when it landed. Re-running them on restore was tried and
 reverted: it silently erased the owner's work on the next write, which is worse than serving a
 record a later rule dislikes. Phase 2's fire re-checks instead, where a refusal can reach the owner.
+
+**Nothing counts runbooks or measures them.** No per-gateway limit, no body length, no parameter
+count, no option count. A record is refused for what it means, never for its size.
 
 The wire crossing is nothing. `runbook_put` is sealed phone to gateway like every console op, and no
 field takes a deploy-order shim because no peer reads a runbook yet.
@@ -199,13 +205,13 @@ field takes a deploy-order shim because no peer reads a runbook yet.
   fire re-checks before it renders, which is where a stale record actually matters and where a
   refusal can reach the owner instead of deleting their work.
 
-### Found in passing
+### Removed in passing
 
-- **`isMutatingOp` in `consoleTypes.ts` is dead.** It reads like live policy, naming the ops whose
-  results are replayed rather than reapplied, and nothing imports it. `durableOpStore` is consulted
-  only on the delivery paths, so no value op is replay-cached, `vault_revoke` included. Phase 1
-  briefly added the two runbook writes to it and removed them again, because an entry there claims
-  a behaviour the gateway does not have. Not this feature's to fix, and worth someone's attention.
+- **`isMutatingOp` and `isBoardMutationKind`, in `consoleTypes.ts`.** The first read like live
+  policy, naming the ops whose results are replayed rather than reapplied, and nothing imported it;
+  the second was reachable only from it. `durableOpStore` is consulted only on the delivery paths,
+  so no value op is replay-cached, `vault_revoke` included, and an entry in that list claimed a
+  behaviour the gateway does not have. Deleted on the owner's word: "unused code? remove it."
 
 ## Phase 2 - The fire
 
@@ -215,10 +221,14 @@ target creates the session, waits for it to register, then delivers; an existing
 delivers straight away. Idempotent through the `op-idempotency` store already there, so a retry
 cannot fire twice.
 
-Two bounds the record cannot carry, since neither exists until a fire. Every supplied value is
-capped at `RUNBOOK_VALUE_MAX` and a choice's value must be one it offers, which is what makes the
-stored `worstCaseRender` bound hold. And the fire re-checks the runbook it is about to render, so a
-record a stricter rule would now refuse is reported to the owner rather than fired or deleted.
+Two checks the record cannot carry, since neither has anything to look at until a fire. A choice's
+value must be one it offers, which no stored rule can enforce because the value does not exist yet.
+And the fire re-checks the runbook it is about to render, so a record a stricter rule would now
+refuse is reported to the owner rather than fired or quietly deleted. Neither is a size limit.
+
+A fire that cannot reach its session does not fire. The gateway being off fails like any other
+console op, and a session that never registers is left running and reported rather than closed or
+delivered into blind. Nothing new is built for either.
 
 ## Phase 3 - The tab and the fire sheet
 

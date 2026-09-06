@@ -2,16 +2,8 @@
 
 import { z } from "zod";
 
-/** A body carries rules as well as steps, so it is paragraphs rather than a line. */
-export const RUNBOOK_BODY_MAX = 8_000;
-export const RUNBOOK_NAME_MAX = 64;
-export const RUNBOOK_PARAMS_MAX = 16;
-export const RUNBOOK_OPTIONS_MAX = 24;
-export const RUNBOOK_VALUE_MAX = 512;
-/** Bounded when a runbook is stored, so a fire cannot be refused for size. */
-export const RUNBOOK_RENDERED_MAX = 16_000;
-/** Per gateway. */
-export const RUNBOOKS_MAX = 64;
+// Size is the owner's own to spend: these ops reach one gateway, authenticated as its owner, and
+// the console path's 64 MiB body cap is the only ceiling.
 
 /** `{{name}}`, the only placeholder form. */
 const PLACEHOLDER_RE = /\{\{\s*([A-Za-z][A-Za-z0-9_]*)\s*\}\}/g;
@@ -43,26 +35,18 @@ export function placeholdersOf(body: string): string[] {
 	return [...new Set(placeholderOccurrences(body).map((occurrence) => occurrence.name))];
 }
 
-export function worstCaseRender(body: string): number {
-	return placeholderOccurrences(body).reduce(
-		(total, occurrence) => total + Math.max(0, RUNBOOK_VALUE_MAX - occurrence.length),
-		body.length,
-	);
-}
-
 export const RunbookParameterSchema = z
 	.object({
 		/** Matches its placeholder in the body. */
 		name: z
 			.string()
 			.min(1)
-			.max(48)
 			.regex(/^[A-Za-z][A-Za-z0-9_]*$/),
-		label: z.string().min(1).max(64),
+		label: z.string().min(1),
 		kind: z.enum(["text", "choice"]).meta({ id: "RunbookParameterKind", catalog: "kind" }),
-		default: z.string().max(RUNBOOK_VALUE_MAX).optional(),
+		default: z.string().optional(),
 		/** A choice's options, in the order the form offers them. */
-		options: z.array(z.string().min(1).max(RUNBOOK_VALUE_MAX)).max(RUNBOOK_OPTIONS_MAX).optional(),
+		options: z.array(z.string().min(1)).optional(),
 	})
 	.meta({ id: "RunbookParameter" });
 
@@ -70,10 +54,10 @@ export type RunbookParameter = z.infer<typeof RunbookParameterSchema>;
 
 export const RunbookSchema = z
 	.object({
-		id: z.string().min(1).max(64),
-		name: z.string().min(1).max(RUNBOOK_NAME_MAX),
-		body: z.string().min(1).max(RUNBOOK_BODY_MAX),
-		parameters: z.array(RunbookParameterSchema).max(RUNBOOK_PARAMS_MAX),
+		id: z.string().min(1),
+		name: z.string().min(1),
+		body: z.string().min(1),
+		parameters: z.array(RunbookParameterSchema),
 		/** Phone-owned. A gateway refuses a put below the revision it holds. */
 		revision: z.number().int().positive(),
 	})
@@ -124,10 +108,6 @@ export function runbookRefusal(runbook: Runbook): string | null {
 		if (parameter.default !== undefined && !options.includes(parameter.default)) {
 			return `${parameter.name} defaults to an option it does not offer`;
 		}
-	}
-
-	if (worstCaseRender(runbook.body) > RUNBOOK_RENDERED_MAX) {
-		return `filled, this body could exceed ${RUNBOOK_RENDERED_MAX} characters`;
 	}
 	return null;
 }

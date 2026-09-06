@@ -1,12 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+	placeholderOccurrences,
 	placeholdersOf,
-	RUNBOOK_RENDERED_MAX,
-	RUNBOOK_VALUE_MAX,
 	type Runbook,
 	type RunbookParameter,
 	runbookRefusal,
-	worstCaseRender,
 } from "../shared/schemasRunbook.js";
 
 const parameter = (name: string, over: Partial<RunbookParameter> = {}): RunbookParameter => ({
@@ -32,10 +30,9 @@ describe("runbook placeholders", () => {
 		expect(placeholdersOf("{single} {{2fast}} literal")).toEqual([]);
 	});
 
-	it("bounds a filled body by every occurrence, not every name", () => {
-		const twice = "{{a}} {{a}}";
-		expect(worstCaseRender(twice)).toBe(twice.length + 2 * (RUNBOOK_VALUE_MAX - "{{a}}".length));
-		expect(worstCaseRender("no placeholders")).toBe("no placeholders".length);
+	it("reports every occurrence, not every name, so a renderer can substitute each", () => {
+		expect(placeholderOccurrences("{{a}} {{a}}").map((o) => o.index)).toEqual([0, 6]);
+		expect(placeholderOccurrences("{{ a }}")[0]).toEqual({ name: "a", index: 0, length: 7 });
 	});
 });
 
@@ -76,12 +73,9 @@ describe("runbook refusals", () => {
 		expect(choice({ options: ["staging"], default: "prod" })).toContain("does not offer");
 	});
 
-	it("refuses a body that could render past the cap once filled", () => {
-		const many = Array.from({ length: 16 }, (_, i) => `{{p${i}}}`).join(" ");
-		const params = Array.from({ length: 16 }, (_, i) => parameter(`p${i}`));
-		const padded = `${"x".repeat(RUNBOOK_RENDERED_MAX - 8_000)}${many}`;
-		expect(worstCaseRender(padded)).toBeGreaterThan(RUNBOOK_RENDERED_MAX);
-		expect(runbookRefusal(runbook(padded, params))).toContain("could exceed");
-		expect(runbookRefusal(runbook(many, params))).toBeNull();
+	it("takes a body far past any size a form would offer, since the owner spends their own gateway", () => {
+		const many = Array.from({ length: 64 }, (_, i) => `{{p${i}}}`).join(" ");
+		const params = Array.from({ length: 64 }, (_, i) => parameter(`p${i}`));
+		expect(runbookRefusal(runbook(`${"x".repeat(200_000)}${many}`, params))).toBeNull();
 	});
 });

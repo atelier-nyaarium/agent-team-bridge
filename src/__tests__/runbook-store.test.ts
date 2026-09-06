@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createRunbookStore } from "../gateway/runbooks/store.js";
 import { openDurable } from "../shared/durable-store.js";
-import { RUNBOOKS_MAX, type Runbook } from "../shared/schemasRunbook.js";
+import type { Runbook } from "../shared/schemasRunbook.js";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -81,11 +81,10 @@ describe("runbook store", () => {
 		expect(store.get("deploy")?.revision).toBe(1);
 	});
 
-	it("caps how many a gateway holds, but never refuses replacing one it has", () => {
+	it("holds as many as the owner pushes", () => {
 		const store = open(fresh());
-		for (let i = 0; i < RUNBOOKS_MAX; i++) expect(store.put(book(`r${i}`)).stored).toBe(true);
-		expect(store.put(book("one-too-many")).stored).toBe(false);
-		expect(store.put(book("r0", { revision: 2 })).stored).toBe(true);
+		for (let i = 0; i < 200; i++) expect(store.put(book(`r${i}`)).stored).toBe(true);
+		expect(store.list()).toHaveLength(200);
 	});
 
 	it("deletes once, and says so only the first time", () => {
