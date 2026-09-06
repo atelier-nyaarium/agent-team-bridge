@@ -9,6 +9,7 @@ import type { VaultConsoleHandlers } from "../console/consoleTypes.js";
 import { createAddressing } from "../routes/addressing.js";
 import { createVaultDecisions } from "../vault/decisions.js";
 import { createHelperTokens } from "../vault/helperTokens.js";
+import { operationSet } from "../vault/operationSet.js";
 import { createVaultRequests, helperTarget, isHelperTarget } from "../vault/requests.js";
 import { createVaultRoutes } from "../vault/vaultRoutes.js";
 import type { GatewayRoutes } from "./composeRoutes.js";
@@ -95,7 +96,12 @@ export function composeVault(deps: VaultStageDeps): VaultStage {
 			if (request.kind !== "entry") return;
 			decisions.grant(
 				decision,
-				{ entryId: request.entryId, shape: request.shape, sessionTarget: request.sessionTarget },
+				{
+					entryId: request.entryId,
+					shape: request.shape,
+					shapes: request.shapes ?? operationSet(request.operation),
+					sessionTarget: request.sessionTarget,
+				},
 				ambient.now(),
 			);
 		},

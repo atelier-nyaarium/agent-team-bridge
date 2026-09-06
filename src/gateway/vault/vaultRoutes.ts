@@ -21,6 +21,7 @@ import type { VaultClient, VaultEntryView } from "../router/vaultClient.js";
 import { presentedByRequest } from "../sessionAuthority.js";
 import { type GrantScope, operationShape, type VaultDecisions } from "./decisions.js";
 import type { HelperTokens } from "./helperTokens.js";
+import { operationSet } from "./operationSet.js";
 import { helperTarget, type VaultRequestAnswer, type VaultRequests } from "./requests.js";
 
 const DEFAULT_WAIT_MS = 25_000;
@@ -205,6 +206,7 @@ export function createVaultRoutes(deps: VaultRoutesDeps): Map<string, Handler> {
 		const scope = {
 			entryId: parsed.data.entryId,
 			shape: operationShape(parsed.data.operation),
+			shapes: operationSet(parsed.data.operation),
 			sessionTarget: who.target,
 		};
 		return decide(req, scope, parsed.data.operation, found.value, waitFor(parsed.data.waitMs));
@@ -280,7 +282,7 @@ export function createVaultRoutes(deps: VaultRoutesDeps): Map<string, Handler> {
 			);
 		const match = matches.length === 1 ? matches[0] : undefined;
 		if (match) {
-			const scope = { entryId: match.entry.id, shape, sessionTarget };
+			const scope = { entryId: match.entry.id, shape, shapes: operationSet(parsed.data.cmdline), sessionTarget };
 			return decide(req, scope, parsed.data.cmdline, () => client.openValue(match.stored), waitMs, asker);
 		}
 		const opened = deps.requests.open({ kind: "typed", operation: parsed.data.cmdline, sessionTarget, asker });

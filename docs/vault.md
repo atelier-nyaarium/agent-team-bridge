@@ -30,13 +30,28 @@ and the delta list are in `docs/federation.md` under Owner state.
 
 `gateway/vault/decisions.ts`, under `DATA_DIR/vault-decisions.json`.
 
-- `once` leaves no grant. `window` covers one entry, one operation shape, and one session for 30
-  minutes. `session` covers every shape of one entry for one session, until the session ends or
-  eight hours pass. **A helper's session tap records a window:** every process on the host shares
-  the helper's token, so a whole-session grant there would cover them all.
-- **The shape is the program plus its first argument:** `operationShape` takes the program's
-  basename. When the first argument is a flag, the whole line is the shape, since a flag's value
-  could hide the target.
+- `once` leaves no grant. `window` covers one entry, the programs one line named, and one session
+  for 30 minutes. `session` covers every shape of one entry for one session, until the session ends
+  or eight hours pass. **A helper's session tap records a window:** every process on the host
+  shares the helper's token, so a whole-session grant there would cover them all.
+- **The shape is the program plus its first argument:** `shapeFrom` takes the program's basename.
+  When the first argument is a flag, the whole line is the shape, since a flag's value could hide
+  the target. `operationShape` applies it to the words as written, which is what the grants tab
+  lists and what a saved typed value is titled, and it holds for text no parser accepts.
+- **A window covers a set, not the shape:** `operationSet` in `gateway/vault/operationSet.ts` reads
+  the line with `unbash` and names every simple command in it, reaching commands nested in shell
+  constructs and in substitutions, each as its own shape by the rule above. A window grant answers
+  a request only when every requested shape is in the grant, so a grant for
+  `printf %s "$V" | sha256sum` never covers `printf %s "$V" | curl`. A parse failure, or a program
+  count over the wire's limit, makes the line its own single shape. A window recorded without its
+  set covers nothing.
+- **A wrapper is peeled to the program it runs:** `sudo` and the rest of the table, their own
+  options aside. A mode that runs no program is not peeled, as `sudo -e` and `command -v` are not.
+  An option the table does not list stops the peel, so an unlisted one never takes its own value
+  for the program. The reading is of the words, not of the machine: a program named for a wrapper
+  is peeled like one, and what a program does with its arguments stays opaque. `ssh host` is one
+  shape whatever runs on the far side, and `docker exec ctr curl x` and `docker exec ctr rm -rf /`
+  are both `docker exec`.
 - The store opens through `openDurable`, so a poisoned file starts fresh. A revocation or a
   session-end drop is written with `saveChecked` and reported once the snapshot is installed.
   Grants and expiry sweeps are best effort.
@@ -47,8 +62,9 @@ and the delta list are in `docs/federation.md` under Owner state.
 
 `gateway/vault/requests.ts`.
 
-- A request carries an id, the operation text, its shape, the session target, and a deadline nine
-  minutes out. It names an entry, or it is `typed` and asks the owner for a value.
+- A request carries an id, the operation text, its display shape, the set of programs it names, the
+  session target, and a deadline nine minutes out. It names an entry, or it is `typed` and asks the
+  owner for a value.
 - **It reaches the phone as a `plugin_action` row:** `pluginId` `vault`, `actionType` `request`,
   delivered through `deliverToOwner` into the session's conversation thread, or the console's own
   conversation for the helper. The row is volatile: a restart drops it, because the waiting answer
@@ -89,9 +105,10 @@ and the delta list are in `docs/federation.md` under Owner state.
 - `/vault/capture` (session): creates an entry from a value a session captured, trimming one
   trailing newline, and notifies the owner.
 - `/vault/askpass` (helper, or a session presented beside it): an askpass command line and an
-  optional `asker`. A lone entry whose public title equals the shape goes through the grant road.
-  Anything else opens a typed request. A verified session token beside the helper token makes the
-  session the asker, so the request lands in its thread and its grants apply.
+  optional `asker`. A lone entry whose public title equals the display shape goes through the grant
+  road, so the title is matched on the shape while the grant covers the set. Anything else opens a
+  typed request. A verified session token beside the helper token makes the session the asker, so
+  the request lands in its thread and its grants apply.
 - `/vault/helper-token`: gated by the host token. Mints a helper token, hashed at rest in
   `DATA_DIR/vault-helper.json`.
 - The answer is `VaultValueAnswer`: `approved` with the decision and the value, `refused` with a
@@ -222,6 +239,7 @@ session holds a binding token. `vaultRun.ts` is the child run.
 - `src/gateway/compose/composeVault.ts` - the stage: stores, request delivery, routes, console handlers.
 - `src/gateway/router/vaultClient.ts` - sealing, opening, the delta copy, the create.
 - `src/gateway/vault/decisions.ts`, `requests.ts`, `helperTokens.ts`, `vaultRoutes.ts` - grants, requests, helper tokens, routes.
+- `src/gateway/vault/operationSet.ts` - the shape rule, the wrapper table, and the set a window grant covers.
 - `src/mcp/vault/vaultTools.ts`, `vaultRun.ts` - the session's tools and the scrubbed child run.
 - `src/main-vault-askpass.ts`, `src/vault-askpass/askpass.ts` - the helper entry and its decision over ports.
 - `scripts/install-vault-askpass.ts` - the helper's installer.

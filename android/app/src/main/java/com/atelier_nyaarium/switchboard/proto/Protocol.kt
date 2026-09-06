@@ -1471,6 +1471,7 @@ sealed class VaultRequest {
 		val requestId: String,
 		val operation: String,
 		val shape: String,
+		val shapes: List<String>? = null,
 		val sessionTarget: String,
 		val deadlineAt: Long,
 		val asker: String? = null,
@@ -1483,6 +1484,7 @@ sealed class VaultRequest {
 		val requestId: String,
 		val operation: String,
 		val shape: String,
+		val shapes: List<String>? = null,
 		val sessionTarget: String,
 		val deadlineAt: Long,
 		val asker: String? = null,
@@ -1500,6 +1502,7 @@ data class VaultGrant(
 	val tier: String,
 	val entryId: String? = null,
 	val shape: String? = null,
+	val shapes: List<String>? = null,
 	val sessionTarget: String,
 	val expiresAt: Long? = null,
 )

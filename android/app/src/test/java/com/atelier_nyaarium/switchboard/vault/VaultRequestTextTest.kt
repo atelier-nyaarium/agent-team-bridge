@@ -16,14 +16,34 @@ class VaultRequestTextTest {
 		asker: String? = null,
 	) = VaultPendingRequest(
 		team,
-		VaultRequest.Typed(1L, "r", operation, "sudo apt", "helper.abc", 10L, asker),
+		VaultRequest.Typed(
+			v = 1L,
+			requestId = "r",
+			operation = operation,
+			shape = "sudo apt",
+			sessionTarget = "helper.abc",
+			deadlineAt = 10L,
+			asker = asker,
+		),
 		0L,
 		attempt,
 		since,
 	)
 
 	private fun entry(team: String = "dom.hoshi.evie-bot.0713b7") =
-		VaultPendingRequest(team, VaultRequest.Entry("e1", 1L, "r", "gh auth login", "gh auth", "evie-bot.0713b7", 10L), 0L)
+		VaultPendingRequest(
+			team,
+			VaultRequest.Entry(
+				entryId = "e1",
+				v = 1L,
+				requestId = "r",
+				operation = "gh auth login",
+				shape = "gh auth",
+				sessionTarget = "evie-bot.0713b7",
+				deadlineAt = 10L,
+			),
+			0L,
+		)
 
 	@Test
 	fun theRequesterIsTheMachineThenTheBoardName() {

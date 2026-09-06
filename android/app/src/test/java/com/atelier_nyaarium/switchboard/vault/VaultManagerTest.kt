@@ -49,10 +49,26 @@ class VaultManagerTest {
 		VaultListResult(revision, since, entries.toList())
 
 	private fun entryRequest(id: String, deadlineAt: Long, entryId: String = "e1"): VaultRequest =
-		VaultRequest.Entry(entryId, 1L, id, "ssh deploy@prod", "ssh deploy@prod", "host.alice", deadlineAt)
+		VaultRequest.Entry(
+			entryId = entryId,
+			v = 1L,
+			requestId = id,
+			operation = "ssh deploy@prod",
+			shape = "ssh deploy@prod",
+			sessionTarget = "host.alice",
+			deadlineAt = deadlineAt,
+		)
 
 	private fun typedRequest(id: String, deadlineAt: Long, asker: String? = null): VaultRequest =
-		VaultRequest.Typed(1L, id, "sudo apt install foo", "sudo apt", "helper.abc", deadlineAt, asker)
+		VaultRequest.Typed(
+			v = 1L,
+			requestId = id,
+			operation = "sudo apt install foo",
+			shape = "sudo apt",
+			sessionTarget = "helper.abc",
+			deadlineAt = deadlineAt,
+			asker = asker,
+		)
 
 	@Test
 	fun aFullListReplacesAndADeltaMergesWhileTombstonesHide() {

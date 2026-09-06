@@ -10,6 +10,7 @@ import {
 	type VaultRequest,
 } from "../../shared/schemasVault.js";
 import { operationShape } from "./decisions.js";
+import { operationSet } from "./operationSet.js";
 
 /** The helper's principal. */
 export const helperTarget = (tokenId: string): string => `helper.${tokenId}`;
@@ -80,6 +81,7 @@ export function createVaultRequests(deps: VaultRequestsDeps) {
 			requestId,
 			operation: input.operation,
 			shape,
+			shapes: operationSet(input.operation),
 			sessionTarget: input.sessionTarget,
 			deadlineAt: deps.ambient.now() + deadlineMs,
 			...(input.asker === undefined ? {} : { asker: input.asker }),

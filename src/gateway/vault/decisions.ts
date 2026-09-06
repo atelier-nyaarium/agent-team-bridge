@@ -10,6 +10,7 @@ import {
 	type VaultGrant,
 	VaultGrantSchema,
 } from "../../shared/schemasVault.js";
+import { coveredBy, shapeFrom } from "./operationSet.js";
 
 export interface VaultDecisionsDeps {
 	/** Opened through `openDurable`, so a poisoned file starts this store fresh. */
@@ -18,22 +19,23 @@ export interface VaultDecisionsDeps {
 	sessionCapMs?: number;
 }
 
-/** Grant scope: entry, shape, and session. */
+/** Grant scope: entry, display shape, the programs named, and session. */
 export interface GrantScope {
 	entryId: string;
 	shape: string;
+	shapes: string[];
 	sessionTarget: string;
 }
 
 const GrantsSchema = z.array(VaultGrantSchema);
 
-/** Shape uses program and first argument, or the full line after a flag. */
+/**
+ * What the owner reads: the grants tab's line, and the title a saved typed value takes. It reads
+ * the words as written, so it holds for text no parser accepts. `operationSet` is what a grant
+ * covers.
+ */
 export function operationShape(operation: string): string {
-	const tokens = operation.trim().split(/\s+/).filter(Boolean);
-	const program = tokens[0]?.split("/").at(-1) ?? "";
-	const first = tokens[1];
-	if (first === undefined) return program;
-	return first.startsWith("-") ? [program, ...tokens.slice(1)].join(" ") : `${program} ${first}`;
+	return shapeFrom(operation.trim().split(/\s+/).filter(Boolean));
 }
 
 export function createVaultDecisions(deps: VaultDecisionsDeps) {
@@ -65,14 +67,14 @@ export function createVaultDecisions(deps: VaultDecisionsDeps) {
 		if (kept.length !== grants.length) commit(kept, false);
 	};
 
-	/** Session grants cover every shape; window grants cover one. */
+	/** Session grants cover every shape; a window grant covers a request whose programs it all named. */
 	const covers = (scope: GrantScope, now: number): VaultGrant | undefined => {
 		sweep(now);
 		return grants.find(
 			(grant) =>
 				grant.sessionTarget === scope.sessionTarget &&
 				grant.entryId === scope.entryId &&
-				(grant.tier === "session" || grant.shape === scope.shape),
+				(grant.tier === "session" || (grant.shapes !== undefined && coveredBy(scope.shapes, grant.shapes))),
 		);
 	};
 
@@ -86,6 +88,7 @@ export function createVaultDecisions(deps: VaultDecisionsDeps) {
 						tier: "window",
 						entryId: scope.entryId,
 						shape: scope.shape,
+						shapes: scope.shapes,
 						sessionTarget: scope.sessionTarget,
 						expiresAt: now + VAULT_WINDOW_MS,
 					}
