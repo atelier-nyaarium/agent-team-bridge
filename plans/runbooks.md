@@ -335,6 +335,29 @@ last because everything else is provable without it.
   reading only the rules lands well below it. Naming a sibling file as the calibration standard in
   the prompt is the fix, and the same applies to the next three phases.
 
+- **Relaying an audit through a small model to Codex drops roughly a quarter of them.** The cycle
+  prescribes a Haiku agent that passes a prompt verbatim to `codexStartAgent` and echoes the answer
+  back. Three of eleven relays this plan returned conversational filler instead of the report, one
+  of them literally "I'm ready for the next task", after the Codex agent had done the work. Each
+  loss is a whole audit angle: the untrusted-value angle of the fire's red team and the duplication
+  angle of its architecture pass both vanished that way, and the second had to be judged by hand.
+  Calling `codexStartAgent` directly went four for four in the same session, so the relay is the
+  failure and not the model behind it. Strengthening the relay's instruction helped and did not
+  cure it. Where the fan-out does not need to keep tool output out of the caller's context, calling
+  Codex directly is simply more reliable.
+
+- **`routes.send` answers success for a message it only queued.** A fire reports that it landed, and
+  the route it went through returns `{status: "running"}` whether a session socket took the body or
+  the delivery coordinator merely accepted it for later. Nothing in the return value separates the
+  two, so establishing what "fired" actually promises meant reading the route's own source down to
+  the `deliveries.accept` branch. That is the correct behaviour and it is invisible from the call
+  site, which is the expensive combination: every caller has to rediscover it.
+
+- **Adding a console op is still nine edits, now confirmed twice.** The runbook fire paid the same
+  bill the store's three ops paid, and the preview paid it a third time in the same phase. Nothing
+  new to say beyond the entry above, except that a checklist that recurs three times inside one
+  feature is not an unlucky feature.
+
 - **The federation harness flake recurred, now named.** `federation-harness-boot.test.ts`, the case
   `converges to one presence row per team when a session reattaches after a gateway restart`,
   failed once in five full runs and once in three, passing alone and on every rerun. Already
