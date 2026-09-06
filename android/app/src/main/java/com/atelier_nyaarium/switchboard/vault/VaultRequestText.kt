@@ -40,6 +40,14 @@ internal fun windowCovers(request: VaultPendingRequest): String? {
 	return "30 min covers ${shapes.joinToString(", ")}"
 }
 
+/** Why a helper is offered no whole-session answer. A typed value is answered once and grants none. */
+internal fun helperNotice(request: VaultPendingRequest): String? =
+	if (request.fromHelper && request.entryId != null) {
+		"Every process here shares the helper's token, so a grant is 30 minutes."
+	} else {
+		null
+	}
+
 /** A window's own set. One recorded without it covers nothing. */
 internal fun grantCovers(coveredShapes: List<String>?, legacyShapes: List<String>?): String? =
 	(coveredShapes ?: legacyShapes)?.ifEmpty { null }?.joinToString(", ")

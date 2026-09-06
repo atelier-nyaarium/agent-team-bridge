@@ -1,6 +1,8 @@
 package com.atelier_nyaarium.switchboard.vault
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -39,7 +41,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -119,46 +120,60 @@ fun VaultRequestSheet(
 	) {
 		Surface(shape = RoundedCornerShape(28.dp), tonalElevation = 6.dp, modifier = Modifier.fillMaxWidth(0.95f)) {
 			Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-				Row(verticalAlignment = Alignment.CenterVertically) {
+				Column(
+					Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()),
+					verticalArrangement = Arrangement.spacedBy(12.dp),
+				) {
+					Row(verticalAlignment = Alignment.CenterVertically) {
+						Text(
+							requestTitle(request, entry?.title),
+							style = MaterialTheme.typography.titleMedium,
+							modifier = Modifier.weight(1f),
+						)
+						Text(
+							expiry.text,
+							style = MaterialTheme.typography.labelSmall,
+							color = if (expiry.urgent) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+						)
+					}
+					Text(requester(state, request), style = MaterialTheme.typography.titleSmall)
 					Text(
-						requestTitle(request, entry?.title),
-						style = MaterialTheme.typography.titleMedium,
-						modifier = Modifier.weight(1f),
+						request.operation,
+						style = MaterialTheme.typography.bodyMedium,
+						fontFamily = FontFamily.Monospace,
 					)
-					Text(
-						expiry.text,
-						style = MaterialTheme.typography.labelSmall,
-						color = if (expiry.urgent) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
-					)
-				}
-				Text(requester(state, request), style = MaterialTheme.typography.titleSmall)
-				Text(
-					request.operation,
-					style = MaterialTheme.typography.bodyMedium,
-					fontFamily = FontFamily.Monospace,
-				)
-				windowCovers(request)?.let {
-					// A long set must not hide the answers.
-					Text(
-						it,
-						style = MaterialTheme.typography.bodySmall,
-						color = MaterialTheme.colorScheme.onSurfaceVariant,
-						maxLines = 3,
-						overflow = TextOverflow.Ellipsis,
-					)
-				}
-				repeatNotice(request)?.let {
-					Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+					windowCovers(request)?.let {
+						Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+					}
+					helperNotice(request)?.let {
+						Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+					}
+					repeatNotice(request)?.let {
+						Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+					}
+					if (steering) {
+						OutlinedTextField(
+							value = note,
+							onValueChange = { note = it },
+							minLines = 2,
+							label = { Text("Steer") },
+							modifier = Modifier.fillMaxWidth().focusRequester(steerFocus),
+						)
+						LaunchedEffect(Unit) { steerFocus.requestFocus() }
+					} else if (typedRequest) {
+						OutlinedTextField(
+							value = typed,
+							onValueChange = { typed = it },
+							singleLine = true,
+							label = { Text("Password") },
+							keyboardOptions = SECRET_KEYBOARD,
+							visualTransformation = if (shown) VisualTransformation.None else PasswordVisualTransformation(),
+							trailingIcon = { TextButton(onClick = { shown = !shown }) { Text(if (shown) "Hide" else "Show") } },
+							modifier = Modifier.fillMaxWidth(),
+						)
+					}
 				}
 				if (steering) {
-					OutlinedTextField(
-						value = note,
-						onValueChange = { note = it },
-						minLines = 2,
-						label = { Text("Steer") },
-						modifier = Modifier.fillMaxWidth().focusRequester(steerFocus),
-					)
-					LaunchedEffect(Unit) { steerFocus.requestFocus() }
 					Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
 						TextButton(onClick = hapticClick { steering = false }, enabled = !busy) { Text("Back") }
 						Spacer(Modifier.weight(1f))
@@ -172,18 +187,6 @@ fun VaultRequestSheet(
 						) { Text("Deny") }
 					}
 					return@Column
-				}
-				if (typedRequest) {
-					OutlinedTextField(
-						value = typed,
-						onValueChange = { typed = it },
-						singleLine = true,
-						label = { Text("Password") },
-						keyboardOptions = SECRET_KEYBOARD,
-						visualTransformation = if (shown) VisualTransformation.None else PasswordVisualTransformation(),
-						trailingIcon = { TextButton(onClick = { shown = !shown }) { Text(if (shown) "Hide" else "Show") } },
-						modifier = Modifier.fillMaxWidth(),
-					)
 				}
 				Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
 					TextButton(onClick = hapticClick { steering = true }, enabled = !busy) { Text("Deny") }
@@ -200,10 +203,15 @@ fun VaultRequestSheet(
 							label = "Approve",
 							enabled = !busy && !expired,
 							onMain = { answer(VAULT_DECISION_ONCE) },
-							more = listOf(
-								"30 min" to { answer(VAULT_DECISION_WINDOW) },
-								"This session" to { answer(VAULT_DECISION_SESSION) },
-							),
+							// A helper's whole-session answer is recorded as a window, so it is not offered.
+							more = if (request.fromHelper) {
+								listOf("30 min" to { answer(VAULT_DECISION_WINDOW) })
+							} else {
+								listOf(
+									"30 min" to { answer(VAULT_DECISION_WINDOW) },
+									"This session" to { answer(VAULT_DECISION_SESSION) },
+								)
+							},
 						)
 					}
 				}

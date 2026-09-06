@@ -223,17 +223,20 @@ session holds a binding token. `vaultRun.ts` is the child run.
   past its deadline are dropped. A restart drops expired ones. The `vault:retract` action drops one
   by id.
 - **One notification per pending request:** swipe denies; tap opens the sheet, where every answer
-  lives. The sheet answers with `vault_answer` through the gateway value op. The footer is Deny as
-  text and a split button: `Approve` answers once, and the arrow holds 30 min and This session; for
-  a typed value, `Send`, with Send and save behind the arrow, which stores the value under the
-  shape as its title. Deny opens a `Steer` field whose note rides the refusal.
+  lives. The sheet answers with `vault_answer` through the gateway value op. Its content scrolls and
+  the footer does not, so no length of operation or covered set can push the answers off the dialog.
+  The footer is Deny as text and a split button: `Approve` answers once, and the arrow holds 30 min
+  and This session; for a typed value, `Send`, with Send and save behind the arrow, which stores the
+  value under the shape as its title. Deny opens a `Steer` field whose note rides the refusal.
+- **A helper is offered no whole-session answer:** the gateway records one as a window anyway, since
+  every process on the host shares the helper's token, so the sheet drops the option and says why.
+  `fromHelper` is the phone's test and `isHelperTarget` the gateway's, and they are the same rule.
 - **The sheet names what a window would cover:** `windowCovers` in `VaultRequestText.kt` prints the
-  request's `coveredShapes` under the operation, bounded to three lines so a long set cannot push
-  the answers off the dialog. It says nothing when the line already names the one shape, when the
-  request is typed, since a typed value is answered once and records no grant, and when the row
-  carries no set, since a gateway that sends none covers one this phone cannot name. `grantCovers`
-  does the same for the grants tab, and a grant recorded without a set names nothing, because the
-  gateway refuses it.
+  request's `coveredShapes` under the operation, in full, since the content scrolls. It says nothing
+  when the line already names the one shape, when the request is typed, since a typed value is
+  answered once and records no grant, and when the row carries no set, since a gateway that sends
+  none covers one this phone cannot name. `grantCovers` does the same for the grants tab, and a
+  grant recorded without a set names nothing, because the gateway refuses it.
 - Vault approvals, under Settings and Security: Off, Every approval, 30-minute unlock.
   `ApprovalGate` is the one gate: it runs before an entry approval, a reveal, and a save that
   changes a stored value; a typed value never prompts. Tightening the policy is free, loosening it
