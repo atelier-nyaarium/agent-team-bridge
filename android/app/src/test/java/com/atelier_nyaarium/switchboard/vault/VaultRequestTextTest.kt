@@ -46,6 +46,34 @@ class VaultRequestTextTest {
 		)
 
 	@Test
+	fun aRowFromAnOlderGatewayReadsItsOnlyShapeAndCoversNothing() {
+		val old = entry()
+		assertEquals("gh auth", old.displayShape)
+		assertEquals(emptyList<String>(), old.coveredShapes)
+	}
+
+	@Test
+	fun theNewNameWinsWhenARowCarriesBoth() {
+		val current = VaultPendingRequest(
+			"dom.sakura.owner.claude",
+			VaultRequest.Entry(
+				entryId = "e1",
+				v = 1L,
+				requestId = "r",
+				operation = "printf %s | sha256sum",
+				shape = "stale",
+				displayShape = "printf %s",
+				coveredShapes = listOf("printf %s", "sha256sum"),
+				sessionTarget = "host.alice",
+				deadlineAt = 10L,
+			),
+			0L,
+		)
+		assertEquals("printf %s", current.displayShape)
+		assertEquals(listOf("printf %s", "sha256sum"), current.coveredShapes)
+	}
+
+	@Test
 	fun theRequesterIsTheMachineThenTheBoardName() {
 		val state = ChatState(labels = mapOf("dom.hoshi.evie-bot.0713b7" to "Evie Auto Shutdown"))
 		assertEquals("hoshi · Evie Auto Shutdown", requester(state, entry()))

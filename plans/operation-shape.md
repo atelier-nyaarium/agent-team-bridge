@@ -36,13 +36,13 @@ more, within the thirty minutes it had left.
 > Narrowing a grant never widens one: entry, session and set all still have to hold. Matching a
 > setless window on its display shape would have kept the old hole open for it.
 
-## Question 4 - What does the phone see?
+## Question 4 - What does the phone see? [Superseded]
 
 Q: The request sheet shows the operation, the grants tab lists the shape, and a saved typed value
 takes the shape as its title, which the helper matches. Does any of it change?
-A: No. `operationShape` stays the display shape and the title the helper matches. The request and
-grant rows carry the set as an optional `shapes` field the console may read later; until it does,
-the grants tab names the display shape and the grant is narrower than the words.
+
+Superseded by `plans/claimed-backlog.md`, which renames both readings on the wire and teaches the
+console to render the set.
 
 # Plan
 
@@ -51,11 +51,11 @@ the grants tab names the display shape and the grant is narrower than the words.
 - `unbash` at 4.0.10 in the gateway's dependencies.
 - `gateway/vault/operationSet.ts`: `operationSet(operation)` over the unbash tree, exhaustive over
   its node kinds so a parser bump that adds one fails to typecheck, and `coveredBy`.
-- `shapeFrom` holds the one shape rule, which `operationShape` applies to the words as written and
+- `shapeFrom` holds the one shape rule, which the display shape applies to the words as written and
   the set applies to each peeled command, so the two readings cannot drift apart.
 - A wrapper's options are read from its own help into three sets, and an option in none of them
   stops the peel, so an unlisted option never takes its own value for the program.
-- `shapes` on the request row and on a window grant, optional on the wire; `GrantScope` carries it;
+- The set rides the request row and a window grant, optional on the wire. `GrantScope` carries it,
   `covers` takes the subset, and a window without a set covers nothing.
 - Tests: the set for nested commands, every place a substitution expands, wrappers and the
   fallbacks; a window that no longer covers the curl, through the real route; a window recorded

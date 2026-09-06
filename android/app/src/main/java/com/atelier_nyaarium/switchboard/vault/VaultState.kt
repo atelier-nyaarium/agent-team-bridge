@@ -22,7 +22,9 @@ data class VaultPendingRequest(
 
 	val operation: String get() = request.operation
 
-	val shape: String get() = request.shape
+	val displayShape: String get() = request.displayShape
+
+	val coveredShapes: List<String> get() = request.coveredShapes
 
 	val sessionTarget: String get() = request.sessionTarget
 
@@ -50,10 +52,18 @@ val VaultRequest.operation: String
 		is VaultRequest.Typed -> operation
 	}
 
-val VaultRequest.shape: String
+/** Read the old name until 2026-09-19. */
+val VaultRequest.displayShape: String
 	get() = when (this) {
-		is VaultRequest.Entry -> shape
-		is VaultRequest.Typed -> shape
+		is VaultRequest.Entry -> displayShape ?: shape
+		is VaultRequest.Typed -> displayShape ?: shape
+	}
+
+/** Empty from a gateway that sends no set. */
+val VaultRequest.coveredShapes: List<String>
+	get() = when (this) {
+		is VaultRequest.Entry -> coveredShapes.orEmpty()
+		is VaultRequest.Typed -> coveredShapes.orEmpty()
 	}
 
 val VaultRequest.sessionTarget: String

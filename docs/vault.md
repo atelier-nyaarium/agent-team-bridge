@@ -36,8 +36,9 @@ and the delta list are in `docs/federation.md` under Owner state.
   shares the helper's token, so a whole-session grant there would cover them all.
 - **The shape is the program plus its first argument:** `shapeFrom` takes the program's basename.
   When the first argument is a flag, the whole line is the shape, since a flag's value could hide
-  the target. `operationShape` applies it to the words as written, which is what the grants tab
-  lists and what a saved typed value is titled, and it holds for text no parser accepts.
+  the target. `displayShape` applies it to the words as written, which is what the grants tab lists
+  and what a saved typed value is titled, and it holds for text no parser accepts. On the wire it
+  is `displayShape`, beside `coveredShapes`, and the older `shape` rides along until 2026-09-19.
 - **A window covers a set, not the shape:** `operationSet` in `gateway/vault/operationSet.ts` reads
   the line with `unbash` and names every simple command in it, reaching commands nested in shell
   constructs and in substitutions, each as its own shape by the rule above. A window grant answers
@@ -62,7 +63,7 @@ and the delta list are in `docs/federation.md` under Owner state.
 
 `gateway/vault/requests.ts`.
 
-- A request carries an id, the operation text, its display shape, the set of programs it names, the
+- A request carries an id, the operation text, its `displayShape`, the `coveredShapes` it names, the
   session target, and a deadline nine minutes out. It names an entry, or it is `typed` and asks the
   owner for a value.
 - **It reaches the phone as a `plugin_action` row:** `pluginId` `vault`, `actionType` `request`,

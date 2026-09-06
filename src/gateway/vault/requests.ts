@@ -9,7 +9,7 @@ import {
 	type VaultDecision,
 	type VaultRequest,
 } from "../../shared/schemasVault.js";
-import { operationShape } from "./decisions.js";
+import { displayShape } from "./decisions.js";
 import { operationSet } from "./operationSet.js";
 
 /** The helper's principal. */
@@ -73,15 +73,17 @@ export function createVaultRequests(deps: VaultRequestsDeps) {
 
 	const open = (input: VaultRequestInput): VaultRequestOpened => {
 		const requestId = deps.ambient.newId();
-		const shape = operationShape(input.operation);
+		const shape = displayShape(input.operation);
 		if (!shape) return { kind: "undeliverable", reason: "unreachable" };
 		if (openFor(input.sessionTarget) >= MAX_OPEN_PER_TARGET) return { kind: "undeliverable", reason: "flooded" };
 		const common = {
 			v: 1 as const,
 			requestId,
 			operation: input.operation,
+			// Emit the old name until 2026-09-19.
 			shape,
-			shapes: operationSet(input.operation),
+			displayShape: shape,
+			coveredShapes: operationSet(input.operation),
 			sessionTarget: input.sessionTarget,
 			deadlineAt: deps.ambient.now() + deadlineMs,
 			...(input.asker === undefined ? {} : { asker: input.asker }),

@@ -123,7 +123,7 @@ describe("vault requests", () => {
 		const typed = requests.open({ kind: "typed", operation: "sudo apt install foo", sessionTarget: "helper.h1" });
 		if (typed.kind !== "opened") throw new Error("the request did not open");
 		const { requestId } = typed.request;
-		expect(typed.request).toMatchObject({ shape: "sudo apt", shapes: ["apt install"] });
+		expect(typed.request).toMatchObject({ displayShape: "sudo apt", coveredShapes: ["apt install"] });
 		expect(requests.answer(requestId, "once")).toMatchObject({ ok: false });
 		expect(requests.answer(requestId, "once", envelope("typed:other"))).toMatchObject({ ok: false });
 		expect(requests.collect(requestId, "host.alice")).toBeUndefined();

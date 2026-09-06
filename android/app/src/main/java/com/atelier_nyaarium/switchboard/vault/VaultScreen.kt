@@ -210,7 +210,8 @@ private fun GrantRow(
 				listOfNotNull(
 					if (grant.tier == VAULT_DECISION_SESSION) "This session" else "30 minutes",
 					entryTitle,
-					grant.shape,
+					// Read the old name until 2026-09-19.
+					grant.displayShape ?: grant.shape,
 					grant.expiresAt?.let { expiresIn(it).text },
 				).joinToString(" - "),
 				style = MaterialTheme.typography.bodySmall,

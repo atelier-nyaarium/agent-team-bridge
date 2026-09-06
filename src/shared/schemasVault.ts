@@ -115,15 +115,19 @@ const asker = z.string().min(1).max(128).optional();
 export const VAULT_SHAPES_MAX = 64;
 
 /** Every program the operation names, each as its shape; a window grant covers exactly this set. */
-const shapes = z.array(z.string().min(1).max(512)).max(VAULT_SHAPES_MAX);
+const shapes = z.array(z.string().min(1).max(512)).min(1).max(VAULT_SHAPES_MAX);
+
+const displayShape = z.string().min(1).max(256);
 
 const requestFields = {
 	v: z.literal(1),
 	requestId,
 	operation,
-	shape: z.string().min(1).max(256),
+	// `shape` goes and `displayShape` becomes required on 2026-09-19, once every console reads it.
+	shape: displayShape,
+	displayShape: displayShape.optional(),
 	// Optional while an older gateway may omit it; required from 2026-09-19.
-	shapes: shapes.optional(),
+	coveredShapes: shapes.optional(),
 	sessionTarget: z.string().min(1).max(128),
 	deadlineAt: z.number().int().nonnegative(),
 	asker,
@@ -145,8 +149,12 @@ export const VaultGrantSchema = z
 		grantId: z.string().min(1).max(128),
 		tier: z.enum(["window", "session"]).meta({ id: "VaultGrantTier", catalog: "tier" }),
 		entryId: entryId.optional(),
+		// A session grant names no shape at all. `shape` goes on 2026-09-19.
 		shape: z.string().max(256).optional(),
-		// A session grant covers every shape; a window recorded without its set covers nothing.
+		displayShape: z.string().max(256).optional(),
+		// A window recorded without one covers nothing.
+		coveredShapes: shapes.optional(),
+		// Read a grant written under the old name until 2026-09-19.
 		shapes: shapes.optional(),
 		sessionTarget: z.string().min(1).max(128),
 		expiresAt: z.number().int().nonnegative().optional(),

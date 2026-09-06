@@ -577,7 +577,7 @@ export function operationSet(operation: string): string[] {
 	}
 }
 
-/** Whether every shape of a request is among a grant's. */
+/** Every requested shape must be granted, and a request naming none is covered by none. */
 export function coveredBy(requested: readonly string[], granted: readonly string[]): boolean {
-	return requested.every((shape) => granted.includes(shape));
+	return requested.length > 0 && requested.every((shape) => granted.includes(shape));
 }

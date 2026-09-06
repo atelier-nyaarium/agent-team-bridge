@@ -19,11 +19,11 @@ export interface VaultDecisionsDeps {
 	sessionCapMs?: number;
 }
 
-/** Grant scope: entry, display shape, the programs named, and session. */
+/** Grant scope: entry, display shape, covered shapes, session. */
 export interface GrantScope {
 	entryId: string;
-	shape: string;
-	shapes: string[];
+	displayShape: string;
+	coveredShapes: string[];
 	sessionTarget: string;
 }
 
@@ -34,7 +34,7 @@ const GrantsSchema = z.array(VaultGrantSchema);
  * the words as written, so it holds for text no parser accepts. `operationSet` is what a grant
  * covers.
  */
-export function operationShape(operation: string): string {
+export function displayShape(operation: string): string {
 	return shapeFrom(operation.trim().split(/\s+/).filter(Boolean));
 }
 
@@ -70,12 +70,13 @@ export function createVaultDecisions(deps: VaultDecisionsDeps) {
 	/** Session grants cover every shape; a window grant covers a request whose programs it all named. */
 	const covers = (scope: GrantScope, now: number): VaultGrant | undefined => {
 		sweep(now);
-		return grants.find(
-			(grant) =>
-				grant.sessionTarget === scope.sessionTarget &&
-				grant.entryId === scope.entryId &&
-				(grant.tier === "session" || (grant.shapes !== undefined && coveredBy(scope.shapes, grant.shapes))),
-		);
+		return grants.find((grant) => {
+			if (grant.sessionTarget !== scope.sessionTarget || grant.entryId !== scope.entryId) return false;
+			if (grant.tier === "session") return true;
+			// Read the old name until 2026-09-19.
+			const covered = grant.coveredShapes ?? grant.shapes;
+			return covered !== undefined && coveredBy(scope.coveredShapes, covered);
+		});
 	};
 
 	/** Once leaves no grant. */
@@ -87,8 +88,9 @@ export function createVaultDecisions(deps: VaultDecisionsDeps) {
 						grantId: deps.ambient.newId(),
 						tier: "window",
 						entryId: scope.entryId,
-						shape: scope.shape,
-						shapes: scope.shapes,
+						shape: scope.displayShape,
+						displayShape: scope.displayShape,
+						coveredShapes: scope.coveredShapes,
 						sessionTarget: scope.sessionTarget,
 						expiresAt: now + VAULT_WINDOW_MS,
 					}

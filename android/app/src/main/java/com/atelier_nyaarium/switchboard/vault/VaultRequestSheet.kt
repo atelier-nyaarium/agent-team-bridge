@@ -103,7 +103,9 @@ fun VaultRequestSheet(
 			if (ok && approving && typedRequest && save) {
 				// The saved entry is scoped to the gateway that asked.
 				val gateway = runCatching { gatewayOf(request.team) }.getOrNull()
-				repo.vaultOps.save(VaultDraft(publicTitle = request.shape, value = typed, gateways = listOfNotNull(gateway)))
+				repo.vaultOps.save(
+					VaultDraft(publicTitle = request.displayShape, value = typed, gateways = listOfNotNull(gateway)),
+				)
 			}
 			busy = false
 			if (ok) onClose()

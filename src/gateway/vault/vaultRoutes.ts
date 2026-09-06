@@ -19,7 +19,7 @@ import { bindingTokensEqual } from "../../shared/session-tokens.js";
 import { jsonResponse as json } from "../agentRouteEnvelope.js";
 import type { VaultClient, VaultEntryView } from "../router/vaultClient.js";
 import { presentedByRequest } from "../sessionAuthority.js";
-import { type GrantScope, operationShape, type VaultDecisions } from "./decisions.js";
+import { displayShape, type GrantScope, type VaultDecisions } from "./decisions.js";
 import type { HelperTokens } from "./helperTokens.js";
 import { operationSet } from "./operationSet.js";
 import { helperTarget, type VaultRequestAnswer, type VaultRequests } from "./requests.js";
@@ -205,8 +205,8 @@ export function createVaultRoutes(deps: VaultRoutesDeps): Map<string, Handler> {
 		if (found instanceof Response) return found;
 		const scope = {
 			entryId: parsed.data.entryId,
-			shape: operationShape(parsed.data.operation),
-			shapes: operationSet(parsed.data.operation),
+			displayShape: displayShape(parsed.data.operation),
+			coveredShapes: operationSet(parsed.data.operation),
 			sessionTarget: who.target,
 		};
 		return decide(req, scope, parsed.data.operation, found.value, waitFor(parsed.data.waitMs));
@@ -266,7 +266,7 @@ export function createVaultRoutes(deps: VaultRoutesDeps): Map<string, Handler> {
 		if (!parsed.success) return json({ error: "invalid askpass request" }, 400);
 		const client = await ready();
 		if (client instanceof Response) return client;
-		const shape = operationShape(parsed.data.cmdline);
+		const shape = displayShape(parsed.data.cmdline);
 		const sessionTarget = who.target;
 		const { asker } = parsed.data;
 		const waitMs = waitFor(parsed.data.waitMs);
@@ -282,7 +282,12 @@ export function createVaultRoutes(deps: VaultRoutesDeps): Map<string, Handler> {
 			);
 		const match = matches.length === 1 ? matches[0] : undefined;
 		if (match) {
-			const scope = { entryId: match.entry.id, shape, shapes: operationSet(parsed.data.cmdline), sessionTarget };
+			const scope = {
+				entryId: match.entry.id,
+				displayShape: shape,
+				coveredShapes: operationSet(parsed.data.cmdline),
+				sessionTarget,
+			};
 			return decide(req, scope, parsed.data.cmdline, () => client.openValue(match.stored), waitMs, asker);
 		}
 		const opened = deps.requests.open({ kind: "typed", operation: parsed.data.cmdline, sessionTarget, asker });

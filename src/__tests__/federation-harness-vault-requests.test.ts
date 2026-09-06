@@ -204,7 +204,11 @@ describe("federation harness: vault requests", () => {
 		const line = 'printf %s "$VAULT_VALUE" | sha256sum';
 		const use = post(session, "/vault/use", { entryId, operation: line, waitMs: 10_000 });
 		const request = await nextRequest(seen);
-		expect(request).toMatchObject({ kind: "entry", shape: "printf %s", shapes: ["printf %s", "sha256sum"] });
+		expect(request).toMatchObject({
+			kind: "entry",
+			displayShape: "printf %s",
+			coveredShapes: ["printf %s", "sha256sum"],
+		});
 		await h.phone.value({ kind: "vault_answer", requestId: request.requestId, decision: "window" });
 		expect((await use).json).toMatchObject({ outcome: "approved", decision: "window" });
 
@@ -283,8 +287,8 @@ describe("federation harness: vault requests", () => {
 		const request = await nextRequest(seen);
 		expect(request).toMatchObject({
 			kind: "typed",
-			shape: "sudo apt",
-			shapes: ["apt install"],
+			displayShape: "sudo apt",
+			coveredShapes: ["apt install"],
 			requestId: typed.requestId,
 		});
 		// A helper has no session, so its row is keyed to the console's own conversation.
@@ -327,8 +331,8 @@ describe("federation harness: vault requests", () => {
 		expect(second).toMatchObject({
 			kind: "entry",
 			entryId: id,
-			shape: "ssh deploy@prod",
-			shapes: ["ssh deploy@prod"],
+			displayShape: "ssh deploy@prod",
+			coveredShapes: ["ssh deploy@prod"],
 		});
 		await h.phone.value({ kind: "vault_answer", requestId: second.requestId, decision: "session" });
 		// A helper's session tap is a window: every process on the host shares its token.
