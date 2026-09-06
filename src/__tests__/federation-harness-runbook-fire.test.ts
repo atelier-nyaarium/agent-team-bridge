@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
 	ConsoleRunbookFireResultSchema,
+	ConsoleRunbookPreviewResultSchema,
 	ConsoleRunbookPutResultSchema,
 	type Runbook,
 	type RunbookFireTarget,
@@ -117,6 +118,44 @@ describe("federation harness: firing a runbook", () => {
 		// The session is left to be fired at again rather than closed.
 		expect(answer.sessionId).toBeTruthy();
 		expect(h.gateway.faults.sessionRecord(composeSessionName("host", answer.sessionId as string))).toBeTruthy();
+	});
+
+	it("previews exactly what a fire would send, and sends nothing", async () => {
+		const target = "fixture-app.preview";
+		const attached = attachFakeSession(h.gateway, { team: target, conversationId: "conv-runbook-preview" });
+		sessions.push(attached);
+		await attached.ready();
+
+		const values = { level: "minor", repo: "nyaadot" };
+		const shown = ConsoleRunbookPreviewResultSchema.parse(
+			(await h.phone.value({ kind: "runbook_preview", runbookId: release.id, values })).result,
+		);
+		expect(shown.text).toBe("Cut a minor release of nyaadot. Never hand-edit a version.");
+		expect(shown.revision).toBe(release.revision);
+		expect(attached.inbound.filter((frame) => typeof frame.body === "string")).toEqual([]);
+
+		const fired = await fire(values, { kind: "session", target });
+		expect(fired.fired).toBe(true);
+		await h.waitFor(
+			async () => attached.inbound.find((frame) => frame.body === shown.text),
+			"the previewed body, unchanged",
+		);
+	});
+
+	it("refuses a fire pinned to a revision the runbook has moved past", async () => {
+		const stale = ConsoleRunbookFireResultSchema.parse(
+			(
+				await h.phone.value({
+					kind: "runbook_fire",
+					runbookId: release.id,
+					values: { level: "minor", repo: "switchboard" },
+					into: { kind: "session", target: "fixture-app.release" },
+					expectedRevision: release.revision + 1,
+				})
+			).result,
+		);
+		expect(stale.fired).toBe(false);
+		expect(stale.reason).toContain("preview it again");
 	});
 
 	it("does not fire a runbook this gateway does not hold", async () => {

@@ -135,6 +135,7 @@ object Protocol {
 			const val RUNBOOK_LIST: String = "runbook_list"
 			const val RUNBOOK_PUT: String = "runbook_put"
 			const val RUNBOOK_DELETE: String = "runbook_delete"
+			const val RUNBOOK_PREVIEW: String = "runbook_preview"
 			const val RUNBOOK_FIRE: String = "runbook_fire"
 		}
 
@@ -477,11 +478,19 @@ sealed class ConsoleOp {
 	) : ConsoleOp()
 
 	@Serializable
+	@SerialName("runbook_preview")
+	data class RunbookPreview(
+		val runbookId: String,
+		val values: JsonObject,
+	) : ConsoleOp()
+
+	@Serializable
 	@SerialName("runbook_fire")
 	data class RunbookFire(
 		val runbookId: String,
 		val values: JsonObject,
 		val into: RunbookFireTarget,
+		val expectedRevision: Long? = null,
 	) : ConsoleOp()
 }
 
@@ -1607,6 +1616,13 @@ data class ConsoleRunbookPutResult(
 @Serializable
 data class ConsoleRunbookDeleteResult(
 	val deleted: Boolean,
+)
+
+@Serializable
+data class ConsoleRunbookPreviewResult(
+	val text: String? = null,
+	val revision: Long,
+	val reason: String? = null,
 )
 
 @Serializable

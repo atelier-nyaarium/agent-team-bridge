@@ -221,13 +221,16 @@ field takes a deploy-order shim because no peer reads a runbook yet.
   so no value op is replay-cached, `vault_revoke` included, and an entry in that list claimed a
   behaviour the gateway does not have. Deleted on the owner's word: "unused code? remove it."
 
-## Phase 2 - The fire
+## Phase 2 - The fire ✅
 
-One gateway op taking a runbook id, the values, and where it lands. It renders, refusing and naming
-the parameter when a value is missing rather than shipping a raw placeholder as instruction. A fresh
-target creates the session, waits for it to register, then delivers; an existing session target
-delivers straight away. Idempotent through the `op-idempotency` store already there, so a retry
-cannot fire twice.
+Two gateway ops rather than the one this line first named. `runbook_fire` takes a runbook id, the
+values, and where it lands. It renders, refusing and naming the parameter when a value is missing
+rather than shipping a raw placeholder as instruction. A fresh target creates the session, waits for
+it to register, then delivers; an existing session target delivers straight away. Idempotent through
+the `op-idempotency` store already there, so a retry cannot fire twice.
+
+`runbook_preview` takes the same id and values and answers the text, reaching the same words through
+the same render without sending them.
 
 Two checks the record cannot carry, since neither has anything to look at until a fire. A choice's
 value must be one it offers, which no stored rule can enforce because the value does not exist yet.
@@ -244,6 +247,18 @@ retry beyond either window fires again, which is the same promise `send` and `re
 and a migration drops in-flight markers by design, so a fire interrupted by one can be re-run. The
 fire refuses outright on a gateway without that store, since a guarantee that quietly is not there
 is worse than one that is absent loudly.
+
+**The preview is the gateway's render, not the phone's.** The design calls the preview load-bearing,
+which means it must be what actually crosses the wire, and that settles a question Phase 3 would
+otherwise face: whether the phone gets a Kotlin twin of the grammar. It does not. `runbook_preview`
+renders through the same function a fire does and returns the text, so there is one implementation
+and no corpus to keep two of them honest. The cost is a round trip while the owner fills the form,
+which the phone can debounce, and no preview offline.
+
+Preview and fire are two moments, so the revision closes the gap between them. A preview answers the
+revision it rendered, a fire may name the revision it was shown, and a fire naming an older one is
+refused rather than sending words the owner never read. Nothing sends it yet, so it is optional
+until the phone does.
 
 **Fired means what sent means.** A fire into a session already running hands the body to the same
 route a typed message takes, so a session between sockets has the message queued rather than
@@ -273,6 +288,10 @@ pushes a runbook the gateway does not have, or has at an older version, before f
 Its first slice is the phone-side client plumbing, which Phase 1 deliberately left out. Phase 1
 generated the Kotlin types and stopped; nothing on the phone calls `sendValueOp` for the three
 runbook ops yet, so a `ConsoleClient` method and a repository ops class come before any screen.
+
+The fire sheet's preview calls `runbook_preview` rather than rendering on the phone, so the values
+form debounces its calls, keeps the last text while the owner types, marks it stale when a value
+changes, and pins the Fire it sends to the revision the preview answered.
 
 `docs/runbooks.md` and its row in the `AGENTS.md` table land here too. Until a tab exists there is
 no subsystem to describe that this plan does not already describe better, and a second copy would

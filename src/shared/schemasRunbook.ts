@@ -69,6 +69,16 @@ export const RunbookFireTargetSchema = z
 
 export type RunbookFireTarget = z.infer<typeof RunbookFireTargetSchema>;
 
+export const ConsoleRunbookPreviewResultSchema = z
+	.object({
+		/** Exactly what a fire would deliver, or absent when the values do not render. */
+		text: z.string().optional(),
+		/** What the owner pins a fire to, so an edit between the two cannot slip through. */
+		revision: z.number().int().nonnegative(),
+		reason: z.string().optional(),
+	})
+	.meta({ id: "ConsoleRunbookPreviewResult" });
+
 export const ConsoleRunbookFireResultSchema = z
 	.object({
 		fired: z.boolean(),

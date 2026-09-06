@@ -41,7 +41,7 @@ export function createRunbookFireHandler({
 	/** Launch and send share no ordering, so registration comes before the body goes out. */
 	async function intoNewSession(
 		into: Extract<ConsoleOp, { kind: "runbook_fire" }>["into"] & { kind: "new" },
-		runbook: Runbook,
+		runbook: Pick<Runbook, "name">,
 		ctx: RunbookFireContext,
 	): Promise<{ team: string; sessionId: string } | RunbookFireResult> {
 		const created = await createSession(
@@ -75,19 +75,38 @@ export function createRunbookFireHandler({
 		return { team, sessionId: created.id };
 	}
 
+	/** The one road from a stored id and values to text, so a preview cannot differ from a fire. */
+	function textOf(runbookId: string, values: Readonly<Record<string, string>>) {
+		if (!getRunbook) throw new Error("runbooks are not available on this Gateway");
+		const runbook = getRunbook(runbookId);
+		if (!runbook) return { reason: `no runbook "${runbookId}" on this Gateway`, revision: 0 };
+		// A stored record is checked again here, so a rule it no longer passes reaches the owner.
+		const refusal = runbookRefusal(runbook);
+		if (refusal) return { reason: refusal, revision: runbook.revision };
+
+		const rendered = renderRunbook(runbook.body, runbook.parameters, values);
+		if (!rendered.ok) return { reason: rendered.reason, revision: runbook.revision };
+		return { runbook, text: rendered.text, revision: runbook.revision };
+	}
+
+	function preview(op: Extract<ConsoleOp, { kind: "runbook_preview" }>) {
+		const made = textOf(op.runbookId, op.values);
+		return made.text === undefined
+			? { revision: made.revision, reason: made.reason }
+			: { revision: made.revision, text: made.text };
+	}
+
 	async function fire(
 		op: Extract<ConsoleOp, { kind: "runbook_fire" }>,
 		ctx: RunbookFireContext,
 	): Promise<RunbookFireResult> {
-		if (!getRunbook) throw new Error("runbooks are not available on this Gateway");
-		const runbook = getRunbook(op.runbookId);
-		if (!runbook) return { fired: false, reason: `no runbook "${op.runbookId}" on this Gateway` };
-		// A stored record is checked again here, so a rule it no longer passes reaches the owner.
-		const refusal = runbookRefusal(runbook);
-		if (refusal) return { fired: false, reason: refusal };
-
-		const rendered = renderRunbook(runbook.body, runbook.parameters, op.values);
-		if (!rendered.ok) return { fired: false, reason: rendered.reason };
+		const made = textOf(op.runbookId, op.values);
+		if (made.text === undefined || !made.runbook) return { fired: false, reason: made.reason };
+		const runbook = made.runbook;
+		// The owner approved a preview of one revision; a newer one is different words.
+		if (op.expectedRevision !== undefined && op.expectedRevision !== runbook.revision) {
+			return { fired: false, reason: `this runbook changed to revision ${runbook.revision}; preview it again` };
+		}
 
 		let team: string;
 		let sessionId: string | undefined;
@@ -99,10 +118,10 @@ export function createRunbookFireHandler({
 			team = op.into.target;
 		}
 
-		const sent = await deliver(team, rendered.text, ctx);
+		const sent = await deliver(team, made.text, ctx);
 		if (!sent.ok) return { fired: false, sessionId, reason: sent.error ?? "the runbook could not be delivered" };
 		return { fired: true, sessionId: sessionId ?? team };
 	}
 
-	return { fire };
+	return { preview, fire };
 }

@@ -141,10 +141,17 @@ export const ConsoleOpSchema = z
 		z.object({ kind: z.literal("runbook_put"), runbook: RunbookSchema }),
 		z.object({ kind: z.literal("runbook_delete"), runbookId: z.string().min(1).max(64) }),
 		z.object({
+			kind: z.literal("runbook_preview"),
+			runbookId: z.string().min(1).max(64),
+			values: z.record(z.string(), z.string()),
+		}),
+		z.object({
 			kind: z.literal("runbook_fire"),
 			runbookId: z.string().min(1).max(64),
 			values: z.record(z.string(), z.string()),
 			into: RunbookFireTargetSchema,
+			/** The revision the owner previewed. A newer stored one refuses rather than fires. */
+			expectedRevision: z.number().int().positive().optional(),
 		}),
 	])
 	.meta({ id: "ConsoleOp" });
@@ -186,6 +193,7 @@ export const VALUE_OP_KINDS = new Set([
 	"runbook_list",
 	"runbook_put",
 	"runbook_delete",
+	"runbook_preview",
 	"runbook_fire",
 ]);
 

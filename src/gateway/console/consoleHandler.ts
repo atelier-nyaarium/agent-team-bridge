@@ -49,6 +49,11 @@ export function createConsoleDispatcher({
 	onSessionEnded,
 }: ConsoleHandlerDeps) {
 	const targets = createConsoleTargets({ localDomainId, localGatewayId, isTrustedCatalogProject });
+	/** A `sent` row's thread. A spawn point is not a conversation, so it keys to nothing. */
+	const sentSessionKey = (ownerId: string, to: string): string => {
+		const address = targets.parse(to);
+		return address instanceof SpawnPoint ? "" : storeKey({ kind: "conv", conversationId: ownerId, address });
+	};
 	const terminalOps = createTerminalHandlers({ targets, relayToHost, sessionStore });
 	const sessionLifecycle = createSessionLifecycleHandlers({
 		targets,
@@ -88,18 +93,9 @@ export function createConsoleDispatcher({
 				return { ok: false, error: json.error };
 			}
 			// The same row a typed message leaves, so a fired runbook is in the owner's sent history.
-			const address = targets.parse(to);
 			appendIfLive(
 				ctx.conversationId,
-				{
-					kind: "sent",
-					session_id:
-						address instanceof SpawnPoint
-							? ""
-							: storeKey({ kind: "conv", conversationId: ctx.ownerId, address }),
-					opId: ctx.opId,
-					body,
-				},
+				{ kind: "sent", session_id: sentSessionKey(ctx.ownerId, to), opId: ctx.opId, body },
 				`sent:${ctx.conversationId}:${ctx.opId}`,
 			);
 			return { ok: true };
@@ -133,11 +129,7 @@ export function createConsoleDispatcher({
 	): Promise<ConsoleOpResult> {
 		switch (op.kind) {
 			case "send": {
-				const targetAddr = targets.parse(op.to);
-				const expectedSession =
-					targetAddr instanceof SpawnPoint
-						? ""
-						: storeKey({ kind: "conv", conversationId: ownerId, address: targetAddr });
+				const expectedSession = sentSessionKey(ownerId, op.to);
 				const sendPromise = routes.send(
 					FAKE_REQ,
 					{
@@ -327,6 +319,9 @@ export function createConsoleDispatcher({
 
 			case "runbook_delete":
 				return requireRunbooks().remove(op.runbookId);
+
+			case "runbook_preview":
+				return runbookFire.preview(op);
 
 			case "runbook_fire": {
 				// Value ops are not deduped upstream; without this store a retry sends the runbook twice.
