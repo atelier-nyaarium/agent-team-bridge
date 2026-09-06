@@ -31,6 +31,19 @@ internal fun requestTitle(request: VaultPendingRequest, entryTitle: String?): St
 	}
 }
 
+/** What a window would cover. A typed value takes none, and an unknown set is not named. */
+internal fun windowCovers(request: VaultPendingRequest): String? {
+	if (request.entryId == null) return null
+	val shapes = request.coveredShapes
+	if (shapes.isEmpty()) return null
+	if (shapes.size == 1 && shapes.first() == request.operation.trim()) return null
+	return "30 min covers ${shapes.joinToString(", ")}"
+}
+
+/** A window's own set. One recorded without it covers nothing. */
+internal fun grantCovers(coveredShapes: List<String>?, legacyShapes: List<String>?): String? =
+	(coveredShapes ?: legacyShapes)?.ifEmpty { null }?.joinToString(", ")
+
 internal data class Expiry(val text: String, val urgent: Boolean)
 
 /** Whole minutes left; seconds, rounded up, under two minutes. */

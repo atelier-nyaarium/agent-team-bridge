@@ -45,6 +45,45 @@ class VaultRequestTextTest {
 			0L,
 		)
 
+	private fun covering(operation: String, display: String, vararg shapes: String) = VaultPendingRequest(
+		"dom.sakura.owner.claude",
+		VaultRequest.Entry(
+			entryId = "e1",
+			v = 1L,
+			requestId = "r",
+			operation = operation,
+			shape = display,
+			displayShape = display,
+			coveredShapes = shapes.toList(),
+			sessionTarget = "host.alice",
+			deadlineAt = 10L,
+		),
+		0L,
+	)
+
+	@Test
+	fun aWindowNamesTheProgramsTheLineDoesNotAlreadyShow() {
+		assertEquals(
+			"30 min covers printf %s, sha256sum",
+			windowCovers(covering("printf %s \"\$V\" | sha256sum", "printf %s", "printf %s", "sha256sum")),
+		)
+		// A wrapper's name is not what runs.
+		assertEquals("30 min covers apt update", windowCovers(covering("sudo apt update", "sudo apt", "apt update")))
+		assertNull(windowCovers(covering("apt update", "apt update", "apt update")))
+		// An unknown set stays unnamed.
+		assertNull(windowCovers(entry()))
+		// A typed value takes no window.
+		assertNull(windowCovers(typed("sudo apt install foo")))
+	}
+
+	@Test
+	fun aGrantNamesItsProgramsOrNothingAtAll() {
+		assertEquals("apt update, curl x", grantCovers(listOf("apt update", "curl x"), null))
+		assertEquals("apt update", grantCovers(null, listOf("apt update")))
+		assertNull(grantCovers(null, null))
+		assertNull(grantCovers(emptyList(), null))
+	}
+
 	@Test
 	fun aRowFromAnOlderGatewayReadsItsOnlyShapeAndCoversNothing() {
 		val old = entry()

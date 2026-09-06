@@ -227,6 +227,13 @@ session holds a binding token. `vaultRun.ts` is the child run.
   text and a split button: `Approve` answers once, and the arrow holds 30 min and This session; for
   a typed value, `Send`, with Send and save behind the arrow, which stores the value under the
   shape as its title. Deny opens a `Steer` field whose note rides the refusal.
+- **The sheet names what a window would cover:** `windowCovers` in `VaultRequestText.kt` prints the
+  request's `coveredShapes` under the operation, bounded to three lines so a long set cannot push
+  the answers off the dialog. It says nothing when the line already names the one shape, when the
+  request is typed, since a typed value is answered once and records no grant, and when the row
+  carries no set, since a gateway that sends none covers one this phone cannot name. `grantCovers`
+  does the same for the grants tab, and a grant recorded without a set names nothing, because the
+  gateway refuses it.
 - Vault approvals, under Settings and Security: Off, Every approval, 30-minute unlock.
   `ApprovalGate` is the one gate: it runs before an entry approval, a reveal, and a save that
   changes a stored value; a typed value never prompts. Tightening the policy is free, loosening it
@@ -247,4 +254,5 @@ session holds a binding token. `vaultRun.ts` is the child run.
 - `src/shared/schemasVault.ts` - wire shapes, the request row, the loopback shapes, the constants.
 - `src/federation-server/vault/` - the Router service.
 - `android/.../vault/` - sealing, the held entry set, the writer, the tab, the editor, the request sheet.
+- `android/.../vault/VaultRequestText.kt` - the sheet's pure text rules, `windowCovers` and `grantCovers` among them.
 - `android/.../VaultOps.kt`, `plugins/vault/VaultPlugin.kt` - repository operations and the plugin's claims.

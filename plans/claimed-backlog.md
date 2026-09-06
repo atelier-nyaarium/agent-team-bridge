@@ -47,12 +47,25 @@ store accepts the old key on load, so a grant already on disk stays readable, da
 `displayShape` joins `shape` as optional and both are emitted, until `shape` comes out on the same
 date. An empty set never validates, so a request naming no program is covered by no grant.
 
-## Phase 2 - Show the owner what a window covers
+## Phase 2 - Show the owner what a window covers ✅
 
-Switchboard and the console. The request sheet prints the programs a window would cover, and the
-grants tab lists a window's set rather than its display shape alone. A row without the field falls
-back to the display shape, since an old gateway sends none. `plans/operation-shape.md` Question 4
-marked superseded.
+Switchboard and the console. The request sheet prints the programs a window would cover, under the
+operation and bounded to three lines so a long set cannot hide the answers. The grants tab lists a
+window's set. Both say nothing rather than guess: a row carrying no set names a coverage this phone
+cannot see, a typed request takes no window at all, and a grant recorded without a set covers
+nothing. `plans/operation-shape.md` Question 4 marked superseded.
+
+### Bug Classes
+
+- **The phone restating a gateway rule, `windowCovers` and `grantCovers`:** a line on screen
+  promising something the gateway does not do. Three rounds found three instances. Round one: an
+  empty set fell back to the display shape, which a pre-rename gateway never covered, so
+  `sudo apt update` would have read `30 min covers sudo apt`. Round two: the line rendered on a
+  typed request, which is always answered once and records no grant at all. Round three: the grants
+  tab named a shape for a window recorded without a set, which the gateway refuses outright. The
+  structural cause is that `covers` lives in TypeScript and the console restates it in Kotlin, with
+  nothing between them. A shared fixture for the rule, as `tests/fixtures/` already holds for the
+  wire, would keep the two predicates honest.
 
 ## Phase 3 - Rebase bindings through withOccurrences (parked)
 
@@ -84,3 +97,11 @@ check, and a fixture for each of the fourteen.
   accessor, a Kotlin test, and a codegen run, and nothing checks that the set is complete. The
   compiler catches the TypeScript half and `ignoreUnknownKeys` hides the Kotlin half, so a missed
   reader is found by a person or not at all.
+- The emulator variant exists so a screen can be seen without a gateway, and `SandboxFixtures`
+  seeds teams, threads, drafts, goals, dirs and the board. It seeds no vault, so a change to the
+  request sheet or the grants tab cannot be looked at without a real gateway and a real request.
+  Every check on this phase's two new lines was a unit test and a compile.
+- `kotlin-gate.sh` runs `testDebugUnitTest`, which compiles the test sources and the main sources
+  they touch. It never assembles the app, so a Compose call that only the UI reaches, a missing
+  `TextOverflow` import for one, passes the gate and fails later. `compileDebugKotlin` is the
+  cheap addition.

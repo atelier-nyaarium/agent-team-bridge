@@ -39,6 +39,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -136,6 +137,16 @@ fun VaultRequestSheet(
 					style = MaterialTheme.typography.bodyMedium,
 					fontFamily = FontFamily.Monospace,
 				)
+				windowCovers(request)?.let {
+					// A long set must not hide the answers.
+					Text(
+						it,
+						style = MaterialTheme.typography.bodySmall,
+						color = MaterialTheme.colorScheme.onSurfaceVariant,
+						maxLines = 3,
+						overflow = TextOverflow.Ellipsis,
+					)
+				}
 				repeatNotice(request)?.let {
 					Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
 				}
