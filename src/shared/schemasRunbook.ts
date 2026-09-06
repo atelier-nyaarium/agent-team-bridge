@@ -1,39 +1,10 @@
 // A body's placeholders are its parameter list; nothing declares one without the other.
 
 import { z } from "zod";
+import { parseBody, placeholdersOf } from "./runbook-grammar.js";
 
 // Size is the owner's own to spend: these ops reach one gateway, authenticated as its owner, and
 // the console path's 64 MiB body cap is the only ceiling.
-
-/** `{{name}}`, the only placeholder form. */
-const PLACEHOLDER_RE = /\{\{\s*([A-Za-z][A-Za-z0-9_]*)\s*\}\}/g;
-
-export interface PlaceholderOccurrence {
-	name: string;
-	index: number;
-	/** The matched text's length, which a filled value replaces. */
-	length: number;
-}
-
-export function placeholderOccurrences(body: string): PlaceholderOccurrence[] {
-	return [...body.matchAll(PLACEHOLDER_RE)].map((match) => ({
-		name: match[1] as string,
-		index: match.index,
-		length: match[0].length,
-	}));
-}
-
-/** Only the opener is checked; prose about JSON legitimately closes nested braces. */
-function strayOpener(body: string): boolean {
-	const opens = new Set(placeholderOccurrences(body).map((occurrence) => occurrence.index));
-	for (const match of body.matchAll(/\{\{/g)) if (!opens.has(match.index)) return true;
-	return false;
-}
-
-/** First mention first, without repeats. */
-export function placeholdersOf(body: string): string[] {
-	return [...new Set(placeholderOccurrences(body).map((occurrence) => occurrence.name))];
-}
 
 export const RunbookParameterSchema = z
 	.object({
@@ -82,8 +53,34 @@ export const ConsoleRunbookDeleteResultSchema = z
 	.object({ deleted: z.boolean() })
 	.meta({ id: "ConsoleRunbookDeleteResult" });
 
+/** A spawn point to create a session on, or a session already running. */
+export const RunbookFireTargetSchema = z
+	.discriminatedUnion("kind", [
+		z.object({
+			kind: z.literal("new"),
+			target: z.string().min(1).max(128),
+			/** Defaults to the runbook's name. */
+			displayLabel: z.string().min(1).optional(),
+			workdir: z.string().min(1).optional(),
+		}),
+		z.object({ kind: z.literal("session"), target: z.string().min(1).max(128) }),
+	])
+	.meta({ id: "RunbookFireTarget" });
+
+export type RunbookFireTarget = z.infer<typeof RunbookFireTargetSchema>;
+
+export const ConsoleRunbookFireResultSchema = z
+	.object({
+		fired: z.boolean(),
+		/** Where it landed, present whenever a session was reached or created. */
+		sessionId: z.string().optional(),
+		reason: z.string().optional(),
+	})
+	.meta({ id: "ConsoleRunbookFireResult" });
+
 export function runbookRefusal(runbook: Runbook): string | null {
-	if (strayOpener(runbook.body)) return "the body opens a `{{` that no placeholder closes";
+	const parsed = parseBody(runbook.body);
+	if (!parsed.ok) return parsed.reason;
 
 	const placeholders = placeholdersOf(runbook.body);
 	const declared = runbook.parameters.map((parameter) => parameter.name);
@@ -96,10 +93,10 @@ export function runbookRefusal(runbook: Runbook): string | null {
 	if (unused.length > 0) return `${unused.join(", ")} is declared but the body never names it`;
 
 	for (const parameter of runbook.parameters) {
-		// A filled value is text, never another template, so rendering cannot recurse.
+		// Filled values are text; only an opener starts a placeholder, as in a body.
 		const fills = [parameter.default ?? "", ...(parameter.options ?? [])];
-		if (fills.some((fill) => fill.includes("{{") || fill.includes("}}"))) {
-			return `${parameter.name} offers a value containing placeholder braces`;
+		if (fills.some((fill) => fill.includes("{{"))) {
+			return `${parameter.name} offers a value that opens a placeholder`;
 		}
 		if (parameter.kind !== "choice") continue;
 		const options = parameter.options ?? [];

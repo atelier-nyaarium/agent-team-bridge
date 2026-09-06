@@ -6,6 +6,7 @@ import { DELIVERY_OP_KINDS, TOLERATED_DELIVERY_OP_KINDS, VALUE_OP_KINDS } from "
 import { SpawnPoint, storeKey } from "../../shared/session-id.js";
 import { answerBlobOp } from "../blobOps.js";
 import { createCrossDomainHandlers } from "./consoleCrossDomain.js";
+import { createRunbookFireHandler } from "./consoleRunbookFire.js";
 import { createSessionLifecycleHandlers } from "./consoleSessionLifecycle.js";
 import { createConsoleTargets } from "./consoleTargets.js";
 import { createTerminalHandlers } from "./consoleTerminal.js";
@@ -70,6 +71,39 @@ export function createConsoleDispatcher({
 		crossDomainShare,
 		unlinkDomain,
 		untrustOwner,
+	});
+	const runbookFire = createRunbookFireHandler({
+		targets,
+		getRunbook: (runbookId) => runbooks?.get(runbookId) ?? null,
+		createSession: (op, conv, opId) => sessionLifecycle.createSession(op, conv, opId),
+		awaitRegister,
+		deliver: async (to, body, ctx) => {
+			const res = await routes.send(
+				FAKE_REQ,
+				{ from: ctx.device, fromConversationId: ctx.ownerId, to, body, channelOnly: true },
+				{ consoleSender: true },
+			);
+			if (!res.ok) {
+				const json = (await res.json().catch(() => ({}))) as SendRouteJson;
+				return { ok: false, error: json.error };
+			}
+			// The same row a typed message leaves, so a fired runbook is in the owner's sent history.
+			const address = targets.parse(to);
+			appendIfLive(
+				ctx.conversationId,
+				{
+					kind: "sent",
+					session_id:
+						address instanceof SpawnPoint
+							? ""
+							: storeKey({ kind: "conv", conversationId: ctx.ownerId, address }),
+					opId: ctx.opId,
+					body,
+				},
+				`sent:${ctx.conversationId}:${ctx.opId}`,
+			);
+			return { ok: true };
+		},
 	});
 	const ownerByConversation = new Map<string, string>();
 	const appendIfLive = (
@@ -293,6 +327,28 @@ export function createConsoleDispatcher({
 
 			case "runbook_delete":
 				return requireRunbooks().remove(op.runbookId);
+
+			case "runbook_fire": {
+				// Value ops are not deduped upstream; without this store a retry sends the runbook twice.
+				if (!durableOpStore) throw new Error("firing a runbook needs the idempotency store");
+				const key = durableOpKey(op.kind, opId);
+				const held = durableOpStore.get(conversationId, key);
+				if (held?.state === "complete") return held.result;
+				if (held?.state === "in-flight") return { fired: false, reason: "this runbook is already firing" };
+				const generation = durableOpStore.markInFlight(conversationId, key);
+				const release = () => {
+					if (generation !== null) durableOpStore.clear(conversationId, key, generation);
+				};
+				try {
+					const result = await runbookFire.fire(op, { conversationId, opId, device, ownerId });
+					if (result.fired) durableOpStore.markComplete(conversationId, key, result);
+					else release();
+					return result;
+				} catch (error) {
+					release();
+					throw error;
+				}
+			}
 		}
 	}
 

@@ -194,6 +194,14 @@ field takes a deploy-order shim because no peer reads a runbook yet.
   wire truth, so it goes in `shared/` and takes a hand-written Kotlin twin pinned by fixtures when
   Phase 4 derives the parameter list on the phone, as `versioned-list` and `RefGrammar` already do.
 
+  Phase 2 built both halves. `parseBody` in `runbook-grammar.ts` is the tokenizer, and a stray
+  opener is now the grammar refusing rather than a guard beside it, so round one and the round
+  before it are gone as cases rather than patched. The render reads its own output, which is what
+  reaches round three. One guard survives beside the grammar, refusing an opener inside a stored
+  default or option, and it earns its place by catching the mistake while the owner is still editing
+  rather than at fire time. It cost a fourth instance to get right: it also refused a lone `}}`,
+  which the body grammar allows, so a legitimate option was refused. Now both read the same rule.
+
 - **Where the semantic rule gets applied, in the store's restore path:** `RunbookSchema` checks the
   shape and `runbookRefusal` checks the meaning, and the two are consulted at different boundaries,
   so each round moved the second one and broke something new. Round one found restore consulting
@@ -229,6 +237,33 @@ refuse is reported to the owner rather than fired or quietly deleted. Neither is
 A fire that cannot reach its session does not fire. The gateway being off fails like any other
 console op, and a session that never registers is left running and reported rather than closed or
 delivered into blind. Nothing new is built for either.
+
+The idempotency is the op store's, so it inherits the op store's bounds: a completed fire is
+remembered for fourteen days, and a conversation holds its most recent few hundred operations. A
+retry beyond either window fires again, which is the same promise `send` and `respond` already make,
+and a migration drops in-flight markers by design, so a fire interrupted by one can be re-run. The
+fire refuses outright on a gateway without that store, since a guarantee that quietly is not there
+is worse than one that is absent loudly.
+
+**Fired means what sent means.** A fire into a session already running hands the body to the same
+route a typed message takes, so a session between sockets has the message queued rather than
+refused, and the fire reports it landed. Making the fire stricter than typing the same words would
+break the thing the design is for, which is a runbook being indistinguishable from the owner saying
+it. The create path is where "cannot reach it" bites, and there the fire waits for registration
+first. A fired body also leaves the same `sent` row a typed one does, so it is in the owner's
+history rather than only in the fire's answer.
+
+### Found in passing
+
+- **A devcontainer session name can be claimed in the window before its binding arms.** The fire
+  creates a session and waits on `awaitRegister`, which resolves for the TEAM rather than for the
+  record it minted. A host spawn session is safe, because `websocket.ts` refuses a register for one
+  without the daemon's own launch token. A devcontainer team is not covered by that check, so a
+  socket registering on the fresh name first would satisfy the wait and receive the body, and the
+  legitimate registration would evict it only afterwards. The gateway's socket is loopback-only, so
+  this needs a process already on the machine, and it is the same window any `create_session`
+  followed by a `send` has had. Not this feature's to close, and a real one: the fix is a wait that
+  resolves on the minted record's bind token rather than on the name.
 
 ## Phase 3 - The tab and the fire sheet
 

@@ -103,6 +103,8 @@ export interface ConsoleHandlerDeps {
 }
 
 export interface RunbookConsoleHandlers {
+	/** The fire reads one by id; every other reader takes the list. */
+	get: (runbookId: string) => Runbook | null;
 	list: () => { runbooks: Runbook[] };
 	put: (runbook: Runbook) => { stored: boolean; revision: number; reason?: string };
 	remove: (runbookId: string) => { deleted: boolean };

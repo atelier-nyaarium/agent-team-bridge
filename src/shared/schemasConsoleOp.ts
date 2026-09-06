@@ -3,7 +3,7 @@ import { ChannelFilesSchema } from "./channel-file.js";
 import { SignedXDomainLinkSchema } from "./federation-protocol.js";
 import { BlobGetOpSchema, BlobPutOpSchema, BlobStatOpSchema } from "./schemasBlob.js";
 import { ContentEnvelopeSchema } from "./schemasContentKey.js";
-import { RunbookSchema } from "./schemasRunbook.js";
+import { RunbookFireTargetSchema, RunbookSchema } from "./schemasRunbook.js";
 import { VaultDecisionSchema } from "./schemasVault.js";
 
 export { SealedEnvelopeSchema } from "./crypto.js";
@@ -140,6 +140,12 @@ export const ConsoleOpSchema = z
 		// Whole record, never a patch.
 		z.object({ kind: z.literal("runbook_put"), runbook: RunbookSchema }),
 		z.object({ kind: z.literal("runbook_delete"), runbookId: z.string().min(1).max(64) }),
+		z.object({
+			kind: z.literal("runbook_fire"),
+			runbookId: z.string().min(1).max(64),
+			values: z.record(z.string(), z.string()),
+			into: RunbookFireTargetSchema,
+		}),
 	])
 	.meta({ id: "ConsoleOp" });
 
@@ -180,6 +186,7 @@ export const VALUE_OP_KINDS = new Set([
 	"runbook_list",
 	"runbook_put",
 	"runbook_delete",
+	"runbook_fire",
 ]);
 
 export const MailboxEntrySchema = z

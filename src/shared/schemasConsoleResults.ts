@@ -16,6 +16,7 @@ import {
 } from "./schemasPresence.js";
 import {
 	ConsoleRunbookDeleteResultSchema,
+	ConsoleRunbookFireResultSchema,
 	ConsoleRunbookListResultSchema,
 	ConsoleRunbookPutResultSchema,
 } from "./schemasRunbook.js";
@@ -471,6 +472,7 @@ export const ConsoleOpResultSchema = z.union([
 	ConsoleRunbookListResultSchema,
 	ConsoleRunbookPutResultSchema,
 	ConsoleRunbookDeleteResultSchema,
+	ConsoleRunbookFireResultSchema,
 ]);
 
 ////////////////////////////////

@@ -135,6 +135,7 @@ object Protocol {
 			const val RUNBOOK_LIST: String = "runbook_list"
 			const val RUNBOOK_PUT: String = "runbook_put"
 			const val RUNBOOK_DELETE: String = "runbook_delete"
+			const val RUNBOOK_FIRE: String = "runbook_fire"
 		}
 
 		object SocketFrame {
@@ -473,6 +474,14 @@ sealed class ConsoleOp {
 	@SerialName("runbook_delete")
 	data class RunbookDelete(
 		val runbookId: String,
+	) : ConsoleOp()
+
+	@Serializable
+	@SerialName("runbook_fire")
+	data class RunbookFire(
+		val runbookId: String,
+		val values: JsonObject,
+		val into: RunbookFireTarget,
 	) : ConsoleOp()
 }
 
@@ -1565,6 +1574,25 @@ data class Runbook(
 )
 
 @Serializable
+@OptIn(ExperimentalSerializationApi::class)
+@JsonClassDiscriminator("kind")
+sealed class RunbookFireTarget {
+	@Serializable
+	@SerialName("new")
+	data class New(
+		val target: String,
+		val displayLabel: String? = null,
+		val workdir: String? = null,
+	) : RunbookFireTarget()
+
+	@Serializable
+	@SerialName("session")
+	data class Session(
+		val target: String,
+	) : RunbookFireTarget()
+}
+
+@Serializable
 data class ConsoleRunbookListResult(
 	val runbooks: List<Runbook>,
 )
@@ -1579,6 +1607,13 @@ data class ConsoleRunbookPutResult(
 @Serializable
 data class ConsoleRunbookDeleteResult(
 	val deleted: Boolean,
+)
+
+@Serializable
+data class ConsoleRunbookFireResult(
+	val fired: Boolean,
+	val sessionId: String? = null,
+	val reason: String? = null,
 )
 
 @Serializable

@@ -1,11 +1,6 @@
 import { describe, expect, it } from "vitest";
-import {
-	placeholderOccurrences,
-	placeholdersOf,
-	type Runbook,
-	type RunbookParameter,
-	runbookRefusal,
-} from "../shared/schemasRunbook.js";
+import { parseBody, placeholdersOf } from "../shared/runbook-grammar.js";
+import { type Runbook, type RunbookParameter, runbookRefusal } from "../shared/schemasRunbook.js";
 
 const parameter = (name: string, over: Partial<RunbookParameter> = {}): RunbookParameter => ({
 	name,
@@ -22,17 +17,30 @@ const runbook = (body: string, parameters: RunbookParameter[] = []): Runbook => 
 	revision: 1,
 });
 
-describe("runbook placeholders", () => {
+describe("the body grammar", () => {
 	it("names each parameter once, in the order the body first mentions it", () => {
 		expect(placeholdersOf("bump {{level}} then tag {{level}} for {{repo}}")).toEqual(["level", "repo"]);
 		expect(placeholdersOf("{{ padded }} and {{tight}}")).toEqual(["padded", "tight"]);
-		// Invalid forms: a lone brace pair, and a name starting with a digit.
-		expect(placeholdersOf("{single} {{2fast}} literal")).toEqual([]);
+		expect(placeholdersOf("{single} brace")).toEqual([]);
 	});
 
-	it("reports every occurrence, not every name, so a renderer can substitute each", () => {
-		expect(placeholderOccurrences("{{a}} {{a}}").map((o) => o.index)).toEqual([0, 6]);
-		expect(placeholderOccurrences("{{ a }}")[0]).toEqual({ name: "a", index: 0, length: 7 });
+	it("splits a body into the literals and the blanks a render fills", () => {
+		expect(parseBody("cut {{level}} now")).toEqual({
+			ok: true,
+			tokens: [
+				{ kind: "literal", text: "cut " },
+				{ kind: "placeholder", name: "level" },
+				{ kind: "literal", text: " now" },
+			],
+		});
+	});
+
+	it("refuses an opener that names no parameter, rather than passing it off as literal", () => {
+		for (const body of ["{{a{{b}}}}", "cut {{level", "{{2fast}}", "{{ }}"]) {
+			expect(parseBody(body).ok).toBe(false);
+		}
+		// Prose closing nested JSON opens nothing.
+		expect(parseBody('the config reads {"a": {"b": 1}}').ok).toBe(true);
 	});
 });
 
@@ -48,19 +56,18 @@ describe("runbook refusals", () => {
 		expect(runbookRefusal(runbook("{{a}}", [parameter("a"), parameter("a")]))).toContain("twice");
 	});
 
-	it("refuses a brace that opens no placeholder, since a render would leave it behind", () => {
+	it("carries the grammar's own refusal rather than reading a half-parsed body", () => {
 		expect(runbookRefusal(runbook("{{a{{b}}}}", [parameter("b")]))).toContain("{{");
-		expect(runbookRefusal(runbook("cut {{level", [parameter("level")]))).toContain("{{");
-		// Prose closing nested JSON is not a placeholder and stays allowed.
-		expect(runbookRefusal(runbook('the config reads {"a": {"b": 1}}'))).toBeNull();
 	});
 
-	it("refuses a filled value that is itself a template, so rendering cannot recurse", () => {
+	it("refuses a filled value that opens a placeholder, so rendering cannot recurse", () => {
 		const fill = (over: Partial<RunbookParameter>) =>
 			runbookRefusal(runbook("go {{env}}", [parameter("env", over)]));
-		expect(fill({ default: "{{other}}" })).toContain("braces");
-		expect(fill({ kind: "choice", options: ["prod", "{{other}}"] })).toContain("braces");
+		expect(fill({ default: "{{other}}" })).toContain("opens");
+		expect(fill({ kind: "choice", options: ["prod", "{{other}}"] })).toContain("opens");
 		expect(fill({ kind: "choice", options: ["prod", "staging"] })).toBeNull();
+		// A closing brace opens nothing, as in a body.
+		expect(fill({ kind: "choice", options: ["}}"] })).toBeNull();
 	});
 
 	it("refuses a choice that cannot be chosen from", () => {

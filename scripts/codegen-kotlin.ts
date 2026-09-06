@@ -123,8 +123,10 @@ import {
 } from "../src/shared/schemasRouterPresence.js";
 import {
 	ConsoleRunbookDeleteResultSchema,
+	ConsoleRunbookFireResultSchema,
 	ConsoleRunbookListResultSchema,
 	ConsoleRunbookPutResultSchema,
+	RunbookFireTargetSchema,
 	RunbookParameterSchema,
 	RunbookSchema,
 } from "../src/shared/schemasRunbook.js";
@@ -318,9 +320,11 @@ const ROOTS: z.ZodType[] = [
 	ConsoleVaultRevokeResultSchema,
 	RunbookParameterSchema,
 	RunbookSchema,
+	RunbookFireTargetSchema,
 	ConsoleRunbookListResultSchema,
 	ConsoleRunbookPutResultSchema,
 	ConsoleRunbookDeleteResultSchema,
+	ConsoleRunbookFireResultSchema,
 	ScheduledRecordSchema,
 	ScheduleSendValueSchema,
 	ScheduleCancelValueSchema,
@@ -345,6 +349,7 @@ const SEALED_ROOTS = new Set([
 	"ConsoleApprovalOp",
 	"TrustHandshakeOp",
 	"CrossDomainShareTarget",
+	"RunbookFireTarget",
 	"BoardOp",
 	"BoardActor",
 	"VaultRequest",
