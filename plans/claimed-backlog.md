@@ -21,9 +21,10 @@ from the gateway to the phone.
 ## Question 4 - When do the lexicon phases run?
 
 Q: Phases 3 and 4 are in the lexicon submodule. Now?
-A: No. Parked until the owner says lexicon is free.
+A: Parked while another team held it, then resumed on the owner's word. Phase 4 was theirs by the
+time it was free.
 
-> "Don't mess with Lexicon yet. they are busy."
+> "Don't mess with Lexicon yet. they are busy." Then: "NOW Lexicon is free."
 
 ## Question 3 - Does the phone read the set now?
 
@@ -36,6 +37,8 @@ what the grant covers.
 > phone has the data and shows the owner less than it holds.
 
 # Plan
+
+All four accounted for. Two built here, one built in lexicon, one already done by another team.
 
 ## Phase 1 - Name the vault's two readings apart ✅
 
@@ -67,29 +70,40 @@ nothing. `plans/operation-shape.md` Question 4 marked superseded.
   nothing between them. A shared fixture for the rule, as `tests/fixtures/` already holds for the
   wire, would keep the two predicates honest.
 
-## Phase 3 - Rebase bindings through withOccurrences (parked)
+## Phase 3 - Rebase bindings through withOccurrences ✅
 
-Another team holds the lexicon repository. Both lexicon phases wait for the owner's word.
+Shipped in lexicon 3.7.0, after the owner said the repository was free.
 
 
 Lexicon. `protocol/src/occurrences.ts` repoints `fromId`, container ids, literals and docs when it
 re-mints a repeated declaration, and leaves `binding.symbolId` and an ambiguous binding's candidates
-pointing at the pre-mint id. Apply the same `repoint` to both, so a reference to a local inside a
-second definition binds inside that definition. `docs/provider-protocol.md` says a provider may mint
-its own occurrences; it becomes a choice rather than a requirement, and says so.
+pointing at the pre-mint id. A binding into a re-minted declaration follows it, under three guards:
+the target is a descriptor path the re-minting strictly holds, the rebased id is one this
+settlement minted, and a target naming the declaration itself stays. `docs/provider-protocol.md`
+said a binding is left as the provider bound it, and now says what moves and what does not.
 
-## Phase 4 - A literals expectation in the corpus
+No current provider's served facts change. A function-scoped local is a module-wide `local` ordinal
+carrying no descriptor path, so it never matched; Typescript and Bash mint their own occurrences,
+and the rest pre-disambiguate. The guarantee is for the provider that does none of those.
 
-Lexicon. Fourteen providers declare `literals: true` and every one fails
-`claimed-tier-is-tested/literals`, because the corpus's only literals case is markup's oversized
-value. An exact ordered `literals` list on `ConformanceFixtureSchema`, one shared case, the runner's
-check, and a fixture for each of the fourteen.
+## Phase 4 - A literals expectation in the corpus ✅
+
+Done by another team in lexicon `ebd0214`, released in 3.6.0, while this repository held the two
+switchboard phases. `ExpectedLiteralSchema`, a `literals` list on both the shared case and the
+per-language fixture, `checkLiterals` and `checkLiteralRanges`, and corpus cases. Bash now runs 28
+passed and 0 failed, where `claimed-tier-is-tested/literals` used to stand.
+
+Their shape beats the one planned here. The expectation is overridable per language, because a
+boolean is `True` in Python and `true` in most others, so no shared list survives every fixture;
+`5c9996a` then made every provider decode a boolean to the same value.
 
 ## Painpoints
 
-- `federation-harness-boot.test.ts`, the presence convergence case, fails under a full-suite run and
-  passes alone, twice over. A flake in a suite of 2,435 costs a rerun and a paragraph explaining it
-  every time, and it teaches a reader to disbelieve a red suite.
+- The federation harness flakes under a full-suite run and passes alone. Twice today in roughly
+  eight full runs: once named, `federation-harness-boot.test.ts` on presence convergence, and once
+  unnamed because the failure scrolled past a grep. Four consecutive clean runs followed each. A
+  flake in a suite of 2,435 costs a rerun and a paragraph every time, and it teaches a reader to
+  disbelieve a red suite, which is the expensive part.
 - Every review agent running the suite in a sandbox reports two federation harness files failing on
   `listen EPERM`, then spends a paragraph saying it is environmental. Seven agents have now paid
   that toll. The harness could name the sandbox and skip itself.
@@ -105,3 +119,13 @@ check, and a fixture for each of the fourteen.
   they touch. It never assembles the app, so a Compose call that only the UI reaches, a missing
   `TextOverflow` import for one, passes the gate and fails later. `compileDebugKotlin` is the
   cheap addition.
+- A backlog entry written from a hunch outlives the hunch. This one said a repeated declaration
+  could strand a reference on the first definition's LOCAL. Locals carry a module-wide ordinal and
+  no descriptor path, which `isWithin` refuses outright, so no provider was ever at risk. The entry
+  was right that the gap existed and wrong about who fell in it, and nothing between writing it and
+  reading it said so. An entry naming the symbol it doubts, rather than the story, would have.
+- Only one provider's unit tests call `withOccurrences`; every other provider tests its extractor
+  directly, and the wire applies the settlement in `serve.ts`. So a change to the settlement is
+  invisible to thirteen provider suites, and only conformance, which runs the real wire, sees it.
+  That is the right split, but it means the gate that would catch a settlement regression is the
+  slow one nobody runs by reflex.
