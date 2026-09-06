@@ -35,6 +35,7 @@ import androidx.compose.ui.unit.dp
 import com.atelier_nyaarium.switchboard.ChatRepository
 import com.atelier_nyaarium.switchboard.ChatState
 import com.atelier_nyaarium.switchboard.hapticClick
+import com.atelier_nyaarium.switchboard.proto.Runbook
 import com.atelier_nyaarium.switchboard.proto.RunbookFireTarget
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -52,27 +53,19 @@ fun RunbookFireSheet(repo: ChatRepository, state: ChatState, runbookId: String, 
 		return
 	}
 	val gatewayId = state.homeGatewayId
-	// A revision landing while the sheet is open rewrites the form it belongs to.
-	val edition = runbookId to runbook.revision
-
-	var values by remember(edition) {
-		mutableStateOf(runbook.parameters.associate { it.name to (it.default ?: "") })
-	}
-	var freshSession by remember(edition) { mutableStateOf(true) }
-	var target by remember(edition) { mutableStateOf(gatewayId.ifBlank { "host" }) }
-	var preview by remember(edition) { mutableStateOf<PreviewState>(PreviewState.Pending) }
-	// Keyed to the sheet, not the edition: a revision landing mid-fire must not re-enable Fire.
-	var firing by remember(runbookId) { mutableStateOf(false) }
-	var refusal by remember(edition) { mutableStateOf<String?>(null) }
+	val sheet = remember(runbookId) { FireSheetState(runbook, gatewayId) }
+	LaunchedEffect(runbook.revision) { sheet.adopt(runbook) }
+	val values = sheet.values
 	val scope = rememberCoroutineScope()
 
 	// An edit invalidates the preview without blanking it: the words stay, marked stale, and Fire
 	// waits, so the sheet never shows nothing and never offers to send what it is showing.
-	LaunchedEffect(edition, gatewayId, values) {
-		preview = (preview as? PreviewState.Ready)?.let { PreviewState.Stale(it.text) } ?: PreviewState.Pending
+	LaunchedEffect(runbook.revision, gatewayId, values) {
+		sheet.preview = (sheet.preview as? PreviewState.Ready)?.let { PreviewState.Stale(it.text) }
+			?: PreviewState.Pending
 		delay(PREVIEW_SETTLE_MS)
 		val answer = repo.runbookOps.preview(runbookId, values, gatewayId)
-		preview = when {
+		sheet.preview = when {
 			answer == null -> PreviewState.Unreachable
 			answer.text != null -> PreviewState.Ready(answer.text, answer.revision)
 			else -> PreviewState.Refused(answer.reason ?: "these values do not render")
@@ -99,7 +92,7 @@ fun RunbookFireSheet(repo: ChatRepository, state: ChatState, runbookId: String, 
 								for (option in parameter.options.orEmpty()) {
 									FilterChip(
 										selected = value == option,
-										onClick = hapticClick { values = values + (parameter.name to option) },
+										onClick = hapticClick { sheet.values = values + (parameter.name to option) },
 										label = { Text(option) },
 									)
 								}
@@ -108,7 +101,7 @@ fun RunbookFireSheet(repo: ChatRepository, state: ChatState, runbookId: String, 
 					} else {
 						OutlinedTextField(
 							value = value,
-							onValueChange = { values = values + (parameter.name to it) },
+							onValueChange = { sheet.values = values + (parameter.name to it) },
 							label = { Text(parameter.label) },
 							singleLine = true,
 							modifier = Modifier.fillMaxWidth(),
@@ -119,51 +112,57 @@ fun RunbookFireSheet(repo: ChatRepository, state: ChatState, runbookId: String, 
 				Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
 					SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
 						SegmentedButton(
-							selected = freshSession,
-							onClick = hapticClick { freshSession = true },
+							selected = sheet.freshSession,
+							onClick = hapticClick { sheet.freshSession = true },
 							shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
 						) { Text("New session") }
 						SegmentedButton(
-							selected = !freshSession,
-							onClick = hapticClick { freshSession = false },
+							selected = !sheet.freshSession,
+							onClick = hapticClick { sheet.freshSession = false },
 							shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
 						) { Text("Pick one") }
 					}
 					OutlinedTextField(
-						value = target,
-						onValueChange = { target = it },
-						label = { Text(if (freshSession) "Start on" else "Send to") },
+						value = sheet.target,
+						onValueChange = { sheet.target = it },
+						label = { Text(if (sheet.freshSession) "Start on" else "Send to") },
 						singleLine = true,
 						modifier = Modifier.fillMaxWidth(),
 					)
 				}
 
-				PreviewPane(preview)
-				refusal?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
+				PreviewPane(sheet.preview)
+				sheet.refusal?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
 			}
 
 			Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
 				TextButton(onClick = hapticClick(onDismiss), modifier = Modifier.weight(1f)) { Text("Cancel") }
-				val ready = preview as? PreviewState.Ready
+				// The pin is the enabling condition, not just the safety net: a revision that has
+				// landed but whose reset has not run yet leaves a preview of words no longer shown.
+				val ready = (sheet.preview as? PreviewState.Ready)?.takeIf { it.revision == runbook.revision }
 				Button(
-					enabled = ready != null && !firing && target.isNotBlank(),
+					enabled = ready != null && !sheet.firing && sheet.target.isNotBlank(),
 					onClick = hapticClick {
 						val pinned = ready ?: return@hapticClick
-						firing = true
-						refusal = null
+						sheet.firing = true
+						sheet.refusal = null
 						scope.launch {
-							val into = if (freshSession) {
-								RunbookFireTarget.New(target = target, displayLabel = runbook.name)
+							val into = if (sheet.freshSession) {
+								RunbookFireTarget.New(target = sheet.target, displayLabel = runbook.name)
 							} else {
-								RunbookFireTarget.Session(target = target)
+								RunbookFireTarget.Session(target = sheet.target)
 							}
 							val answer = repo.runbookOps.fire(runbookId, values, into, pinned.revision, gatewayId)
-							firing = false
-							if (answer?.fired == true) onDismiss() else refusal = answer?.reason ?: "the fire did not reach this Gateway"
+							sheet.firing = false
+							if (answer?.fired == true) {
+								onDismiss()
+							} else {
+								sheet.refusal = answer?.reason ?: "the fire did not reach this Gateway"
+							}
 						}
 					},
 					modifier = Modifier.weight(1f),
-				) { Text(if (firing) "Firing" else "Fire") }
+				) { Text(if (sheet.firing) "Firing" else "Fire") }
 			}
 		}
 	}
@@ -199,6 +198,35 @@ private fun PreviewPane(preview: PreviewState) {
 				}
 			}
 		}
+	}
+}
+
+/**
+ * The sheet's state, holding both its lifetimes so neither can be keyed by mistake. A form belongs
+ * to a runbook at a revision and `adopt` resets it; a fire in flight belongs to the sheet and does
+ * not, or a revision landing mid-fire would offer Fire again with one still going.
+ */
+internal class FireSheetState(runbook: Runbook, gatewayId: String) {
+	var revision by mutableStateOf(runbook.revision)
+		private set
+
+	// Belongs to the runbook at a revision: a new one may declare different parameters entirely.
+	var values by mutableStateOf(runbook.parameters.associate { it.name to (it.default ?: "") })
+	var preview by mutableStateOf<PreviewState>(PreviewState.Pending)
+	var refusal by mutableStateOf<String?>(null)
+
+	// Belongs to the sheet. Where the owner wants it to land, and whether a fire is going, both
+	// outlive an edit to the body's wording; resetting them would discard a choice for no reason.
+	var freshSession by mutableStateOf(true)
+	var target by mutableStateOf(gatewayId.ifBlank { "host" })
+	var firing by mutableStateOf(false)
+
+	fun adopt(runbook: Runbook) {
+		if (runbook.revision == revision) return
+		revision = runbook.revision
+		values = runbook.parameters.associate { it.name to (it.default ?: "") }
+		preview = PreviewState.Pending
+		refusal = null
 	}
 }
 

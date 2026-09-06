@@ -280,10 +280,14 @@ history rather than only in the fire's answer.
   followed by a `send` has had. Not this feature's to close, and a real one: the fix is a wait that
   resolves on the minted record's bind token rather than on the name.
 
-## Phase 3 - The tab and the fire sheet
+## Phase 3 - The tab and the fire sheet ✅
 
 The Runbooks tab, the row with Fire, and the bottom sheet: values, target, preview, Fire. The phone
 pushes a runbook the gateway does not have, or has at an older version, before firing it.
+
+The sheet holds its state in one `FireSheetState` rather than a row of remembered fields, because
+the form belongs to a runbook at a revision and a fire in flight belongs to the sheet, and keying
+both the same way was wrong in each direction it was tried.
 
 Its first slice is the phone-side client plumbing, which Phase 1 deliberately left out. Phase 1
 generated the Kotlin types and stopped; nothing on the phone calls `sendValueOp` for the three
@@ -328,6 +332,28 @@ Phase 4's to build, alongside the slot in `ChatPersistence`.
 
 Name, body, and the derived parameter list with its nested options. The largest interface piece, and
 last because everything else is provable without it.
+
+Four things it inherits, settled while building the phases under it.
+
+**A `RunbookManager` beside `RunbookOps`, holding the library.** Both durable phone-held siblings
+split that way: `BoardManager` and `VaultManager` own their blob and its persistence while an ops
+class owns the gateway calls. `RunbookOps` currently holds both because nothing on the phone authors
+a runbook yet. The editor is what makes the library real work rather than a cache, and it needs the
+`ChatPersistence` slot that comes with the manager.
+
+**Ids are minted here, opaque and random.** The library keys by id alone and the newest copy wins
+wherever it came from, which is only sound while one id means one runbook. A name-derived or
+counter-derived id breaks that the first time two phones author independently.
+
+**A refused push is a conflict, not an outage.** `sync` reduces `runbookPut(...).stored` to a
+boolean, so the gateway's equal-revision refusal, which is exactly the lost-update it exists to
+catch, reaches the owner as "this Gateway did not answer". The editor is where a rebase can be
+offered, so that is where the refusal should carry its reason and the revision to rebase on.
+
+**The fire sheet's state holder is the lifetime pattern, not a shared form class.** The editor's
+draft is materially harder: parameters keyed by placeholder name, orphans kept while editing and
+pruned on save, and a nested option list inside each choice. It wants its own draft model, holding
+its own two lifetimes the same way rather than reusing these fields.
 
 ## Open, to settle inside the phases
 
@@ -396,10 +422,13 @@ last because everything else is provable without it.
   migration's work rather than this feature's. The runbook fixtures are seeded and will show the tab
   the moment it compiles. Adding `compileEmulatorKotlin` to the gate is the cheap half.
 
-- **The federation harness flake recurred, now named.** `federation-harness-boot.test.ts`, the case
-  `converges to one presence row per team when a session reattaches after a gateway restart`,
-  failed once in five full runs and once in three, passing alone and on every rerun. Already
-  recorded in `plans/claimed-backlog.md`; noting only that it is still there and now identified.
+- **The federation harness flake recurred, named, and got worse under load.**
+  `federation-harness-boot.test.ts`, the case `converges to one presence row per team when a session
+  reattaches after a gateway restart`. It failed once in five full runs, then once in three, then
+  twice consecutively while a fan-out of Codex agents was working the same machine. It passes alone
+  every time, and the full suite went green again once the machine was quiet. The load sensitivity
+  is the useful new fact: it is a timing assumption, not a random one, so a busy machine is when it
+  will be believed. Already recorded in `plans/claimed-backlog.md`.
 
 ## Settled inside a phase
 
