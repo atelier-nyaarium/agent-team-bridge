@@ -242,6 +242,40 @@ last because everything else is provable without it.
 
 - What a fire does when the gateway is offline, or the session never registers.
 
+## Painpoints
+
+- **Adding one console op is nine edits and only two of them are checked.** `runbook_list` needed a
+  variant in `ConsoleOpSchema`, an entry in `VALUE_OP_KINDS`, a result schema, a place in the
+  `ConsoleOpResult` union, a handler method on the deps interface, a `case` in the dispatch switch,
+  a compose stage, its wiring in `composeGateway` and `composeRouterFrames`, and an import plus a
+  `ROOTS` entry in the codegen. The compiler caught exactly two omissions: the result union and the
+  switch's exhaustiveness. `VALUE_OP_KINDS` is the dangerous one, because an op missing from it
+  parses fine and then is simply unroutable, with nothing failing at build time to say so. This is
+  the second sighting of the class already recorded against wire renames in
+  `plans/claimed-backlog.md`: a checklist spread across files, where the type system covers part of
+  it and the rest is found by a person or not at all. A descriptor per op, carrying its kind, its
+  routing class and its handler, would collapse the unchecked half.
+
+- **`kotlin-gate.sh` reports success in a way that looks like it skipped the work.** After
+  regenerating `Protocol.kt` the run ends `26 actionable tasks: 1 executed, 25 up-to-date`, which
+  reads as though nothing recompiled. It had; the compile is one of the lines above the summary. But
+  confirming that meant finding the generated class files and comparing their timestamps against
+  `Protocol.kt`, twice, because the gate's own output does not distinguish a real build from a
+  no-op. Printing whether the protocol sources recompiled would end that.
+
+- **Codex conciseness audits need more triage than they save unless the standard is handed to them.**
+  Given the prose rules alone, the pass declared 30 of 31 comments in this phase too long and
+  proposed replacements like `/** Ignore key order. */` for a line stating which fields a comparison
+  reads and why key order is excluded. The house standard is set by files like
+  `src/gateway/vault/decisions.ts`, whose comments are full one-line sentences, and an auditor
+  reading only the rules lands well below it. Naming a sibling file as the calibration standard in
+  the prompt is the fix, and the same applies to the next three phases.
+
+- **The federation harness flake recurred, now named.** `federation-harness-boot.test.ts`, the case
+  `converges to one presence row per team when a session reattaches after a gateway restart`,
+  failed once in five full runs and once in three, passing alone and on every rerun. Already
+  recorded in `plans/claimed-backlog.md`; noting only that it is still there and now identified.
+
 ## Settled inside a phase
 
 **A pushed body is already sealed.** Settled in Phase 1, against the premise it was written on. The
