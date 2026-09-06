@@ -243,10 +243,16 @@ delivered into blind. Nothing new is built for either.
 
 The idempotency is the op store's, so it inherits the op store's bounds: a completed fire is
 remembered for fourteen days, and a conversation holds its most recent few hundred operations. A
-retry beyond either window fires again, which is the same promise `send` and `respond` already make,
-and a migration drops in-flight markers by design, so a fire interrupted by one can be re-run. The
-fire refuses outright on a gateway without that store, since a guarantee that quietly is not there
-is worse than one that is absent loudly.
+retry beyond either window fires again, which is the same promise `send` and `respond` already make.
+The fire refuses outright on a gateway without that store, since a guarantee that quietly is not
+there is worse than one that is absent loudly.
+
+A durable record says a fire started, never that one is still going, so the two are read from
+different places. A completion on disk replays. A fire this process started is held in memory and
+refuses a second attempt. Anything else runs, which is what the store's own contract asks for and
+what lets a gateway that died mid-fire be retried instead of wedged. The memory is released only
+once the completion is on disk, so a success the migration fence refused to record cannot be
+delivered twice.
 
 **The preview is the gateway's render, not the phone's.** The design calls the preview load-bearing,
 which means it must be what actually crosses the wire, and that settles a question Phase 3 would
@@ -325,8 +331,9 @@ the gateway it would be sent to, before Fire is offered.
 **The library is a cache in this phase, and persistence waits for Phase 4.** Nothing on the phone
 authors a runbook yet, so everything the tab shows came from a gateway and `refresh` refills it. A
 gateway that cannot be reached leaves the tab empty, which is honest rather than lossy. The moment
-the editor exists the library holds work no gateway has, and it has to survive a restart; that is
-Phase 4's to build, alongside the slot in `ChatPersistence`.
+the editor exists the library holds work no gateway has and has to survive a restart, which is what
+`RunbookManager` was built for. It reads and writes its own blob through `AppStateStore`, the way
+the board and the vault do, rather than through `ChatPersistence`, which codes repository state.
 
 ## Phase 4 - The editor ✅
 
@@ -336,7 +343,7 @@ last because everything else is provable without it.
 **`RunbookManager` holds the library, beside `RunbookOps`.** The split its durable siblings use:
 `BoardManager` and `VaultManager` own their blob and its persistence while an ops class owns the
 gateway calls. It takes a `RunbookStore`, which `AppStateStore` implements, and it is in
-`clearedOnReprovision` with them. It writes before it publishes, so a refused write leaves the owner
+`clearedOnReprovision` with them. Its key is on both wipe rosters, and both residue tests pin it. It writes before it publishes, so a refused write leaves the owner
 the library they still have, and `clearInMemory` is the one exception, since a re-provision takes
 the previous owner's writing out of memory whether or not the disk cooperates.
 
@@ -505,6 +512,12 @@ now writes only into an empty store.
 `revision + 1`, so Overwrite does advance past the held revision. And the gateway's `put` returns
 `stored: false` rather than throwing, so `resultOf` decodes it and a refusal reaches the phone as an
 answer, not as a swallowed exception.
+
+Both wrong answers came from a real weakness rather than carelessness. The first missed the `+ 1`
+because it lives in `RunbookDraft` while the rest of the arithmetic lives in `RunbookOps`, which is
+the split recorded above, seen from the outside. The second assumed a refused put sets `ok: false`,
+because nothing in `OwnerOpAnswer` distinguishes "the op failed" from "the op answered no". That one
+is every value op's shape, not this feature's, and is worth knowing before reading one again.
 
 ### Left for the owner to weigh
 
