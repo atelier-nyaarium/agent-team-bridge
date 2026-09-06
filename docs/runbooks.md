@@ -57,7 +57,9 @@ id and values to text, so a preview cannot answer something a fire would not sen
   A session between sockets has the message queued, exactly as a typed one would be.
 - A fire happens once per operation, guarded by the gateway's `op-idempotency` store. Value ops are
   not deduplicated upstream, so a gateway without that store refuses to fire at all rather than
-  quietly dropping the guarantee.
+  quietly dropping the guarantee. A completion on disk replays; a fire this process started is held
+  in memory and refuses a second attempt; anything else runs, so a gateway that died mid-fire can be
+  retried rather than wedged. The memory is released only once the completion is durable.
 - A fire may name the revision it previewed. One that has moved on is refused rather than sending
   words the owner never read.
 
@@ -65,10 +67,39 @@ A fired body leaves the same `sent` row a typed one does, so it is in the owner'
 
 ## The phone
 
-The Runbooks tab lists the library with Fire on each row. `RunbookOps` owns the library and the
-gateway calls; `pushDecision` beside it is the sync rule.
+The phone is every runbook's sole author. `RunbookManager` owns the library and its persistence, the
+way `BoardManager` and `VaultManager` own theirs, and it is cleared on re-provision with them.
+`RunbookOps` owns the gateway calls; `pushDecision` beside it is the sync rule.
+
+The Runbooks tab lists the library with Fire on each row.
 
 The fire sheet takes the values, where it lands, and shows a preview before Fire. That preview is
 `runbook_preview`, rendered by the gateway rather than on the phone, so there is one implementation
 of the grammar and nothing to keep two of them honest. An edit marks the shown text stale and Fire
 waits, so the sheet never offers to send something it is not showing.
+
+## The editor
+
+`RunbookDraft` is what the editor holds: a name, a body, and settings keyed by placeholder name.
+
+- The parameter list is derived. `RunbookGrammar.kt` is a Kotlin twin of `placeholdersOf`, pinned to
+  the TypeScript by `tests/fixtures/runbook-grammar/vectors.json`. It recognises names and renders
+  nothing, because a render must be the gateway's own for a preview to match what a fire sends.
+- Deleting a placeholder orphans its settings rather than dropping them, so pasting it back restores
+  them. `toRunbook` prunes the orphans, which is the only place they stop being remembered.
+- `RunbookDraft.refusal` carries every rule `runbookRefusal` would refuse on, so Save is never
+  offered for a runbook the gateway will reject.
+
+## A refused push
+
+The phone being sole author does not make two phones impossible, so a Gateway refuses a put at or
+below the revision it holds and answers both a reason and that revision.
+
+`RunbookOps.save` pushes before it answers. Stored, and the library takes it and the editor closes.
+Refused, and the library is untouched and the editor stays open with the reason and an Overwrite
+action that rebases the draft onto the held revision, so the next save wins. Unreachable, and the
+copy is local, which is what a phone-owned library means with no Gateway listening; the next preview
+or fire pushes it.
+
+`standingConflict` withdraws the offer once the draft has passed that revision, since rebasing
+backwards would mint a revision the library's merge discards.

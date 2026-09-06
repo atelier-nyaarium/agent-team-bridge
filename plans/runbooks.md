@@ -547,9 +547,12 @@ the coordinator where every caller gets it.
 promises read the refusal, though exactly one delivery lands. The delivery count is what the test
 asserts. Worth knowing before writing another test that expects two distinct answers.
 
-## Open, to settle inside the phases
+## Settled, and what settled it
 
-- What a fire does when the gateway is offline, or the session never registers.
+- **What a fire does when the gateway is offline, or the session never registers.** Answered by the
+  owner: "nothing new. just don't fire." The gateway being off fails like any other console op, and
+  a session that never registers is left running and reported rather than closed or delivered into
+  blind. Nothing was built for either.
 
 ## Painpoints
 
@@ -633,16 +636,32 @@ asserts. Worth knowing before writing another test that expects two distinct ans
   runbook library is deliberately a cache until Phase 4, but it was harmless by luck rather than by
   the type saying so.
 
-- **The emulator variant does not compile, on `main`, and nothing notices.** `SandboxFixtures.kt`
-  imports `com.atelier_nyaarium.switchboard.board.GatewayBoard` and builds
-  `BoardBlob(gateways = mapOf(...))`. Neither exists: `BoardBlob` is now Router-held sealed entries
-  with `routerRevision`, `stored`, `text` and `pending`, and the board's move to that shape left its
-  fixture behind. `kotlin-gate.sh` builds only debug, so `compileEmulatorKotlin` is in no gate and
-  the breakage sat there. The variant exists precisely so a screen can be looked at without a
-  Gateway, which is the recorded complaint against the vault, and it is the one build that cannot
-  currently run. Fixing it means rewriting `seedBoard` against the sealed-entry shape, which is that
-  migration's work rather than this feature's. The runbook fixtures are seeded and will show the tab
-  the moment it compiles. Adding `compileEmulatorKotlin` to the gate is the cheap half.
+- **The emulator variant had rotted in three layers, and nothing noticed any of them.** It exists so
+  a screen can be looked at without a Gateway, which is the recorded complaint against the vault, and
+  it was the one build that could not run. `kotlin-gate.sh` builds only debug, so
+  `compileEmulatorKotlin` is in no gate. Layer one: `SandboxFixtures.kt` still built
+  `BoardBlob(gateways = ...)` of `GatewayBoard`, a shape the board's move to Router-held sealed
+  entries deleted. Rewritten here against stored entries plus the cached text `renderBoard` already
+  falls back to. Layer two: `RepositoryFocusHost.onForeground` asked `repo.ownerOps.domainId()`,
+  which throws when there is no Domain, so the app died on resume. Layer three, still open: seeding
+  runs, then `connect()` reaches a signing path with no confirmed Domain and the state resets to
+  unprovisioned, leaving the onboarding screen. Deciding what the sandbox should do about Domain
+  confirmation is scaffolding work rather than a feature's, so Phase 4's screens were verified by
+  their rules and the compiler rather than by eye. Adding `compileEmulatorKotlin` to the gate is
+  still the cheap half, and would have caught layer one on the commit that caused it.
+
+- **A throwing accessor sits two lines from its guarded twin, and nothing in the name says which is
+  which.** `ChatRepository.ownerOps` errors with "Domain not yet confirmed by a local session";
+  `ownerOpsOrNull` answers null. Every other call site signs an op, where throwing is right, but
+  `onForeground` used the throwing one inside `if (... .domainId() != null)`, a question it could
+  therefore never answer no. The shape is worth knowing: an `orNull` twin beside a throwing accessor
+  reads as a convenience rather than as the one to reach for in a test.
+
+- **`OwnerOpAnswer.ok` conflates "the op failed" with "the op answered no".** A refused
+  `runbook_put` comes back `ok: true` with `stored: false`, and `resultOf` throws only on `ok: false`.
+  Nothing in either name says so, and a red-team pass traced `resultOf`'s throw and reported a
+  confident blocker claiming every Gateway refusal was being swallowed as an outage. Checking cost
+  less than believing, but the trap is there for every value op and for every reader after this one.
 
 - **A second load-sensitive flake, this one in Kotlin.** `PlaybackOpsTest > enqueueOrderSurvivesPause`
   failed twice while the machine was busy, once as `NoSuchElementException` and once as
@@ -653,13 +672,21 @@ asserts. Worth knowing before writing another test that expects two distinct ans
   new files aside and back. Same shape as the federation harness flake above, and the same cost:
   the expensive part is not the rerun, it is disbelieving a red gate.
 
-- **The federation harness flake recurred, named, and got worse under load.**
+- **The federation harness flake now fails the default run more often than it passes.**
   `federation-harness-boot.test.ts`, the case `converges to one presence row per team when a session
-  reattaches after a gateway restart`. It failed once in five full runs, then once in three, then
-  twice consecutively while a fan-out of Codex agents was working the same machine. It passes alone
-  every time, and the full suite went green again once the machine was quiet. The load sensitivity
-  is the useful new fact: it is a timing assumption, not a random one, so a busy machine is when it
-  will be believed. Already recorded in `plans/claimed-backlog.md`.
+  reattaches after a gateway restart`. It began as one failure in five full runs, then one in three,
+  then two consecutively under load, and by the end of this plan it failed the plain `bun run test`
+  repeatedly on a quiet machine. Three facts pin it down: it passes three for three alone, it fails
+  with this whole feature's working tree stashed, and the entire suite passes with
+  `--no-file-parallelism`. So it is a timing assumption that loses to concurrency rather than a
+  regression, and `bun run test` no longer answers reliably without that flag. Already recorded in
+  `plans/claimed-backlog.md`, and now the thing that makes a green gate cost two runs to believe.
+
+- **A value op's answer is coalesced per op id, which is invisible until a test needs two.** Firing
+  the same op id twice concurrently through the harness, both promises resolved to the same answer,
+  the refusal, even though exactly one delivery landed. The test that proves the guard therefore has
+  to assert on the delivery count rather than on the pair of answers. Worth knowing before writing
+  another test that expects two distinct results from one op id.
 
 ## Settled inside a phase
 

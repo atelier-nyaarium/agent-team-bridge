@@ -47,6 +47,10 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
   - **A preview and a fire reach the same words:** `textOf` is the one road from an id and values to
     text, so `runbook_preview` cannot answer something a `runbook_fire` would not send. A fire may
     name the revision it previewed, and a stored record that has moved past it is refused.
+  - **A durable in-flight record is a crash, not a fire in flight:** `consoleHandler` keeps its own
+    set of fires this process started. A completion on disk replays, a held key refuses, and
+    anything else runs. The key is released only once the completion is durable, or a success the
+    migration fence refused to record could be delivered twice.
 - `src/gateway/boardAwareness.ts` - board awareness recipients and net-change classification
 - `src/gateway/awarenessBank.ts` - subscriber state, deadlines, and liveness reads
 - `src/gateway/daemonCapabilities.ts` - daemon capability answer
@@ -89,7 +93,22 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
 - `android/.../PlaybackOps.kt` / `PlaybackReadModels.kt` - playback serialization and lock-free read models
 - `android/.../BoardOps.kt` - repository board operations
 - `android/.../VaultOps.kt` - repository vault operations: refresh, save, delete, reveal, answer, grants
-- `android/.../RunbookOps.kt` - the phone's runbook library, the gateway sync, and `pushDecision`
+- `android/.../RunbookOps.kt` - the gateway calls, `pushDecision`, and the refusal a save answers with
+  - **A save is pushed before it answers:** stored takes it into the library and closes the editor,
+    refused leaves the library alone and keeps the editor open, and no Gateway reached means the
+    copy is local. `keep` decides the last part by whether the library actually took the candidate,
+    so a save the merge would drop is a conflict rather than a silence.
+  - **`standingConflict` withdraws a spent offer:** below the draft's revision, rebasing onto the
+    held one would mint a revision `merge` discards.
+- `android/.../runbooks/RunbookManager.kt` - the phone-held library and its persistence, beside `BoardManager`
+  - **On disk before it is shown:** a refused write leaves the owner the library they still have.
+    `clearInMemory` is the exception, since a re-provision takes the previous owner's writing out of
+    memory whether or not the disk cooperates.
+- `android/.../runbooks/RunbookDraft.kt` / `RunbookGrammar.kt` / `RunbookEditor.kt` - the editor's model, its recognition twin, and the screen
+  - **The parameter list is derived, and settings are keyed by placeholder name:** a deleted
+    placeholder keeps its settings while editing and `toRunbook` prunes them. `RunbookGrammar` is
+    the Kotlin twin of `placeholdersOf`, pinned by `tests/fixtures/runbook-grammar/vectors.json`,
+    and recognises names without rendering.
 - `android/.../runbooks/RunbooksScreen.kt` / `RunbookFireSheet.kt` - the tab with Fire per row, and the fire sheet
   - **The preview is the gateway's render, never the phone's:** the sheet calls `runbook_preview`, so
     one implementation of the grammar serves both it and the fire. An edit marks the shown text
@@ -171,6 +190,8 @@ Cross-team communication and devcontainer coordination. This file is a map, not 
     literal, since prose about JSON closes nested braces.
   - **`renderRunbook` reads its own output:** a value and the literals around it can each be
     innocent and compose a placeholder only after substitution, which no check on the body can see.
+  - **The whitespace class is written out longhand:** JavaScript `\s` matches U+00A0 and JVM `\s`
+    does not, so `RunbookGrammar.kt` could not agree with a shorthand. `tests/fixtures/runbook-grammar/vectors.json` pins both.
 - `src/federation-server/scheduled/` - scheduled sends: versioned records, timers, fire through the op ledger, result rows
 - `src/federation-server/tier1/` - capability fold and read anchors
 - `src/federation-server/migration/` - leases, serve gate, and cursor translation
@@ -261,7 +282,7 @@ How each subsystem works lives in `docs/`:
 | `docs/agents.md` | Codex and Copilot delegation, local agent mode |
 | `docs/task-board.md` | Board, attachments, awareness |
 | `docs/vault.md` | Vault client, grants, request road, loopback routes |
-| `docs/runbooks.md` | The `{{name}}` grammar, the gateway store, the fire, the tab and its preview |
+| `docs/runbooks.md` | The `{{name}}` grammar, the gateway store, the fire, the tab, the editor, a refused push |
 | `docs/references.md` | `ref://` grammar and matchers |
 | `docs/testing.md` | The federation harness, the minted wire fixtures, the identity set, the gates |
 | `docs/environment.md` | Every environment variable |
